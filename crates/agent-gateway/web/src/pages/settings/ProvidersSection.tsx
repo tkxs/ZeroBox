@@ -59,8 +59,8 @@ type ModelSettingsModalProps = {
 
 const PROVIDER_TABS: ProviderId[] = ["claude_code", "codex", "gemini"];
 const PROVIDER_LABELS: Record<ProviderId, string> = {
-  claude_code: "Claude Code",
-  codex: "Codex",
+  claude_code: "Anthropic",
+  codex: "OpenAI",
   gemini: "Gemini",
 };
 

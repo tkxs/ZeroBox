@@ -220,7 +220,7 @@ export type AppSettings = {
 };
 
 export const CODEX_REQUEST_FORMAT_LABELS: Record<CodexRequestFormat, string> = {
-  "openai-completions": "openai-completions",
+  "openai-completions": "OpenAI-Completions",
   "openai-responses": "Responses API",
 };
 
@@ -337,7 +337,7 @@ export function getBuiltinCustomProviders(): CustomProvider[] {
   return [
     {
       id: "builtin-claude_code",
-      name: "Claude Code",
+      name: "Anthropic",
       type: "claude_code",
       baseUrl: "https://api.anthropic.com/v1",
       apiKey: "",
@@ -349,7 +349,7 @@ export function getBuiltinCustomProviders(): CustomProvider[] {
     },
     {
       id: "builtin-codex",
-      name: "Codex",
+      name: "OpenAI",
       type: "codex",
       baseUrl: "https://api.openai.com/v1",
       apiKey: "",
@@ -881,6 +881,13 @@ function normalizeProviderId(input: unknown): ProviderId {
   }
 }
 
+function normalizeProviderName(id: string, input: unknown): string {
+  const name = typeof input === "string" && input.trim() ? input.trim() : "未命名供应商";
+  if (id === "builtin-claude_code" && name === "Claude Code") return "Anthropic";
+  if (id === "builtin-codex" && name === "Codex") return "OpenAI";
+  return name;
+}
+
 export function normalizeCustomProvider(input: unknown): CustomProvider {
   const obj = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const type = normalizeProviderId(obj.type);
@@ -889,10 +896,11 @@ export function normalizeCustomProvider(input: unknown): CustomProvider {
   const models = normalizeProviderModelConfigs(obj.models, type);
   const validModelIds = new Set(models.map((model) => model.id));
   const apiKey = normalizeApiKey(typeof obj.apiKey === "string" ? obj.apiKey : "");
+  const id = typeof obj.id === "string" && obj.id.trim() ? obj.id.trim() : crypto.randomUUID();
 
   return {
-    id: typeof obj.id === "string" && obj.id.trim() ? obj.id.trim() : crypto.randomUUID(),
-    name: typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : "未命名供应商",
+    id,
+    name: normalizeProviderName(id, obj.name),
     type,
     baseUrl: codexRouting
       ? codexRouting.baseUrl
