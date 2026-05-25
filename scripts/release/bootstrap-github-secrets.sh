@@ -94,20 +94,4 @@ case "$BOOTSTRAP_APPLE_SECRETS" in
     ;;
 esac
 
-if [ -n "${LIVEAGENT_GATEWAY_TOKEN:-}" ]; then
-  printf '%s' "$LIVEAGENT_GATEWAY_TOKEN" | gh secret set LIVEAGENT_GATEWAY_TOKEN
-fi
-
-if [ -n "${RAILWAY_TOKEN:-}" ]; then
-  printf '%s' "$RAILWAY_TOKEN" | gh secret set RAILWAY_TOKEN
-fi
-
-if [ -n "${RAILWAY_SERVICE:-}" ]; then
-  printf '%s' "$RAILWAY_SERVICE" | gh variable set RAILWAY_SERVICE
-fi
-
-if [ -n "${RAILWAY_ENVIRONMENT:-}" ]; then
-  printf '%s' "$RAILWAY_ENVIRONMENT" | gh variable set RAILWAY_ENVIRONMENT
-fi
-
 echo "GitHub release secrets updated."

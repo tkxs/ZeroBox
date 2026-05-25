@@ -204,7 +204,7 @@ make build-linux-arm
 | 文档 | 位置 | 说明 |
 | --- | --- | --- |
 | 开发文档 | [doc/README.md](doc/README.md) | 项目详细技术文档，含 pi-ai / pi-agent-core / pi-coding-agent 深度分析 |
-| CI/CD 与发布 | [docs/operations/deployment.md](docs/operations/deployment.md) | Gateway Docker、Railway、桌面 Release 自动化 |
+| CI/CD 与发布 | [docs/operations/deployment.md](docs/operations/deployment.md) | Gateway Docker、用户自部署、桌面 Release 自动化 |
 | 上下文压缩 | [doc/compaction/](doc/compaction/) | V2/V3 对话历史存储与压缩方案 |
 | 网关规范 | [doc/webui-gateway-spec.md](doc/webui-gateway-spec.md) | Web UI 与 Gateway 交互规范 |
 | 任务规划 | [doc/task/](doc/task/) | 开发任务与重构计划 |
