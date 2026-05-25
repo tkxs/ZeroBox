@@ -137,6 +137,10 @@ export type MemorySettings = {
   organizerNextRunAt?: number;
 };
 
+export type CustomSettings = {
+  conversationTitleModel?: SelectedModel;
+};
+
 export type SystemSettings = {
   executionMode: ExecutionMode;
   workdir: string;
@@ -212,6 +216,7 @@ export type AppSettings = {
   cron: CronTask[];
   remote: RemoteSettings;
   memory: MemorySettings;
+  customSettings: CustomSettings;
   skills: SkillsSettings;
   chatRuntimeControls: ChatRuntimeControls;
   selectedModel?: SelectedModel;
@@ -1171,6 +1176,19 @@ export function normalizeMemorySettings(
   };
 }
 
+export function normalizeCustomSettings(
+  input: unknown,
+  customProviders: CustomProvider[],
+): CustomSettings {
+  const obj = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  return {
+    conversationTitleModel: normalizeSelectedModelForProviders(
+      normalizeSelectedModel(obj.conversationTitleModel),
+      customProviders,
+    ),
+  };
+}
+
 export function getDefaultSettings(): AppSettings {
   const customProviders = getBuiltinCustomProviders();
   return {
@@ -1197,6 +1215,7 @@ export function getDefaultSettings(): AppSettings {
       heartbeatInterval: 30,
     },
     memory: normalizeMemorySettings({}, customProviders),
+    customSettings: normalizeCustomSettings({}, customProviders),
     skills: {
       enabled: true,
       selected: mergeAlwaysEnabledSkillNames([]),
@@ -1228,6 +1247,10 @@ export function normalizeSettings(input?: Partial<AppSettings> | null): AppSetti
     cron: normalizeCronTasks(obj.cron ?? defaults.cron),
     remote: normalizeRemoteSettings(obj.remote ?? defaults.remote),
     memory: normalizeMemorySettings(obj.memory ?? defaults.memory, customProviders),
+    customSettings: normalizeCustomSettings(
+      obj.customSettings ?? defaults.customSettings,
+      customProviders,
+    ),
     skills: normalizeSkillsSettings(obj.skills ?? defaults.skills),
     chatRuntimeControls: normalizeChatRuntimeControls(
       obj.chatRuntimeControls ?? defaults.chatRuntimeControls,
@@ -1306,6 +1329,19 @@ export function updateMemorySettings(
     ...prev,
     memory: {
       ...prev.memory,
+      ...patch,
+    },
+  });
+}
+
+export function updateCustomSettings(
+  prev: AppSettings,
+  patch: Partial<CustomSettings>,
+): AppSettings {
+  return normalizeSettings({
+    ...prev,
+    customSettings: {
+      ...prev.customSettings,
       ...patch,
     },
   });
