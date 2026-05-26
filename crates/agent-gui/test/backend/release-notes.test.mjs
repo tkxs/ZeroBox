@@ -11,9 +11,9 @@ const guiRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const repoRoot = path.resolve(guiRoot, "../..");
 const notesScript = path.join(repoRoot, "scripts/release/create-ai-release-notes.mjs");
 
-function runNotesScript(args, env = {}) {
+function runNotesScript(args, env = {}, options = {}) {
   return spawnSync(process.execPath, [notesScript, ...args], {
-    cwd: repoRoot,
+    cwd: options.cwd ?? repoRoot,
     encoding: "utf8",
     env: {
       ...process.env,
@@ -22,10 +22,10 @@ function runNotesScript(args, env = {}) {
   });
 }
 
-function runNotesScriptAsync(args, env = {}) {
+function runNotesScriptAsync(args, env = {}, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [notesScript, ...args], {
-      cwd: repoRoot,
+      cwd: options.cwd ?? repoRoot,
       env: {
         ...process.env,
         ...env,
@@ -47,6 +47,32 @@ function runNotesScriptAsync(args, env = {}) {
       resolve({ status, stdout, stderr });
     });
   });
+}
+
+function runGit(args, cwd) {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+  });
+  assert.equal(
+    result.status,
+    0,
+    `git ${args.join(" ")} failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+  );
+}
+
+function initTaggedRepo(dir, tag) {
+  runGit(["init"], dir);
+  runGit(["config", "user.name", "Release Test"], dir);
+  runGit(["config", "user.email", "release-test@example.com"], dir);
+  writeFileSync(path.join(dir, "README.md"), "# Release test\n");
+  runGit(["add", "README.md"], dir);
+  runGit(["commit", "-m", "Initial release"], dir);
+  runGit(["tag", "v0.1.5"], dir);
+  writeFileSync(path.join(dir, "README.md"), "# Release test\n\nAI notes.\n");
+  runGit(["add", "README.md"], dir);
+  runGit(["commit", "-m", "Improve release notes"], dir);
+  runGit(["tag", tag], dir);
 }
 
 function listen(server) {
@@ -114,6 +140,7 @@ test("AI release notes script calls Responses API and writes markdown", async ()
 
   try {
     const address = await listen(server);
+    initTaggedRepo(dir, "v0.1.6");
     const outputPath = path.join(dir, "notes.md");
     const fallbackPath = path.join(dir, "fallback.md");
     writeFileSync(fallbackPath, "## What's Changed\n\n- GitHub fallback notes.\n");
@@ -125,7 +152,7 @@ test("AI release notes script calls Responses API and writes markdown", async ()
       AI_RELEASE_NOTES_TIMEOUT_MS: "2000",
       PACKYCODE_API_KEY: "",
       OPENAI_API_KEY: "",
-    });
+    }, { cwd: dir });
 
     assert.equal(
       result.status,
