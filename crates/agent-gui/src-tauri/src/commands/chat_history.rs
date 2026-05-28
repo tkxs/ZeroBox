@@ -1864,6 +1864,7 @@ fn resolve_history_list_page_size(page_size: i64) -> Result<i64, String> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn list_chat_history_sync(
     conn: &Connection,
     page: i64,
