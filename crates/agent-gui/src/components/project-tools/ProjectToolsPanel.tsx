@@ -11,23 +11,36 @@ import {
   useRef,
   useState,
 } from "react";
-import { cn } from "@/lib/shared/utils";
+import { useLocale } from "../../i18n";
+import type {
+  ProjectToolsFileTreeProjectState,
+  ProjectToolsFileTreeStatePatch,
+  ProjectToolsPanelTab,
+} from "../../lib/settings";
+import { cn } from "../../lib/shared/utils";
 import type {
   TerminalClient,
   TerminalEvent,
   TerminalSession,
-  TerminalSnapshot,
   TerminalShellOption,
-} from "@/lib/terminal/types";
-import { Check, Plus, Terminal, X } from "../icons";
+  TerminalSnapshot,
+} from "../../lib/terminal/types";
+import { Check, FolderTree, Plus, Terminal, X } from "../icons";
 import { Button } from "../ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
+import { ProjectFileTreePanel } from "./ProjectFileTreePanel";
 
 const MIN_PANEL_WIDTH = 320;
 const MAX_PANEL_WIDTH = 720;
 const DEFAULT_TERMINAL_COLS = 80;
 const DEFAULT_TERMINAL_ROWS = 24;
 
-type ProjectTerminalPanelProps = {
+type ProjectToolsPanelProps = {
   isOpen: boolean;
   projectPathKey: string;
   cwd: string;
@@ -35,9 +48,16 @@ type ProjectTerminalPanelProps = {
   width: number;
   theme: "light" | "dark";
   disabledMessage?: string;
+  activeTab: ProjectToolsPanelTab;
+  fileTreeOpen: boolean;
+  fileTreeState: ProjectToolsFileTreeProjectState;
   client: TerminalClient;
   onWidthChange: (width: number) => void;
+  onActiveTabChange: (tab: ProjectToolsPanelTab) => void;
+  onFileTreeOpenChange: (open: boolean) => void;
+  onFileTreeStateChange: (patch: ProjectToolsFileTreeStatePatch) => void;
   onSessionsChange?: (sessions: TerminalSession[]) => void;
+  onInsertFileMention?: (path: string, kind: "file" | "dir") => void;
   onClose?: () => void;
 };
 
@@ -66,6 +86,12 @@ function areSessionsEqual(left: TerminalSession[], right: TerminalSession[]) {
       session.running === other.running
     );
   });
+}
+
+function formatTerminalSessionTitle(title: string, terminalLabel: string) {
+  const match = /^Terminal(?:\s+(\d+))?$/.exec(title.trim());
+  if (!match) return title;
+  return match[1] ? `${terminalLabel} ${match[1]}` : terminalLabel;
 }
 
 function terminalTheme(theme: "light" | "dark") {
@@ -340,7 +366,7 @@ function utf8ByteLengthOfCodePoint(value: string) {
   return 4;
 }
 
-export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
+export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   const {
     isOpen,
     projectPathKey,
@@ -349,11 +375,19 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
     width,
     theme,
     disabledMessage,
+    activeTab,
+    fileTreeOpen,
+    fileTreeState,
     client,
     onWidthChange,
+    onActiveTabChange,
+    onFileTreeOpenChange,
+    onFileTreeStateChange,
     onSessionsChange,
+    onInsertFileMention,
     onClose,
   } = props;
+  const { t } = useLocale();
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -363,6 +397,7 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [shellOptions, setShellOptions] = useState<TerminalShellOption[]>([]);
   const [selectedShell, setSelectedShell] = useState("");
+  const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [shouldRenderContent, setShouldRenderContent] = useState(isOpen);
   const [widthCollapsed, setWidthCollapsed] = useState(!isOpen);
   const [, setIsResizing] = useState(false);
@@ -375,8 +410,12 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
   const resizingRef = useRef(false);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const panelWidth = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, draftWidth));
-  const panelStyle = { "--terminal-panel-width": `${panelWidth}px` } as CSSProperties;
+  const panelStyle = { "--project-tools-panel-width": `${panelWidth}px` } as CSSProperties;
   const isControlled = externalSessions !== undefined;
+  const fileTreeInitialized = Boolean(projectPathKey && fileTreeOpen);
+  const previousFileTreeInitializedRef = useRef(fileTreeInitialized);
+  const currentActiveTab: ProjectToolsPanelTab =
+    activeTab === "fileTree" && fileTreeInitialized ? "fileTree" : "terminal";
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? sessions[0] ?? null,
@@ -386,6 +425,18 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
     () => sessions.find((session) => session.id === pendingCloseSessionId) ?? null,
     [pendingCloseSessionId, sessions],
   );
+
+  useEffect(() => {
+    const previousFileTreeInitialized = previousFileTreeInitializedRef.current;
+    previousFileTreeInitializedRef.current = fileTreeInitialized;
+    if (fileTreeInitialized && !previousFileTreeInitialized) {
+      onActiveTabChange("fileTree");
+      return;
+    }
+    if (!fileTreeInitialized && previousFileTreeInitialized && activeTab === "fileTree") {
+      onActiveTabChange("terminal");
+    }
+  }, [activeTab, fileTreeInitialized, onActiveTabChange]);
 
   const publishSessions = useCallback(
     (nextSessions: TerminalSession[], options?: { notifyParent?: boolean }) => {
@@ -523,6 +574,14 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
     setClosingSessionId("");
   }, [projectPathKey]);
 
+  const setFileTreeInitialized = useCallback(
+    (initialized: boolean) => {
+      if (!projectPathKey) return;
+      onFileTreeOpenChange(initialized);
+    },
+    [onFileTreeOpenChange, projectPathKey],
+  );
+
   useEffect(() => {
     if (!pendingCloseSessionId) return;
     if (!sessions.some((session) => session.id === pendingCloseSessionId)) {
@@ -552,10 +611,20 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
           return next;
         });
         setActiveSessionId(snapshot.session.id);
+        onActiveTabChange("terminal");
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setCreating(false));
-  }, [client, creating, cwd, onSessionsChange, projectPathKey, projectReady, selectedShell]);
+  }, [
+    client,
+    creating,
+    cwd,
+    onActiveTabChange,
+    onSessionsChange,
+    projectPathKey,
+    projectReady,
+    selectedShell,
+  ]);
 
   const closeSession = useCallback(
     (session: TerminalSession) => {
@@ -655,23 +724,37 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
     [clampedWidth, onWidthChange, panelWidth],
   );
 
+  const showFirstOpenChooser = projectReady && sessions.length === 0 && !fileTreeInitialized;
+
+  const startFileTree = useCallback(() => {
+    setFileTreeInitialized(true);
+    onActiveTabChange("fileTree");
+  }, [onActiveTabChange, setFileTreeInitialized]);
+
+  const closeFileTree = useCallback(() => {
+    setFileTreeInitialized(false);
+    if (activeTab === "fileTree") {
+      onActiveTabChange("terminal");
+    }
+  }, [activeTab, onActiveTabChange, setFileTreeInitialized]);
+
   return (
     <aside
       aria-hidden={!isOpen}
       inert={!isOpen}
       data-state={isOpen ? "open" : "closed"}
       className={cn(
-        "project-terminal-panel fixed inset-x-0 bottom-0 z-40 flex h-[min(72vh,34rem)] min-h-0 w-full shrink-0 flex-col overflow-hidden bg-background shadow-2xl transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:relative md:inset-auto md:z-10 md:h-full md:shadow-none",
+        "fixed inset-x-0 bottom-0 z-40 flex h-[min(72vh,34rem)] min-h-0 w-full shrink-0 flex-col overflow-hidden bg-background shadow-2xl transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:relative md:inset-auto md:z-10 md:h-full md:shadow-none",
         isOpen
-          ? "pointer-events-auto translate-y-0 border-t border-border opacity-100 md:w-[var(--terminal-panel-width)] md:translate-x-0 md:border-l md:border-t-0"
+          ? "pointer-events-auto translate-y-0 border-t border-border opacity-100 md:w-[var(--project-tools-panel-width)] md:translate-x-0 md:border-l md:border-t-0"
           : "pointer-events-none translate-y-full border-t border-transparent opacity-0 md:translate-x-3 md:translate-y-0 md:border-l-0 md:border-t-0",
-        widthCollapsed ? "md:w-0" : "md:w-[var(--terminal-panel-width)]",
+        widthCollapsed ? "md:w-0" : "md:w-[var(--project-tools-panel-width)]",
       )}
       style={panelStyle}
     >
       <div
         className={cn(
-          "project-terminal-panel-inner flex h-full min-h-0 w-full flex-col transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:w-[var(--terminal-panel-width)] md:min-w-[var(--terminal-panel-width)]",
+          "flex h-full min-h-0 w-full flex-col transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:w-[var(--project-tools-panel-width)] md:min-w-[var(--project-tools-panel-width)]",
           isOpen
             ? "translate-y-0 opacity-100 md:translate-x-0"
             : "translate-y-3 opacity-0 md:translate-x-2 md:translate-y-0",
@@ -681,35 +764,43 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
           <>
             <button
               type="button"
-              aria-label="Resize terminal panel"
-              title="Resize terminal panel"
+              aria-label={t("projectTools.resizePanel")}
+              title={t("projectTools.resizePanel")}
               className="absolute inset-y-0 left-0 hidden w-1 cursor-col-resize border-0 bg-transparent p-0 md:block"
               onMouseDown={handleResizeStart}
             />
-            <div className="project-terminal-panel-handle" aria-hidden="true" />
-            <div className="project-terminal-panel-header flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
-              <div className="project-terminal-panel-tabs flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
+              <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
                 {sessions.map((session) => {
                   const isPendingClose = pendingCloseSessionId === session.id;
                   const isClosing = closingSessionId === session.id;
+                  const sessionTitle = formatTerminalSessionTitle(
+                    session.title,
+                    t("projectTools.terminalTitle"),
+                  );
                   return (
                     <div
                       key={session.id}
                       className={cn(
-                        "project-terminal-panel-tab group flex h-8 max-w-[12rem] shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-                        activeSession?.id === session.id && "bg-muted text-foreground",
+                        "group flex h-8 max-w-[12rem] shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                        currentActiveTab === "terminal" &&
+                          activeSession?.id === session.id &&
+                          "bg-muted text-foreground",
                         isPendingClose &&
                           "bg-destructive/10 text-destructive hover:bg-destructive/15",
                       )}
-                      title={session.title}
+                      title={sessionTitle}
                     >
                       <button
                         type="button"
-                        onClick={() => setActiveSessionId(session.id)}
+                        onClick={() => {
+                          setActiveSessionId(session.id);
+                          onActiveTabChange("terminal");
+                        }}
                         className="flex min-w-0 flex-1 items-center gap-1.5 bg-transparent p-0 text-left text-inherit"
                       >
                         <Terminal className="h-3.5 w-3.5 shrink-0" />
-                        <span className="min-w-0 truncate">{session.title}</span>
+                        <span className="min-w-0 truncate">{sessionTitle}</span>
                         {!session.running ? (
                           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
                         ) : (
@@ -718,8 +809,12 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
                       </button>
                       <button
                         type="button"
-                        aria-label={`${isPendingClose ? "Confirm close" : "Close"} ${session.title}`}
-                        title={isPendingClose ? "Confirm close terminal" : "Close terminal"}
+                        aria-label={`${isPendingClose ? t("projectTools.confirmClose") : t("projectTools.close")} ${sessionTitle}`}
+                        title={
+                          isPendingClose
+                            ? t("projectTools.confirmCloseTerminal")
+                            : t("projectTools.closeTerminal")
+                        }
                         disabled={isClosing}
                         className={cn(
                           "ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-background hover:text-foreground focus-visible:bg-background focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
@@ -740,14 +835,47 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
                     </div>
                   );
                 })}
+                {fileTreeInitialized ? (
+                  <div
+                    className={cn(
+                      "group flex h-8 max-w-[12rem] shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                      currentActiveTab === "fileTree" && "bg-muted text-foreground",
+                    )}
+                    title={t("projectTools.fileTreeTitle")}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onActiveTabChange("fileTree")}
+                      className="flex min-w-0 flex-1 items-center gap-1.5 bg-transparent p-0 text-left text-inherit"
+                    >
+                      <FolderTree className="h-3.5 w-3.5 shrink-0" />
+                      <span className="min-w-0 truncate">{t("projectTools.fileTreeTitle")}</span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={t("projectTools.closeFileTree")}
+                      title={t("projectTools.closeFileTree")}
+                      className="ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-background hover:text-foreground focus-visible:bg-background focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
+                      onMouseDown={(event) => {
+                        event.stopPropagation();
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        closeFileTree();
+                      }}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ) : null}
               </div>
               {shellOptions.length > 1 ? (
                 <select
                   value={selectedShell}
                   onChange={(event) => setSelectedShell(event.target.value)}
                   disabled={creating}
-                  title="Shell"
-                  className="project-terminal-panel-shell-select h-8 max-w-[8rem] shrink-0 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none hover:bg-muted focus:ring-2 focus:ring-ring"
+                  title={t("projectTools.shell")}
+                  className="h-8 max-w-[8rem] shrink-0 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none hover:bg-muted focus:ring-2 focus:ring-ring"
                 >
                   {shellOptions.map((option) => (
                     <option key={option.id} value={option.id}>
@@ -756,23 +884,46 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
                   ))}
                 </select>
               ) : null}
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleCreate}
-                disabled={!projectReady || creating}
-                title="New Terminal"
-                className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground"
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
+              <DropdownMenu open={createMenuOpen} onOpenChange={setCreateMenuOpen}>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disabled={!projectReady || creating}
+                      title={t("projectTools.newProjectTool")}
+                      className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground"
+                    />
+                  }
+                >
+                  <Plus className="h-4 w-4" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" sideOffset={6} className="min-w-40">
+                  <DropdownMenuItem
+                    onSelect={handleCreate}
+                    disabled={!projectReady || creating}
+                    className="gap-2 text-xs"
+                  >
+                    <Terminal className="h-3.5 w-3.5" />
+                    {t("projectTools.newTerminal")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={startFileTree}
+                    disabled={!projectReady}
+                    className="gap-2 text-xs"
+                  >
+                    <FolderTree className="h-3.5 w-3.5" />
+                    {t("projectTools.newFileTree")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               {onClose ? (
                 <Button
                   variant="ghost"
                   size="icon"
                   onClick={onClose}
-                  title="Close terminal panel"
-                  className="project-terminal-panel-close h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground md:hidden"
+                  title={t("projectTools.closePanel")}
+                  className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground md:hidden"
                 >
                   <X className="h-4 w-4" />
                 </Button>
@@ -782,7 +933,13 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
             {pendingCloseSession ? (
               <div className="flex shrink-0 items-center gap-2 border-b border-destructive/20 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                 <span className="min-w-0 flex-1 truncate">
-                  Close running terminal "{pendingCloseSession.title}"?
+                  {t("projectTools.closeRunningTerminal").replace(
+                    "{title}",
+                    formatTerminalSessionTitle(
+                      pendingCloseSession.title,
+                      t("projectTools.terminalTitle"),
+                    ),
+                  )}
                 </span>
                 <Button
                   type="button"
@@ -791,7 +948,7 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
                   className="h-7 shrink-0 px-2.5 text-xs"
                   onClick={() => setPendingCloseSessionId("")}
                 >
-                  Cancel
+                  {t("settings.cancel")}
                 </Button>
                 <Button
                   type="button"
@@ -801,7 +958,7 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
                   disabled={closingSessionId === pendingCloseSession.id}
                   onClick={() => closeSession(pendingCloseSession)}
                 >
-                  Close
+                  {t("projectTools.close")}
                 </Button>
               </div>
             ) : null}
@@ -810,32 +967,90 @@ export function ProjectTerminalPanel(props: ProjectTerminalPanelProps) {
               <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
                 {disabledMessage}
               </div>
-            ) : activeSession ? (
-              <div className="flex min-h-0 flex-1 flex-col">
+            ) : showFirstOpenChooser ? (
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-4 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={handleCreate}
+                  disabled={!projectReady || creating}
+                  className="flex min-h-36 flex-col items-center justify-center gap-3 rounded-lg border border-border bg-background px-4 py-5 text-center text-sm text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <Terminal className="h-8 w-8 text-muted-foreground" />
+                  <span className="font-medium">{t("projectTools.newTerminal")}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={startFileTree}
+                  className="flex min-h-36 flex-col items-center justify-center gap-3 rounded-lg border border-border bg-background px-4 py-5 text-center text-sm text-foreground transition-colors hover:bg-muted"
+                >
+                  <FolderTree className="h-8 w-8 text-muted-foreground" />
+                  <span className="font-medium">{t("projectTools.newFileTree")}</span>
+                </button>
+                {loading ? (
+                  <div className="col-span-full text-center text-xs text-muted-foreground">
+                    {t("projectTools.loading")}
+                  </div>
+                ) : null}
                 {error ? (
-                  <div className="border-b border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  <div className="col-span-full text-center text-xs text-destructive">
                     {error}
                   </div>
                 ) : null}
-                <div className="min-h-0 flex-1">
-                  <XTermViewport
-                    key={activeSession.id}
-                    client={client}
-                    session={activeSession}
-                    theme={theme}
-                    onError={setError}
-                  />
-                </div>
               </div>
             ) : (
-              <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-                <Terminal className="h-8 w-8 text-muted-foreground" />
-                <Button onClick={handleCreate} disabled={!projectReady || creating}>
-                  New Terminal
-                </Button>
-                {loading ? <div className="text-xs text-muted-foreground">Loading...</div> : null}
-                {error ? <div className="text-xs text-destructive">{error}</div> : null}
-              </div>
+              <>
+                {fileTreeInitialized ? (
+                  <div
+                    className={cn(
+                      "min-h-0 flex-1",
+                      currentActiveTab === "fileTree" ? "block" : "hidden",
+                    )}
+                  >
+                    <ProjectFileTreePanel
+                      projectPathKey={projectPathKey}
+                      cwd={cwd}
+                      initialized={fileTreeInitialized}
+                      syncState={fileTreeState}
+                      onInitializedChange={setFileTreeInitialized}
+                      onSyncStateChange={onFileTreeStateChange}
+                      onInsertFileMention={onInsertFileMention}
+                    />
+                  </div>
+                ) : null}
+                {currentActiveTab === "terminal" ? (
+                  activeSession ? (
+                    <div className="flex min-h-0 flex-1 flex-col">
+                      {error ? (
+                        <div className="border-b border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                          {error}
+                        </div>
+                      ) : null}
+                      <div className="min-h-0 flex-1">
+                        <XTermViewport
+                          key={activeSession.id}
+                          client={client}
+                          session={activeSession}
+                          theme={theme}
+                          onError={setError}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+                      <Terminal className="h-8 w-8 text-muted-foreground" />
+                      <Button onClick={handleCreate} disabled={!projectReady || creating}>
+                        {t("projectTools.newTerminal")}
+                      </Button>
+                      {loading ? (
+                        <div className="text-xs text-muted-foreground">
+                          {t("projectTools.loading")}
+                        </div>
+                      ) : null}
+                      {error ? <div className="text-xs text-destructive">{error}</div> : null}
+                    </div>
+                  )
+                ) : null}
+              </>
             )}
           </>
         ) : null}
