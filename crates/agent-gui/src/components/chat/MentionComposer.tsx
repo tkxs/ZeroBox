@@ -122,6 +122,7 @@ const LARGE_PASTE_TAG_ATTR = "data-large-paste-id";
 const LARGE_PASTE_CHAR_THRESHOLD = 8_000;
 const LARGE_PASTE_LINE_THRESHOLD = 200;
 const LARGE_PASTE_PREVIEW_CHARS = 160;
+const CARET_ANCHOR_TEXT = "\u200B";
 const IME_ENTER_SUPPRESS_WINDOW_MS = 300;
 const IME_COMPOSITION_END_ENTER_TAIL_MS = 80;
 
@@ -154,6 +155,18 @@ function formatSkillMentionToken(skill: Pick<MentionComposerSkillMention, "name"
   return `$${skill.name}`;
 }
 
+function removeCaretAnchors(value: string) {
+  return value.split(CARET_ANCHOR_TEXT).join("");
+}
+
+function normalizeSerializedText(value: string) {
+  return removeCaretAnchors(value).replace(/\u00A0/g, " ");
+}
+
+function isMentionBoundaryChar(value: string) {
+  return /\s/.test(value) || value === CARET_ANCHOR_TEXT;
+}
+
 /** Recursively serialise a contenteditable DOM tree back to plain text.
  *  Mention chips become Markdown file references. */
 function pushTextSegment(out: MentionComposerDraftSegment[], text: string) {
@@ -173,7 +186,7 @@ function serializeChildrenToSegments(
   const parts: MentionComposerDraftSegment[] = [];
   parent.childNodes.forEach((child) => {
     if (child.nodeType === Node.TEXT_NODE) {
-      pushTextSegment(parts, child.textContent || "");
+      pushTextSegment(parts, removeCaretAnchors(child.textContent || ""));
     } else if (child.nodeType === Node.ELEMENT_NODE) {
       const el = child as HTMLElement;
       const mentionPath = el.getAttribute(MENTION_TAG_ATTR);
@@ -240,12 +253,12 @@ function serializeChildren(
 }
 
 function editorTextIsEmpty(editor: HTMLElement) {
-  const raw = (editor.textContent || "").replace(/\u00A0/g, " ");
+  const raw = normalizeSerializedText(editor.textContent || "");
   return raw.trim().length === 0;
 }
 
 function normalizeMentionQuery(query: string) {
-  return query.trim().replace(/\\/g, "/").toLowerCase();
+  return removeCaretAnchors(query).trim().replace(/\\/g, "/").toLowerCase();
 }
 
 function normalizeLargePastePreview(text: string) {
@@ -391,6 +404,98 @@ function createMentionIcon(svgMarkup: string) {
   return icon;
 }
 
+function isComposerChipElement(node: Node | null): node is HTMLElement {
+  return (
+    node instanceof HTMLElement &&
+    (node.hasAttribute(MENTION_TAG_ATTR) ||
+      node.hasAttribute(SKILL_MENTION_NAME_ATTR) ||
+      node.hasAttribute(LARGE_PASTE_TAG_ATTR))
+  );
+}
+
+function createCaretAnchorText(afterRaw: string, options?: { ensureLeadingSpace?: boolean }) {
+  const cleaned = removeCaretAnchors(afterRaw);
+  const matchedWhitespace = cleaned.match(/^\s+/)?.[0] ?? "";
+  const leadingWhitespace =
+    matchedWhitespace || (options?.ensureLeadingSpace === true ? " " : "");
+  const rest = cleaned.slice(matchedWhitespace.length);
+  return {
+    text: `${leadingWhitespace}${CARET_ANCHOR_TEXT}${rest}`,
+    caretOffset: leadingWhitespace.length + CARET_ANCHOR_TEXT.length,
+  };
+}
+
+function placeCaretInTextNode(textNode: Text, offset: number) {
+  const range = document.createRange();
+  range.setStart(textNode, Math.min(offset, textNode.data.length));
+  range.collapse(true);
+  const sel = window.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+}
+
+function ensureCaretAnchorAfterChip(chip: HTMLElement): { textNode: Text; offset: number } | null {
+  const parent = chip.parentNode;
+  if (!parent) return null;
+
+  const next = chip.nextSibling;
+  if (next?.nodeType === Node.TEXT_NODE) {
+    const textNode = next as Text;
+    const anchor = createCaretAnchorText(textNode.data);
+    if (textNode.data !== anchor.text) {
+      textNode.data = anchor.text;
+    }
+    return { textNode, offset: anchor.caretOffset };
+  }
+
+  const anchor = createCaretAnchorText("");
+  const textNode = document.createTextNode(anchor.text);
+  parent.insertBefore(textNode, next);
+  return { textNode, offset: anchor.caretOffset };
+}
+
+function normalizeCaretAfterChip(root: HTMLElement) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return false;
+
+  const range = sel.getRangeAt(0);
+  const { startContainer: node, startOffset: offset } = range;
+  if (!root.contains(node)) return false;
+
+  if (node.nodeType === Node.TEXT_NODE) {
+    const textNode = node as Text;
+    const before = textNode.data.slice(0, offset);
+    if (removeCaretAnchors(before).length === 0 && isComposerChipElement(textNode.previousSibling)) {
+      const anchor = ensureCaretAnchorAfterChip(textNode.previousSibling);
+      if (!anchor) return false;
+      if (anchor.textNode !== textNode || anchor.offset !== offset) {
+        placeCaretInTextNode(anchor.textNode, anchor.offset);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  if (node.nodeType === Node.ELEMENT_NODE) {
+    const childBefore = node.childNodes[offset - 1] ?? null;
+    if (isComposerChipElement(childBefore)) {
+      const anchor = ensureCaretAnchorAfterChip(childBefore);
+      if (!anchor) return false;
+      placeCaretInTextNode(anchor.textNode, anchor.offset);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function ensureTrailingCaretAnchor(root: HTMLElement) {
+  const last = root.lastChild;
+  if (isComposerChipElement(last)) {
+    ensureCaretAnchorAfterChip(last);
+  }
+}
+
 /** Find the nearest previous leaf node (for checking what precedes @). */
 function prevLeaf(node: Node, root: Node): Node | null {
   let cur: Node | null = node;
@@ -398,7 +503,7 @@ function prevLeaf(node: Node, root: Node): Node | null {
     if (cur.previousSibling) {
       cur = cur.previousSibling;
       // Descend to rightmost leaf
-      while (cur.lastChild) cur = cur.lastChild;
+      while (cur.lastChild && !isComposerChipElement(cur)) cur = cur.lastChild;
       return cur;
     }
     cur = cur.parentNode;
@@ -409,6 +514,9 @@ function prevLeaf(node: Node, root: Node): Node | null {
 function rightmostTextNode(node: Node | null): Text | null {
   let cur = node;
   while (cur) {
+    if (isComposerChipElement(cur)) {
+      return null;
+    }
     if (cur.nodeType === Node.TEXT_NODE) {
       return cur as Text;
     }
@@ -418,12 +526,15 @@ function rightmostTextNode(node: Node | null): Text | null {
 }
 
 function selectionTextPosition(root: HTMLElement): { textNode: Text; offset: number } | null {
+  normalizeCaretAfterChip(root);
+
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return null;
 
   const { startContainer: node, startOffset: offset } = sel.getRangeAt(0);
   if (!root.contains(node)) return null;
   if (node.nodeType === Node.TEXT_NODE) {
+    if (isComposerChipElement(node.parentNode)) return null;
     return { textNode: node as Text, offset };
   }
   if (node.nodeType !== Node.ELEMENT_NODE) {
@@ -432,6 +543,12 @@ function selectionTextPosition(root: HTMLElement): { textNode: Text; offset: num
 
   const element = node as HTMLElement;
   const childBefore = element.childNodes[offset - 1] ?? null;
+  if (isComposerChipElement(childBefore)) {
+    const anchor = ensureCaretAnchorAfterChip(childBefore);
+    if (!anchor) return null;
+    placeCaretInTextNode(anchor.textNode, anchor.offset);
+    return { textNode: anchor.textNode, offset: anchor.offset };
+  }
   const textNode = rightmostTextNode(childBefore);
   if (textNode) {
     return { textNode, offset: (textNode.textContent || "").length };
@@ -461,20 +578,20 @@ function detectMention(root: HTMLElement, skillsEnabled: boolean): MentionContex
       trigger = "skill";
       break;
     }
-    if (/\s/.test(before[i])) break;
+    if (isMentionBoundaryChar(before[i])) break;
   }
   if (triggerIdx < 0 || !trigger) return null;
 
   // Trigger must be preceded by whitespace or be the very first character.
   if (triggerIdx > 0) {
-    if (!/\s/.test(before[triggerIdx - 1])) return null;
+    if (!isMentionBoundaryChar(before[triggerIdx - 1])) return null;
   } else {
     // triggerIdx === 0 — check previous leaf
     const prev = prevLeaf(node, root);
     if (prev) {
       if (prev.nodeType === Node.TEXT_NODE) {
         const pt = prev.textContent || "";
-        if (pt.length > 0 && !/\s/.test(pt[pt.length - 1])) return null;
+        if (pt.length > 0 && !isMentionBoundaryChar(pt[pt.length - 1])) return null;
       }
       // Element node (e.g. mention chip) acts as word boundary → OK
     }
@@ -506,21 +623,22 @@ function createFileMentionChip(path: string, kind: "file" | "dir") {
   return chip;
 }
 
-/** Replace the @query text with a styled mention chip. */
-function insertMentionChip(ctx: MentionContext, path: string, kind: "file" | "dir") {
+function insertMentionChipElement(
+  ctx: MentionContext,
+  chip: HTMLElement,
+  options?: { ensureSpaceAfterChip?: boolean },
+) {
   const { textNode, triggerOffset, query } = ctx;
   const text = textNode.textContent || "";
   const parent = textNode.parentNode!;
 
   const beforeText = text.slice(0, triggerOffset);
   const afterRaw = text.slice(triggerOffset + 1 + query.length);
-  const chip = createFileMentionChip(path, kind);
+  const anchor = createCaretAnchorText(afterRaw, {
+    ensureLeadingSpace: options?.ensureSpaceAfterChip === true,
+  });
+  const afterNode = document.createTextNode(anchor.text);
 
-  // Ensure a space after the chip so the cursor has somewhere to land
-  const afterText = afterRaw.length === 0 || !/^\s/.test(afterRaw) ? "\u00A0" + afterRaw : afterRaw;
-  const afterNode = document.createTextNode(afterText);
-
-  // Only insert beforeNode if it has content (avoid empty text nodes)
   if (beforeText) {
     parent.insertBefore(document.createTextNode(beforeText), textNode);
   }
@@ -528,13 +646,13 @@ function insertMentionChip(ctx: MentionContext, path: string, kind: "file" | "di
   parent.insertBefore(afterNode, textNode);
   parent.removeChild(textNode);
 
-  // Place cursor right after the space
-  const range = document.createRange();
-  range.setStart(afterNode, 1);
-  range.collapse(true);
-  const sel = window.getSelection()!;
-  sel.removeAllRanges();
-  sel.addRange(range);
+  placeCaretInTextNode(afterNode, anchor.caretOffset);
+}
+
+/** Replace the @query text with a styled mention chip. */
+function insertMentionChip(ctx: MentionContext, path: string, kind: "file" | "dir") {
+  const chip = createFileMentionChip(path, kind);
+  insertMentionChipElement(ctx, chip, { ensureSpaceAfterChip: true });
 }
 
 function createSkillMentionChip(skill: MentionComposerSkillMention) {
@@ -557,30 +675,8 @@ function createSkillMentionChip(skill: MentionComposerSkillMention) {
 }
 
 function insertSkillMentionChip(ctx: MentionContext, skill: MentionComposerSkill) {
-  const { textNode, triggerOffset, query } = ctx;
-  const text = textNode.textContent || "";
-  const parent = textNode.parentNode!;
-
-  const beforeText = text.slice(0, triggerOffset);
-  const afterRaw = text.slice(triggerOffset + 1 + query.length);
   const chip = createSkillMentionChip(skill);
-
-  const afterText = afterRaw.length === 0 || !/^\s/.test(afterRaw) ? "\u00A0" + afterRaw : afterRaw;
-  const afterNode = document.createTextNode(afterText);
-
-  if (beforeText) {
-    parent.insertBefore(document.createTextNode(beforeText), textNode);
-  }
-  parent.insertBefore(chip, textNode);
-  parent.insertBefore(afterNode, textNode);
-  parent.removeChild(textNode);
-
-  const range = document.createRange();
-  range.setStart(afterNode, 1);
-  range.collapse(true);
-  const sel = window.getSelection()!;
-  sel.removeAllRanges();
-  sel.addRange(range);
+  insertMentionChipElement(ctx, chip);
 }
 
 function createLargePasteChip(paste: MentionComposerLargePaste) {
@@ -603,8 +699,15 @@ function createLargePasteChip(paste: MentionComposerLargePaste) {
   return chip;
 }
 
-function insertNodeAtCursor(root: HTMLElement, node: Node) {
-  const afterNode = document.createTextNode("\u00A0");
+function insertNodeAtCursor(
+  root: HTMLElement,
+  node: Node,
+  options?: { ensureSpaceAfterNode?: boolean },
+) {
+  const anchor = createCaretAnchorText("", {
+    ensureLeadingSpace: options?.ensureSpaceAfterNode === true,
+  });
+  const afterNode = document.createTextNode(anchor.text);
   const sel = window.getSelection();
   if (sel && sel.rangeCount > 0) {
     const range = sel.getRangeAt(0);
@@ -612,21 +715,14 @@ function insertNodeAtCursor(root: HTMLElement, node: Node) {
       range.deleteContents();
       range.insertNode(afterNode);
       range.insertNode(node);
-      range.setStart(afterNode, 1);
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
+      placeCaretInTextNode(afterNode, anchor.caretOffset);
       return;
     }
   }
 
   root.appendChild(node);
   root.appendChild(afterNode);
-  const range = document.createRange();
-  range.setStart(afterNode, 1);
-  range.collapse(true);
-  sel?.removeAllRanges();
-  sel?.addRange(range);
+  placeCaretInTextNode(afterNode, anchor.caretOffset);
 }
 
 function scrollSelectionIntoComposerView(root: HTMLElement) {
@@ -682,17 +778,12 @@ function chipBeforeCursor(root: HTMLElement): HTMLElement | null {
   const { startContainer: node, startOffset: offset } = sel.getRangeAt(0);
   if (!root.contains(node)) return null;
 
-  // Case 1: cursor at offset 0 of a text node — check previousSibling
-  if (node.nodeType === Node.TEXT_NODE && offset === 0) {
-    const prev = node.previousSibling;
-    if (prev && prev.nodeType === Node.ELEMENT_NODE) {
-      const el = prev as HTMLElement;
-      if (
-        el.hasAttribute(MENTION_TAG_ATTR) ||
-        el.hasAttribute(SKILL_MENTION_NAME_ATTR) ||
-        el.hasAttribute(LARGE_PASTE_TAG_ATTR)
-      )
-        return el;
+  // Case 1: cursor is inside the text anchor after a mention chip.
+  if (node.nodeType === Node.TEXT_NODE) {
+    const textNode = node as Text;
+    const before = textNode.data.slice(0, offset);
+    if (removeCaretAnchors(before).length === 0 && isComposerChipElement(textNode.previousSibling)) {
+      return textNode.previousSibling;
     }
   }
 
@@ -701,14 +792,8 @@ function chipBeforeCursor(root: HTMLElement): HTMLElement | null {
   if (node === root || (node.nodeType === Node.ELEMENT_NODE && root.contains(node))) {
     const el = node as HTMLElement;
     const childBefore = el.childNodes[offset - 1];
-    if (childBefore && childBefore.nodeType === Node.ELEMENT_NODE) {
-      const ce = childBefore as HTMLElement;
-      if (
-        ce.hasAttribute(MENTION_TAG_ATTR) ||
-        ce.hasAttribute(SKILL_MENTION_NAME_ATTR) ||
-        ce.hasAttribute(LARGE_PASTE_TAG_ATTR)
-      )
-        return ce;
+    if (isComposerChipElement(childBefore)) {
+      return childBefore;
     }
   }
 
@@ -1105,8 +1190,8 @@ export const MentionComposer = memo(
         }
       }
 
-      const text = textParts.join("").replace(/\u00A0/g, " ");
-      const textWithoutLargePastes = textWithoutLargePastesParts.join("").replace(/\u00A0/g, " ");
+      const text = normalizeSerializedText(textParts.join(""));
+      const textWithoutLargePastes = normalizeSerializedText(textWithoutLargePastesParts.join(""));
       return {
         segments,
         text,
@@ -1181,7 +1266,7 @@ export const MentionComposer = memo(
         getText: () => {
           const el = editorRef.current;
           if (!el) return "";
-          return serializeChildren(el, largePastesRef.current).replace(/\u00A0/g, " ");
+          return normalizeSerializedText(serializeChildren(el, largePastesRef.current));
         },
         getDraft: buildDraft,
         hasContent: () => !buildDraft().isEmpty,
@@ -1227,6 +1312,7 @@ export const MentionComposer = memo(
             );
           }
 
+          ensureTrailingCaretAnchor(el);
           closeMentionSession();
           refreshEmptyState();
         },
@@ -1234,7 +1320,7 @@ export const MentionComposer = memo(
           const el = editorRef.current;
           if (!el) return;
           el.focus();
-          insertNodeAtCursor(el, createFileMentionChip(path, kind));
+          insertNodeAtCursor(el, createFileMentionChip(path, kind), { ensureSpaceAfterNode: true });
           closeMentionSession();
           refreshEmptyState();
         },
@@ -1269,6 +1355,10 @@ export const MentionComposer = memo(
 
     // ---- Event handlers ----
     const handleInput = useCallback(() => {
+      const el = editorRef.current;
+      if (el) {
+        normalizeCaretAfterChip(el);
+      }
       refreshEmptyState();
       if (!isComposingRef.current) {
         refreshMention();
@@ -1287,10 +1377,22 @@ export const MentionComposer = memo(
         ) {
           return;
         }
+        const el = editorRef.current;
+        if (el) {
+          normalizeCaretAfterChip(el);
+        }
         refreshMention();
       },
       [disabled, refreshMention],
     );
+
+    const handleMouseUp = useCallback(() => {
+      const el = editorRef.current;
+      if (!el) return;
+      if (normalizeCaretAfterChip(el)) {
+        refreshMention();
+      }
+    }, [refreshMention]);
 
     const handleKeyDown = useCallback(
       (e: KeyboardEvent<HTMLDivElement>) => {
@@ -1511,6 +1613,7 @@ export const MentionComposer = memo(
           onInput={handleInput}
           onKeyDown={handleKeyDown}
           onKeyUp={handleKeyUp}
+          onMouseUp={handleMouseUp}
           onPaste={handlePaste}
           onCompositionStart={handleCompositionStart}
           onCompositionEnd={handleCompositionEnd}
