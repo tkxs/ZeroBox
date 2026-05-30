@@ -28,7 +28,16 @@ import type {
   TerminalShellOption,
   TerminalSnapshot,
 } from "../../lib/terminal/types";
-import { Check, ChevronRight, FolderTree, GitBranch, GripVertical, Plus, Terminal, X } from "../icons";
+import {
+  Check,
+  ChevronRight,
+  FolderTree,
+  GitBranch,
+  GripVertical,
+  Plus,
+  Terminal,
+  X,
+} from "../icons";
 import { Button } from "../ui/button";
 import {
   DropdownMenu,
@@ -39,7 +48,11 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-import { GitReviewPanel } from "./GitReviewPanel";
+import {
+  GitReviewPanel,
+  type GitCommitContextPayload,
+  type GitFileContextPayload,
+} from "./GitReviewPanel";
 import { ProjectFileTreePanel } from "./ProjectFileTreePanel";
 
 const MIN_PANEL_WIDTH = 320;
@@ -77,6 +90,8 @@ type ProjectToolsPanelProps = {
   onGitReviewOpenChange: (open: boolean) => void;
   onSessionsChange?: (sessions: TerminalSession[]) => void;
   onInsertFileMention?: (path: string, kind: "file" | "dir") => void;
+  onInsertCommitMention?: (commit: GitCommitContextPayload) => void;
+  onInsertGitFileMention?: (file: GitFileContextPayload) => void;
   onClose?: () => void;
 };
 
@@ -95,8 +110,7 @@ function getFallbackMaxPanelWidth() {
 function getDynamicMaxPanelWidth(panel: HTMLElement | null) {
   if (!panel) return getFallbackMaxPanelWidth();
   const sibling = panel.previousElementSibling;
-  const siblingWidth =
-    sibling instanceof HTMLElement ? sibling.getBoundingClientRect().width : 0;
+  const siblingWidth = sibling instanceof HTMLElement ? sibling.getBoundingClientRect().width : 0;
   const panelWidth = panel.getBoundingClientRect().width;
   const hostWidth = siblingWidth + panelWidth;
   if (!Number.isFinite(hostWidth) || hostWidth <= 0) {
@@ -148,7 +162,10 @@ function dirname(path: string) {
 }
 
 function expandedPathsForFileTreePath(path: string) {
-  const normalized = path.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const normalized = path
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\/+|\/+$/g, "");
   const parts = normalized.split("/").filter(Boolean);
   const dirs = parts.slice(0, -1);
   return ["", ...dirs.map((_, index) => parts.slice(0, index + 1).join("/"))];
@@ -398,9 +415,14 @@ function XTermViewport({
     const replayBufferedEvents = () => {
       const events = bufferedEvents.splice(0);
       for (const event of events) {
-        writeTerminalEvent(term, event, (nextOffset) => {
-          lastOutputOffset = nextOffset;
-        }, lastOutputOffset);
+        writeTerminalEvent(
+          term,
+          event,
+          (nextOffset) => {
+            lastOutputOffset = nextOffset;
+          },
+          lastOutputOffset,
+        );
       }
     };
 
@@ -434,9 +456,14 @@ function XTermViewport({
       if (disposed || event.sessionId !== session.id) return;
       if (event.kind === "output" && event.data) {
         if (snapshotLoaded && !loadingSnapshot) {
-          writeTerminalEvent(term, event, (nextOffset) => {
-            lastOutputOffset = nextOffset;
-          }, lastOutputOffset);
+          writeTerminalEvent(
+            term,
+            event,
+            (nextOffset) => {
+              lastOutputOffset = nextOffset;
+            },
+            lastOutputOffset,
+          );
         } else {
           bufferedEvents.push(event);
         }
@@ -575,6 +602,8 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
     onGitReviewOpenChange,
     onSessionsChange,
     onInsertFileMention,
+    onInsertCommitMention,
+    onInsertGitFileMention,
     onClose,
   } = props;
   const { t } = useLocale();
@@ -1138,14 +1167,14 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
 
   const revealPathInFileTree = useCallback(
     (path: string) => {
-      const normalizedPath = path.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+      const normalizedPath = path
+        .trim()
+        .replace(/\\/g, "/")
+        .replace(/^\/+|\/+$/g, "");
       if (!projectReady) return;
       const selectedPath = normalizedPath.endsWith("/") ? dirname(normalizedPath) : normalizedPath;
       const expandedPaths = Array.from(
-        new Set([
-          ...fileTreeState.expandedPaths,
-          ...expandedPathsForFileTreePath(selectedPath),
-        ]),
+        new Set([...fileTreeState.expandedPaths, ...expandedPathsForFileTreePath(selectedPath)]),
       );
       setFileTreeInitialized(true);
       onFileTreeStateChange({
@@ -1598,17 +1627,19 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   <div
                     className={cn(
                       "min-h-0 flex-1",
-                      currentActiveTab === "gitReview" ? "block" : "hidden",
+                      currentActiveTab === "gitReview" ? "flex flex-col" : "hidden",
                     )}
                   >
                     <GitReviewPanel
                       key={`${projectPathKey}:git-review`}
                       cwd={cwd}
                       gitClient={gitClient}
-	                      canWrite={gitWriteEnabled}
-	                      disabledMessage={gitDisabledMessage}
-	                      onRevealInFileTree={revealPathInFileTree}
-	                    />
+                      canWrite={gitWriteEnabled}
+                      disabledMessage={gitDisabledMessage}
+                      onRevealInFileTree={revealPathInFileTree}
+                      onInsertCommitMention={onInsertCommitMention}
+                      onInsertGitFileMention={onInsertGitFileMention}
+                    />
                   </div>
                 ) : null}
                 {currentActiveTab === "terminal" ? (

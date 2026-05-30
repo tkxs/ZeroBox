@@ -1,9 +1,9 @@
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 use lopdf::Document as PdfDocument;
-use reqwest::Url;
 use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use reqwest::Url;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;

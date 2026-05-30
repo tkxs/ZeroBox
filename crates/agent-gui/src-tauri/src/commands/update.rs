@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
-use reqwest::StatusCode;
+use quick_xml::Reader;
 use reqwest::header::{ACCEPT, RANGE, USER_AGENT};
+use reqwest::StatusCode;
 use serde::Serialize;
 use tauri::{AppHandle, Url};
 use tauri_plugin_updater::UpdaterExt;

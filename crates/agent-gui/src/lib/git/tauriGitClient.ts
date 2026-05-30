@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   type GitClient,
   normalizeGitBranchesResponse,
+  normalizeGitCommitDetailsResponse,
   normalizeGitDiffResponse,
   normalizeGitLogResponse,
   normalizeGitOperationResponse,
@@ -32,9 +33,9 @@ export const tauriGitClient: GitClient = {
       workdir,
     );
   },
-  async createBranch(workdir, branch) {
+  async createBranch(workdir, branch, startPoint) {
     return normalizeGitOperationResponse(
-      await invoke("git_create_branch", { workdir, branch }),
+      await invoke("git_create_branch", { workdir, branch, start_point: startPoint }),
       workdir,
     );
   },
@@ -43,6 +44,17 @@ export const tauriGitClient: GitClient = {
   },
   async log(workdir, limit) {
     return normalizeGitLogResponse(await invoke("git_log", { workdir, limit }), workdir);
+  },
+  async commitDetails(workdir, commit) {
+    return normalizeGitCommitDetailsResponse(
+      await invoke("git_commit_details", { workdir, commit }),
+      workdir,
+    );
+  },
+  async compareCommitWithRemote(workdir, commit) {
+    return normalizeGitDiffResponse(
+      await invoke("git_compare_commit_with_remote", { workdir, commit }),
+    );
   },
   async commitDiff(workdir, commit, path) {
     return normalizeGitDiffResponse(await invoke("git_commit_diff", { workdir, commit, path }));
@@ -74,6 +86,12 @@ export const tauriGitClient: GitClient = {
       workdir,
     );
   },
+  async openSystemFileLocation(workdir, path) {
+    return normalizeGitOperationResponse(
+      await invoke("git_open_system_file_location", { workdir, path }),
+      workdir,
+    );
+  },
   async commit(workdir, message) {
     return normalizeGitOperationResponse(await invoke("git_commit", { workdir, message }), workdir);
   },
@@ -82,6 +100,12 @@ export const tauriGitClient: GitClient = {
   },
   async pull(workdir) {
     return normalizeGitOperationResponse(await invoke("git_pull", { workdir }), workdir);
+  },
+  async setRemote(workdir, remoteUrl) {
+    return normalizeGitOperationResponse(
+      await invoke("git_set_remote", { workdir, remote_url: remoteUrl }),
+      workdir,
+    );
   },
   async push(workdir) {
     return normalizeGitOperationResponse(await invoke("git_push", { workdir }), workdir);

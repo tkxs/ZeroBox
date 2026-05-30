@@ -750,6 +750,8 @@ export class GatewayWebSocketClient {
       action === "branches" ||
       action === "diff" ||
       action === "log" ||
+      action === "commit_details" ||
+      action === "compare_commit_with_remote" ||
       action === "commit_diff"
     ) {
       return this.requestWithRecovery<T>(requestType, { workdir, args });

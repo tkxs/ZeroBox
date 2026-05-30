@@ -7,8 +7,8 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
-    Arc, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Condvar, Mutex,
 };
 use std::time::{Duration, Instant};
 
@@ -694,9 +694,9 @@ process output to a log file, for example: `nohup command > /tmp/liveagent-task.
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_SHELL_TIMEOUT_MS, MAX_SHELL_TIMEOUT_MS, MIN_SHELL_TIMEOUT_MS, ShellProvider,
-        ShellRunRegistry, normalize_shell_provider, normalize_timeout_ms, run_shell_script,
-        sanitize_rel_path_core,
+        normalize_shell_provider, normalize_timeout_ms, run_shell_script, sanitize_rel_path_core,
+        ShellProvider, ShellRunRegistry, DEFAULT_SHELL_TIMEOUT_MS, MAX_SHELL_TIMEOUT_MS,
+        MIN_SHELL_TIMEOUT_MS,
     };
     use std::fs;
     use std::path::PathBuf;

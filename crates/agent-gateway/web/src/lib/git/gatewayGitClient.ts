@@ -2,6 +2,7 @@ import type { GatewayWebSocketClientLike } from "@/lib/gatewaySocket";
 import {
   type GitClient,
   normalizeGitBranchesResponse,
+  normalizeGitCommitDetailsResponse,
   normalizeGitDiffResponse,
   normalizeGitLogResponse,
   normalizeGitOperationResponse,
@@ -32,9 +33,9 @@ export function createGatewayGitClient(api: GatewayWebSocketClientLike): GitClie
         workdir,
       );
     },
-    async createBranch(workdir, branch) {
+    async createBranch(workdir, branch, startPoint) {
       return normalizeGitOperationResponse(
-        await api.gitRequest("create_branch", workdir, { branch }),
+        await api.gitRequest("create_branch", workdir, { branch, startPoint }),
         workdir,
       );
     },
@@ -43,6 +44,17 @@ export function createGatewayGitClient(api: GatewayWebSocketClientLike): GitClie
     },
     async log(workdir, limit) {
       return normalizeGitLogResponse(await api.gitRequest("log", workdir, { limit }), workdir);
+    },
+    async commitDetails(workdir, commit) {
+      return normalizeGitCommitDetailsResponse(
+        await api.gitRequest("commit_details", workdir, { commit }),
+        workdir,
+      );
+    },
+    async compareCommitWithRemote(workdir, commit) {
+      return normalizeGitDiffResponse(
+        await api.gitRequest("compare_commit_with_remote", workdir, { commit }),
+      );
     },
     async commitDiff(workdir, commit, path) {
       return normalizeGitDiffResponse(
@@ -90,6 +102,12 @@ export function createGatewayGitClient(api: GatewayWebSocketClientLike): GitClie
     },
     async pull(workdir) {
       return normalizeGitOperationResponse(await api.gitRequest("pull", workdir), workdir);
+    },
+    async setRemote(workdir, remoteUrl) {
+      return normalizeGitOperationResponse(
+        await api.gitRequest("set_remote", workdir, { remoteUrl }),
+        workdir,
+      );
     },
     async push(workdir) {
       return normalizeGitOperationResponse(await api.gitRequest("push", workdir), workdir);

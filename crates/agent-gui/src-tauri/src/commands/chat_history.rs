@@ -1,6 +1,6 @@
 use chrono::{Local, LocalResult, NaiveDate, TimeZone};
 use regex::Regex;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
@@ -12,7 +12,7 @@ use std::{
 use crate::{
     commands::{history_db, subagent_history},
     services::{
-        gateway::{GatewayController, build_history_sync_delete, build_history_sync_upsert},
+        gateway::{build_history_sync_delete, build_history_sync_upsert, GatewayController},
         memory::{MemoryHistorySearchMatch, MemorySearchArgs},
     },
 };

@@ -21,6 +21,8 @@ export type GitRepositoryState = {
   workdir: string;
   head: string;
   upstream: string;
+  remoteName: string;
+  remoteUrl: string;
   ahead: number;
   behind: number;
   dirtyCounts: GitDirtyCounts;
@@ -73,11 +75,35 @@ export type GitCommitSummary = {
   authorDate: string;
   files: GitCommitFile[];
   fileCount: number;
+  localOnly: boolean;
 };
 
 export type GitLogResponse = {
   state: GitRepositoryState;
   commits: GitCommitSummary[];
+};
+
+export type GitCommitDetails = {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  body: string;
+  authorName: string;
+  authorEmail: string;
+  authorDate: string;
+  files: GitCommitFile[];
+  fileCount: number;
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+  stat: string;
+  remoteName: string;
+  remoteUrl: string;
+};
+
+export type GitCommitDetailsResponse = {
+  state: GitRepositoryState;
+  commit: GitCommitDetails;
 };
 
 export type GitOperationResponse = {
@@ -99,9 +125,11 @@ export type GitClient = {
   branches(workdir: string): Promise<GitBranchesResponse>;
   init(workdir: string, options?: GitInitOptions): Promise<GitOperationResponse>;
   switchBranch(workdir: string, branch: string, kind?: string): Promise<GitOperationResponse>;
-  createBranch(workdir: string, branch: string): Promise<GitOperationResponse>;
+  createBranch(workdir: string, branch: string, startPoint?: string): Promise<GitOperationResponse>;
   diff(workdir: string, mode: "branch" | "working_tree", path?: string): Promise<GitDiffResponse>;
   log(workdir: string, limit?: number): Promise<GitLogResponse>;
+  commitDetails(workdir: string, commit: string): Promise<GitCommitDetailsResponse>;
+  compareCommitWithRemote(workdir: string, commit: string): Promise<GitDiffResponse>;
   commitDiff(workdir: string, commit: string, path?: string): Promise<GitDiffResponse>;
   stage(workdir: string, path: string): Promise<GitOperationResponse>;
   stageAll(workdir: string): Promise<GitOperationResponse>;
@@ -113,6 +141,7 @@ export type GitClient = {
   commit(workdir: string, message: string): Promise<GitOperationResponse>;
   fetch(workdir: string): Promise<GitOperationResponse>;
   pull(workdir: string): Promise<GitOperationResponse>;
+  setRemote(workdir: string, remoteUrl: string): Promise<GitOperationResponse>;
   push(workdir: string): Promise<GitOperationResponse>;
 };
 
@@ -153,6 +182,8 @@ export function normalizeGitRepositoryState(input: unknown, fallbackWorkdir = ""
     workdir: asString(source.workdir) || fallbackWorkdir,
     head: asString(source.head),
     upstream: asString(source.upstream),
+    remoteName: asString(source.remoteName ?? source.remote_name),
+    remoteUrl: asString(source.remoteUrl ?? source.remote_url),
     ahead: asNumber(source.ahead),
     behind: asNumber(source.behind),
     dirtyCounts: {
@@ -240,6 +271,7 @@ export function normalizeGitCommitSummary(input: unknown): GitCommitSummary {
     authorDate: asString(source.authorDate ?? source.author_date),
     files,
     fileCount: asNumber(source.fileCount ?? source.file_count) || files.length,
+    localOnly: asBoolean(source.localOnly ?? source.local_only),
   };
 }
 
@@ -248,6 +280,39 @@ export function normalizeGitLogResponse(input: unknown, workdir = ""): GitLogRes
   return {
     state: normalizeGitRepositoryState(source.state, workdir),
     commits: Array.isArray(source.commits) ? source.commits.map(normalizeGitCommitSummary) : [],
+  };
+}
+
+export function normalizeGitCommitDetails(input: unknown): GitCommitDetails {
+  const source = asObject(input);
+  const files = Array.isArray(source.files) ? source.files.map(normalizeGitCommitFile) : [];
+  return {
+    sha: asString(source.sha),
+    shortSha: asString(source.shortSha ?? source.short_sha),
+    subject: asString(source.subject),
+    body: asString(source.body),
+    authorName: asString(source.authorName ?? source.author_name),
+    authorEmail: asString(source.authorEmail ?? source.author_email),
+    authorDate: asString(source.authorDate ?? source.author_date),
+    files,
+    fileCount: asNumber(source.fileCount ?? source.file_count) || files.length,
+    filesChanged: asNumber(source.filesChanged ?? source.files_changed),
+    insertions: asNumber(source.insertions),
+    deletions: asNumber(source.deletions),
+    stat: asString(source.stat),
+    remoteName: asString(source.remoteName ?? source.remote_name),
+    remoteUrl: asString(source.remoteUrl ?? source.remote_url),
+  };
+}
+
+export function normalizeGitCommitDetailsResponse(
+  input: unknown,
+  workdir = "",
+): GitCommitDetailsResponse {
+  const source = asObject(input);
+  return {
+    state: normalizeGitRepositoryState(source.state, workdir),
+    commit: normalizeGitCommitDetails(source.commit),
   };
 }
 
@@ -268,6 +333,8 @@ export function emptyGitRepositoryState(workdir = ""): GitRepositoryState {
     workdir,
     head: "",
     upstream: "",
+    remoteName: "",
+    remoteUrl: "",
     ahead: 0,
     behind: 0,
     dirtyCounts: emptyCounts,

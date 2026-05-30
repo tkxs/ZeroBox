@@ -40,7 +40,11 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-import { GitReviewPanel } from "./GitReviewPanel";
+import {
+  GitReviewPanel,
+  type GitCommitContextPayload,
+  type GitFileContextPayload,
+} from "./GitReviewPanel";
 import { ProjectFileTreePanel } from "./ProjectFileTreePanel";
 
 const MIN_PANEL_WIDTH = 320;
@@ -78,6 +82,8 @@ type ProjectToolsPanelProps = {
   onGitReviewOpenChange: (open: boolean) => void;
   onSessionsChange?: (sessions: TerminalSession[]) => void;
   onInsertFileMention?: (path: string, kind: "file" | "dir") => void;
+  onInsertCommitMention?: (commit: GitCommitContextPayload) => void;
+  onInsertGitFileMention?: (file: GitFileContextPayload) => void;
   onClose?: () => void;
 };
 
@@ -580,6 +586,8 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
     onGitReviewOpenChange,
     onSessionsChange,
     onInsertFileMention,
+    onInsertCommitMention,
+    onInsertGitFileMention,
     onClose,
   } = props;
   const { t } = useLocale();
@@ -1847,17 +1855,19 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   <div
                     className={cn(
                       "min-h-0 flex-1",
-                      currentActiveTab === "gitReview" ? "block" : "hidden",
+                      currentActiveTab === "gitReview" ? "flex flex-col" : "hidden",
                     )}
                   >
                     <GitReviewPanel
                       key={`${projectPathKey}:git-review`}
                       cwd={cwd}
                       gitClient={gitClient}
-	                      canWrite={gitWriteEnabled}
-	                      disabledMessage={gitDisabledMessage}
-	                      onRevealInFileTree={revealPathInFileTree}
-	                    />
+                      canWrite={gitWriteEnabled}
+                      disabledMessage={gitDisabledMessage}
+                      onRevealInFileTree={revealPathInFileTree}
+                      onInsertCommitMention={onInsertCommitMention}
+                      onInsertGitFileMention={onInsertGitFileMention}
+                    />
                   </div>
                 ) : null}
                 {currentActiveTab === "terminal" ? (

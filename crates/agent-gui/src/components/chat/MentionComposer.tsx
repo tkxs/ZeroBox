@@ -1,9 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   type ClipboardEvent,
+  type FocusEvent,
   forwardRef,
   type KeyboardEvent,
   memo,
+  type MouseEvent,
   type RefObject,
   useCallback,
   useEffect,
@@ -14,6 +17,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useLocale } from "../../i18n";
 import { cn } from "../../lib/shared/utils";
 import { getFileTypeIcon, getFileTypeIconSvg } from "./fileTypeIcons";
 
@@ -45,6 +49,36 @@ export type MentionComposerSkill = {
 
 export type MentionComposerSkillMention = MentionComposerSkill;
 
+export type MentionComposerCommitMention = {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  body: string;
+  authorName: string;
+  authorEmail: string;
+  authorDate: string;
+  fileCount: number;
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+  stat: string;
+  remoteName: string;
+  remoteUrl: string;
+  githubUrl?: string;
+};
+
+export type MentionComposerGitFileMention = {
+  path: string;
+  oldPath?: string;
+  status: string;
+  commitSha: string;
+  shortSha: string;
+  refName: string;
+  remoteName: string;
+  remoteUrl: string;
+  githubUrl?: string;
+};
+
 type MentionSuggestion =
   | { type: "file"; entry: MentionFileEntry }
   | { type: "skill"; skill: MentionComposerSkill };
@@ -64,6 +98,8 @@ export interface MentionComposerHandle {
   setText: (text: string) => void;
   setDraft: (draft: MentionComposerDraft) => void;
   insertFileMention: (path: string, kind: "file" | "dir") => void;
+  insertCommitMention: (commit: MentionComposerCommitMention) => void;
+  insertGitFileMention: (file: MentionComposerGitFileMention) => void;
   clear: () => void;
   focus: () => void;
 }
@@ -80,7 +116,9 @@ export type MentionComposerLargePaste = {
 export type MentionComposerDraftSegment =
   | { type: "text"; text: string }
   | { type: "largePaste"; paste: MentionComposerLargePaste }
-  | { type: "skillMention"; skill: MentionComposerSkillMention };
+  | { type: "skillMention"; skill: MentionComposerSkillMention }
+  | { type: "commitMention"; commit: MentionComposerCommitMention }
+  | { type: "gitFileMention"; file: MentionComposerGitFileMention };
 
 export type MentionComposerDraft = {
   segments: MentionComposerDraftSegment[];
@@ -88,6 +126,8 @@ export type MentionComposerDraft = {
   textWithoutLargePastes: string;
   largePastes: MentionComposerLargePaste[];
   skillMentions: MentionComposerSkillMention[];
+  commitMentions: MentionComposerCommitMention[];
+  gitFileMentions: MentionComposerGitFileMention[];
   isEmpty: boolean;
 };
 
@@ -117,6 +157,30 @@ const SKILL_MENTION_NAME_ATTR = "data-skill-name";
 const SKILL_MENTION_FILE_ATTR = "data-skill-file";
 const SKILL_MENTION_BASE_DIR_ATTR = "data-skill-base-dir";
 const SKILL_MENTION_DESCRIPTION_ATTR = "data-skill-description";
+const COMMIT_MENTION_SHA_ATTR = "data-commit-sha";
+const COMMIT_MENTION_SHORT_SHA_ATTR = "data-commit-short-sha";
+const COMMIT_MENTION_SUBJECT_ATTR = "data-commit-subject";
+const COMMIT_MENTION_BODY_ATTR = "data-commit-body";
+const COMMIT_MENTION_AUTHOR_NAME_ATTR = "data-commit-author-name";
+const COMMIT_MENTION_AUTHOR_EMAIL_ATTR = "data-commit-author-email";
+const COMMIT_MENTION_AUTHOR_DATE_ATTR = "data-commit-author-date";
+const COMMIT_MENTION_FILE_COUNT_ATTR = "data-commit-file-count";
+const COMMIT_MENTION_FILES_CHANGED_ATTR = "data-commit-files-changed";
+const COMMIT_MENTION_INSERTIONS_ATTR = "data-commit-insertions";
+const COMMIT_MENTION_DELETIONS_ATTR = "data-commit-deletions";
+const COMMIT_MENTION_STAT_ATTR = "data-commit-stat";
+const COMMIT_MENTION_REMOTE_NAME_ATTR = "data-commit-remote-name";
+const COMMIT_MENTION_REMOTE_URL_ATTR = "data-commit-remote-url";
+const COMMIT_MENTION_GITHUB_URL_ATTR = "data-commit-github-url";
+const GIT_FILE_MENTION_PATH_ATTR = "data-git-file-path";
+const GIT_FILE_MENTION_OLD_PATH_ATTR = "data-git-file-old-path";
+const GIT_FILE_MENTION_STATUS_ATTR = "data-git-file-status";
+const GIT_FILE_MENTION_COMMIT_SHA_ATTR = "data-git-file-commit-sha";
+const GIT_FILE_MENTION_SHORT_SHA_ATTR = "data-git-file-short-sha";
+const GIT_FILE_MENTION_REF_NAME_ATTR = "data-git-file-ref-name";
+const GIT_FILE_MENTION_REMOTE_NAME_ATTR = "data-git-file-remote-name";
+const GIT_FILE_MENTION_REMOTE_URL_ATTR = "data-git-file-remote-url";
+const GIT_FILE_MENTION_GITHUB_URL_ATTR = "data-git-file-github-url";
 const LARGE_PASTE_TAG_ATTR = "data-large-paste-id";
 const LARGE_PASTE_CHAR_THRESHOLD = 8_000;
 const LARGE_PASTE_LINE_THRESHOLD = 200;
@@ -124,6 +188,8 @@ const LARGE_PASTE_PREVIEW_CHARS = 160;
 const CARET_ANCHOR_TEXT = "\u200B";
 const IME_ENTER_SUPPRESS_WINDOW_MS = 300;
 const IME_COMPOSITION_END_ENTER_TAIL_MS = 80;
+const GITHUB_ICON_SVG =
+  '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.6 7.6 0 0 1 8 3.86c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';
 
 /* ------------------------------------------------------------------ */
 /*  DOM helpers                                                        */
@@ -152,6 +218,32 @@ function formatMentionReference(path: string, kind: "file" | "dir") {
 
 function formatSkillMentionToken(skill: Pick<MentionComposerSkillMention, "name">) {
   return `$${skill.name}`;
+}
+
+function formatCommitMentionToken(
+  commit: Pick<MentionComposerCommitMention, "sha" | "shortSha" | "subject" | "githubUrl">,
+) {
+  const shortSha = commit.shortSha || commit.sha.slice(0, 7);
+  const subject = commit.subject.trim() || shortSha;
+  const label = `commit ${shortSha}: ${subject}`;
+  if (commit.githubUrl?.trim()) {
+    return `[${escapeMarkdownLinkLabel(label)}](${formatMarkdownLinkDestination(commit.githubUrl.trim())})`;
+  }
+  return `${label} (${commit.sha})`;
+}
+
+function formatGitFileMentionToken(
+  file: Pick<
+    MentionComposerGitFileMention,
+    "path" | "commitSha" | "shortSha" | "refName" | "githubUrl"
+  >,
+) {
+  const refLabel = file.refName || file.shortSha || file.commitSha.slice(0, 7);
+  const label = `git file ${refLabel}: ${file.path}`;
+  if (file.githubUrl?.trim()) {
+    return `[${escapeMarkdownLinkLabel(label)}](${formatMarkdownLinkDestination(file.githubUrl.trim())})`;
+  }
+  return `${label} (${file.commitSha})`;
 }
 
 function removeCaretAnchors(value: string) {
@@ -195,6 +287,16 @@ function serializeChildrenToSegments(
           parts,
           formatMentionReference(mentionPath, kind === "dir" ? "dir" : "file"),
         );
+      } else if (el.hasAttribute(GIT_FILE_MENTION_PATH_ATTR)) {
+        const file = gitFileMentionFromElement(el);
+        if (file) {
+          parts.push({ type: "gitFileMention", file });
+        }
+      } else if (el.hasAttribute(COMMIT_MENTION_SHA_ATTR)) {
+        const commit = commitMentionFromElement(el);
+        if (commit) {
+          parts.push({ type: "commitMention", commit });
+        }
       } else if (el.hasAttribute(SKILL_MENTION_NAME_ATTR)) {
         const name = el.getAttribute(SKILL_MENTION_NAME_ATTR)?.trim() ?? "";
         const skillFile = el.getAttribute(SKILL_MENTION_FILE_ATTR)?.trim() ?? "";
@@ -246,6 +348,8 @@ function serializeChildren(
     .map((segment) => {
       if (segment.type === "largePaste") return segment.paste.text;
       if (segment.type === "skillMention") return formatSkillMentionToken(segment.skill);
+      if (segment.type === "commitMention") return formatCommitMentionToken(segment.commit);
+      if (segment.type === "gitFileMention") return formatGitFileMentionToken(segment.file);
       return segment.text;
     })
     .join("");
@@ -387,6 +491,93 @@ function formatLargePasteCount(value: number) {
   return new Intl.NumberFormat().format(value);
 }
 
+function parseCommitMentionNumber(value: string | null) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeCommitMention(
+  commit: MentionComposerCommitMention,
+): MentionComposerCommitMention {
+  const sha = commit.sha.trim();
+  const shortSha = (commit.shortSha || sha.slice(0, 7)).trim();
+  return {
+    sha,
+    shortSha,
+    subject: commit.subject ?? "",
+    body: commit.body ?? "",
+    authorName: commit.authorName ?? "",
+    authorEmail: commit.authorEmail ?? "",
+    authorDate: commit.authorDate ?? "",
+    fileCount: Number.isFinite(commit.fileCount) ? commit.fileCount : 0,
+    filesChanged: Number.isFinite(commit.filesChanged) ? commit.filesChanged : 0,
+    insertions: Number.isFinite(commit.insertions) ? commit.insertions : 0,
+    deletions: Number.isFinite(commit.deletions) ? commit.deletions : 0,
+    stat: commit.stat ?? "",
+    remoteName: commit.remoteName ?? "",
+    remoteUrl: commit.remoteUrl ?? "",
+    githubUrl: commit.githubUrl?.trim() || undefined,
+  };
+}
+
+function commitMentionFromElement(el: HTMLElement): MentionComposerCommitMention | null {
+  const sha = el.getAttribute(COMMIT_MENTION_SHA_ATTR)?.trim() ?? "";
+  if (!sha) return null;
+  return normalizeCommitMention({
+    sha,
+    shortSha: el.getAttribute(COMMIT_MENTION_SHORT_SHA_ATTR)?.trim() ?? sha.slice(0, 7),
+    subject: el.getAttribute(COMMIT_MENTION_SUBJECT_ATTR) ?? "",
+    body: el.getAttribute(COMMIT_MENTION_BODY_ATTR) ?? "",
+    authorName: el.getAttribute(COMMIT_MENTION_AUTHOR_NAME_ATTR) ?? "",
+    authorEmail: el.getAttribute(COMMIT_MENTION_AUTHOR_EMAIL_ATTR) ?? "",
+    authorDate: el.getAttribute(COMMIT_MENTION_AUTHOR_DATE_ATTR) ?? "",
+    fileCount: parseCommitMentionNumber(el.getAttribute(COMMIT_MENTION_FILE_COUNT_ATTR)),
+    filesChanged: parseCommitMentionNumber(el.getAttribute(COMMIT_MENTION_FILES_CHANGED_ATTR)),
+    insertions: parseCommitMentionNumber(el.getAttribute(COMMIT_MENTION_INSERTIONS_ATTR)),
+    deletions: parseCommitMentionNumber(el.getAttribute(COMMIT_MENTION_DELETIONS_ATTR)),
+    stat: el.getAttribute(COMMIT_MENTION_STAT_ATTR) ?? "",
+    remoteName: el.getAttribute(COMMIT_MENTION_REMOTE_NAME_ATTR) ?? "",
+    remoteUrl: el.getAttribute(COMMIT_MENTION_REMOTE_URL_ATTR) ?? "",
+    githubUrl: el.getAttribute(COMMIT_MENTION_GITHUB_URL_ATTR)?.trim() || undefined,
+  });
+}
+
+function normalizeGitFileMention(
+  file: MentionComposerGitFileMention,
+): MentionComposerGitFileMention {
+  const path = file.path.trim().replace(/\\/g, "/");
+  const commitSha = file.commitSha.trim();
+  const shortSha = (file.shortSha || commitSha.slice(0, 7)).trim();
+  return {
+    path,
+    oldPath: file.oldPath?.trim() || undefined,
+    status: file.status ?? "",
+    commitSha,
+    shortSha,
+    refName: file.refName?.trim() || shortSha,
+    remoteName: file.remoteName ?? "",
+    remoteUrl: file.remoteUrl ?? "",
+    githubUrl: file.githubUrl?.trim() || undefined,
+  };
+}
+
+function gitFileMentionFromElement(el: HTMLElement): MentionComposerGitFileMention | null {
+  const path = el.getAttribute(GIT_FILE_MENTION_PATH_ATTR)?.trim() ?? "";
+  const commitSha = el.getAttribute(GIT_FILE_MENTION_COMMIT_SHA_ATTR)?.trim() ?? "";
+  if (!path || !commitSha) return null;
+  return normalizeGitFileMention({
+    path,
+    oldPath: el.getAttribute(GIT_FILE_MENTION_OLD_PATH_ATTR)?.trim() || undefined,
+    status: el.getAttribute(GIT_FILE_MENTION_STATUS_ATTR) ?? "",
+    commitSha,
+    shortSha: el.getAttribute(GIT_FILE_MENTION_SHORT_SHA_ATTR)?.trim() ?? commitSha.slice(0, 7),
+    refName: el.getAttribute(GIT_FILE_MENTION_REF_NAME_ATTR)?.trim() ?? "",
+    remoteName: el.getAttribute(GIT_FILE_MENTION_REMOTE_NAME_ATTR) ?? "",
+    remoteUrl: el.getAttribute(GIT_FILE_MENTION_REMOTE_URL_ATTR) ?? "",
+    githubUrl: el.getAttribute(GIT_FILE_MENTION_GITHUB_URL_ATTR)?.trim() || undefined,
+  });
+}
+
 function createMentionIcon(svgMarkup: string) {
   const template = document.createElement("template");
   template.innerHTML = svgMarkup.trim();
@@ -406,11 +597,17 @@ function createFileTypeMentionIcon(path: string, kind: "file" | "dir") {
   return createMentionIcon(getFileTypeIconSvg(path, kind));
 }
 
+function createGitHubMentionIcon() {
+  return createMentionIcon(GITHUB_ICON_SVG);
+}
+
 function isComposerChipElement(node: Node | null): node is HTMLElement {
   return (
     node instanceof HTMLElement &&
     (node.hasAttribute(MENTION_TAG_ATTR) ||
       node.hasAttribute(SKILL_MENTION_NAME_ATTR) ||
+      node.hasAttribute(COMMIT_MENTION_SHA_ATTR) ||
+      node.hasAttribute(GIT_FILE_MENTION_PATH_ATTR) ||
       node.hasAttribute(LARGE_PASTE_TAG_ATTR))
   );
 }
@@ -468,7 +665,10 @@ function normalizeCaretAfterChip(root: HTMLElement) {
   if (node.nodeType === Node.TEXT_NODE) {
     const textNode = node as Text;
     const before = textNode.data.slice(0, offset);
-    if (removeCaretAnchors(before).length === 0 && isComposerChipElement(textNode.previousSibling)) {
+    if (
+      removeCaretAnchors(before).length === 0 &&
+      isComposerChipElement(textNode.previousSibling)
+    ) {
       const anchor = ensureCaretAnchorAfterChip(textNode.previousSibling);
       if (!anchor) return false;
       if (anchor.textNode !== textNode || anchor.offset !== offset) {
@@ -682,6 +882,73 @@ function insertSkillMentionChip(ctx: MentionContext, skill: MentionComposerSkill
   insertMentionChipElement(ctx, chip);
 }
 
+function createCommitMentionChip(commitInput: MentionComposerCommitMention) {
+  const commit = normalizeCommitMention(commitInput);
+  const chip = document.createElement("span");
+  chip.setAttribute(COMMIT_MENTION_SHA_ATTR, commit.sha);
+  chip.setAttribute(COMMIT_MENTION_SHORT_SHA_ATTR, commit.shortSha);
+  chip.setAttribute(COMMIT_MENTION_SUBJECT_ATTR, commit.subject);
+  chip.setAttribute(COMMIT_MENTION_BODY_ATTR, commit.body);
+  chip.setAttribute(COMMIT_MENTION_AUTHOR_NAME_ATTR, commit.authorName);
+  chip.setAttribute(COMMIT_MENTION_AUTHOR_EMAIL_ATTR, commit.authorEmail);
+  chip.setAttribute(COMMIT_MENTION_AUTHOR_DATE_ATTR, commit.authorDate);
+  chip.setAttribute(COMMIT_MENTION_FILE_COUNT_ATTR, String(commit.fileCount));
+  chip.setAttribute(COMMIT_MENTION_FILES_CHANGED_ATTR, String(commit.filesChanged));
+  chip.setAttribute(COMMIT_MENTION_INSERTIONS_ATTR, String(commit.insertions));
+  chip.setAttribute(COMMIT_MENTION_DELETIONS_ATTR, String(commit.deletions));
+  chip.setAttribute(COMMIT_MENTION_STAT_ATTR, commit.stat);
+  chip.setAttribute(COMMIT_MENTION_REMOTE_NAME_ATTR, commit.remoteName);
+  chip.setAttribute(COMMIT_MENTION_REMOTE_URL_ATTR, commit.remoteUrl);
+  if (commit.githubUrl) {
+    chip.setAttribute(COMMIT_MENTION_GITHUB_URL_ATTR, commit.githubUrl);
+  }
+  chip.contentEditable = "false";
+  chip.tabIndex = 0;
+  chip.setAttribute("aria-label", commit.subject ? `${commit.shortSha}: ${commit.subject}` : commit.shortSha);
+  chip.className =
+    "mention-chip inline-flex items-center gap-1 rounded bg-cyan-500/15 px-1.5 mx-0.5 text-cyan-800 dark:text-cyan-200 align-baseline whitespace-nowrap select-none";
+
+  chip.appendChild(createGitHubMentionIcon());
+  chip.appendChild(document.createTextNode(commit.shortSha));
+  return chip;
+}
+
+function createGitFileMentionChip(fileInput: MentionComposerGitFileMention) {
+  const file = normalizeGitFileMention(fileInput);
+  const chip = document.createElement("span");
+  chip.setAttribute(GIT_FILE_MENTION_PATH_ATTR, file.path);
+  chip.setAttribute(GIT_FILE_MENTION_STATUS_ATTR, file.status);
+  chip.setAttribute(GIT_FILE_MENTION_COMMIT_SHA_ATTR, file.commitSha);
+  chip.setAttribute(GIT_FILE_MENTION_SHORT_SHA_ATTR, file.shortSha);
+  chip.setAttribute(GIT_FILE_MENTION_REF_NAME_ATTR, file.refName);
+  chip.setAttribute(GIT_FILE_MENTION_REMOTE_NAME_ATTR, file.remoteName);
+  chip.setAttribute(GIT_FILE_MENTION_REMOTE_URL_ATTR, file.remoteUrl);
+  if (file.oldPath) {
+    chip.setAttribute(GIT_FILE_MENTION_OLD_PATH_ATTR, file.oldPath);
+  }
+  if (file.githubUrl) {
+    chip.setAttribute(GIT_FILE_MENTION_GITHUB_URL_ATTR, file.githubUrl);
+  }
+  chip.contentEditable = "false";
+  chip.setAttribute(
+    "aria-label",
+    `${file.path} @ ${file.refName || file.shortSha || file.commitSha.slice(0, 7)}`,
+  );
+  chip.className =
+    "mention-chip inline-flex items-center gap-1 rounded bg-sky-500/15 px-1.5 mx-0.5 text-sky-800 dark:text-sky-200 align-baseline whitespace-nowrap select-none";
+  chip.title = `${file.path}\n${file.refName || file.shortSha} (${file.shortSha})`;
+
+  chip.appendChild(createFileTypeMentionIcon(file.path, "file"));
+
+  const fileName = file.path.split("/").pop() || file.path;
+  chip.appendChild(document.createTextNode(fileName));
+  const ref = document.createElement("span");
+  ref.className = "max-w-[8rem] truncate text-[10px] opacity-70";
+  ref.textContent = `@${file.refName || file.shortSha}`;
+  chip.appendChild(ref);
+  return chip;
+}
+
 function createLargePasteChip(paste: MentionComposerLargePaste) {
   const chip = document.createElement("span");
   chip.setAttribute(LARGE_PASTE_TAG_ATTR, paste.id);
@@ -785,7 +1052,10 @@ function chipBeforeCursor(root: HTMLElement): HTMLElement | null {
   if (node.nodeType === Node.TEXT_NODE) {
     const textNode = node as Text;
     const before = textNode.data.slice(0, offset);
-    if (removeCaretAnchors(before).length === 0 && isComposerChipElement(textNode.previousSibling)) {
+    if (
+      removeCaretAnchors(before).length === 0 &&
+      isComposerChipElement(textNode.previousSibling)
+    ) {
       return textNode.previousSibling;
     }
   }
@@ -948,6 +1218,165 @@ function Popup({
   );
 }
 
+function formatCommitTooltipDate(value: string, locale: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const absolute = date.toLocaleString(locale, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const deltaSeconds = Math.round((date.getTime() - Date.now()) / 1000);
+  const units: Array<{ unit: "year" | "month" | "day" | "hour" | "minute" | "second"; seconds: number }> = [
+    { unit: "year", seconds: 365 * 24 * 60 * 60 },
+    { unit: "month", seconds: 30 * 24 * 60 * 60 },
+    { unit: "day", seconds: 24 * 60 * 60 },
+    { unit: "hour", seconds: 60 * 60 },
+    { unit: "minute", seconds: 60 },
+    { unit: "second", seconds: 1 },
+  ];
+  const selected = units.find(({ seconds }) => Math.abs(deltaSeconds) >= seconds) ?? units.at(-1)!;
+  const relative = new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(
+    Math.round(deltaSeconds / selected.seconds),
+    selected.unit,
+  );
+  return { relative, absolute };
+}
+
+function GitHubMarkIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.6 7.6 0 0 1 8 3.86c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+    </svg>
+  );
+}
+
+function commitStatLabel(template: string, count: string) {
+  return template.replace("{count}", count);
+}
+
+function CommitMentionTooltip({
+  commit,
+  rect,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  commit: MentionComposerCommitMention;
+  rect: DOMRect;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}) {
+  const { locale, t } = useLocale();
+  const maxWidth = Math.min(440, window.innerWidth - 16);
+  const minWidth = Math.min(200, maxWidth);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [tooltipWidth, setTooltipWidth] = useState(minWidth);
+  const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - tooltipWidth - 8));
+  const availableAbove = rect.top - 16;
+  const availableBelow = window.innerHeight - rect.bottom - 16;
+  const placeAbove = availableAbove > 260 || availableAbove > availableBelow;
+  const maxHeight = Math.max(120, Math.min(520, placeAbove ? availableAbove : availableBelow));
+  const top = placeAbove
+    ? Math.max(8, rect.top - 8)
+    : Math.min(window.innerHeight - 8, rect.bottom + 8);
+  const shortSha = commit.shortSha || commit.sha.slice(0, 7);
+  const author = commit.authorName || t("chat.composer.commitTooltipUnknownAuthor");
+  const date = formatCommitTooltipDate(commit.authorDate, locale);
+  const fileCount = commit.filesChanged || commit.fileCount;
+  const filesChangedLabel = commitStatLabel(
+    t("chat.composer.commitTooltipFilesChanged"),
+    formatLargePasteCount(fileCount),
+  );
+  const insertionsLabel = commitStatLabel(
+    t("chat.composer.commitTooltipInsertions"),
+    formatLargePasteCount(commit.insertions),
+  );
+  const deletionsLabel = commitStatLabel(
+    t("chat.composer.commitTooltipDeletions"),
+    formatLargePasteCount(commit.deletions),
+  );
+  const messageBody = commit.body.trim();
+  const subject = commit.subject.trim() || shortSha;
+  const authorLabel = commit.authorEmail ? `${author} <${commit.authorEmail}>` : author;
+
+  useLayoutEffect(() => {
+    const node = tooltipRef.current;
+    if (!node) return;
+    const measuredWidth = Math.ceil(node.getBoundingClientRect().width);
+    setTooltipWidth(Math.min(maxWidth, Math.max(minWidth, measuredWidth)));
+  }, [commit, maxWidth, minWidth]);
+
+  return createPortal(
+    <div
+      ref={tooltipRef}
+      className="fixed z-[10000] overflow-y-auto rounded-xl border border-border bg-popover px-3 py-2.5 text-xs text-popover-foreground shadow-xl"
+      style={{
+        left,
+        top,
+        width: "fit-content",
+        minWidth,
+        maxWidth,
+        maxHeight,
+        transform: placeAbove ? "translateY(-100%)" : "none",
+      }}
+      onMouseDown={(event) => event.preventDefault()}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      <div className="flex items-start gap-2">
+        <GitHubMarkIcon className="mt-0.5 h-4 w-4 shrink-0 text-foreground" />
+        <div className="min-w-0">
+          <div className="break-words font-medium leading-tight">{authorLabel}</div>
+          {date ? (
+            <div className="mt-0.5 text-[11px] leading-tight text-muted-foreground">
+              {date.relative} ({date.absolute})
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div className="mt-2 whitespace-pre-wrap break-words font-medium leading-snug">
+        {subject}
+      </div>
+      {messageBody ? (
+        <div className="mt-1.5 whitespace-pre-wrap break-words leading-snug text-muted-foreground">
+          {messageBody}
+        </div>
+      ) : null}
+      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-tight">
+        <span className="text-muted-foreground">{filesChangedLabel}</span>
+        <span className="font-medium text-emerald-600 dark:text-emerald-400">{insertionsLabel}</span>
+        <span className="font-medium text-rose-600 dark:text-rose-400">{deletionsLabel}</span>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border/70 pt-1.5 text-[11px] leading-tight text-muted-foreground">
+        <span className="font-mono text-foreground">{shortSha}</span>
+        {commit.remoteName ? <span>{commit.remoteName}</span> : null}
+        {commit.githubUrl ? (
+          <>
+            <span className="text-border">|</span>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-primary hover:bg-primary/10"
+              onClick={() => void openUrl(commit.githubUrl!)}
+            >
+              <GitHubMarkIcon className="h-3 w-3" />
+              {t("chat.composer.commitTooltipOpenGithub")}
+            </button>
+          </>
+        ) : null}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  MentionComposer                                                    */
 /* ------------------------------------------------------------------ */
@@ -969,6 +1398,7 @@ export const MentionComposer = memo(
   ) {
     const editorRef = useRef<HTMLDivElement>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
+    const commitTooltipCloseTimerRef = useRef<number | null>(null);
     const [isEmpty, setIsEmpty] = useState(true);
     const lastIsEmptyRef = useRef(true);
     const isComposingRef = useRef(false);
@@ -979,6 +1409,10 @@ export const MentionComposer = memo(
     const isBusyRef = useRef(false);
     const largePastesRef = useRef(new Map<string, MentionComposerLargePaste>());
     const largePasteCounterRef = useRef(0);
+    const [commitTooltip, setCommitTooltip] = useState<{
+      commit: MentionComposerCommitMention;
+      rect: DOMRect;
+    } | null>(null);
 
     const setBusy = useCallback(
       (nextBusy: boolean) => {
@@ -1169,6 +1603,8 @@ export const MentionComposer = memo(
           textWithoutLargePastes: "",
           largePastes: [],
           skillMentions: [],
+          commitMentions: [],
+          gitFileMentions: [],
           isEmpty: true,
         };
       }
@@ -1176,6 +1612,8 @@ export const MentionComposer = memo(
       const segments = serializeChildrenToSegments(el, largePastesRef.current);
       const largePastes: MentionComposerLargePaste[] = [];
       const skillMentions: MentionComposerSkillMention[] = [];
+      const commitMentions: MentionComposerCommitMention[] = [];
+      const gitFileMentions: MentionComposerGitFileMention[] = [];
       const textParts: string[] = [];
       const textWithoutLargePastesParts: string[] = [];
       for (const segment of segments) {
@@ -1185,9 +1623,19 @@ export const MentionComposer = memo(
         } else if (segment.type === "largePaste") {
           largePastes.push(segment.paste);
           textParts.push(segment.paste.text);
-        } else {
+        } else if (segment.type === "skillMention") {
           skillMentions.push(segment.skill);
           const token = formatSkillMentionToken(segment.skill);
+          textParts.push(token);
+          textWithoutLargePastesParts.push(token);
+        } else if (segment.type === "commitMention") {
+          commitMentions.push(segment.commit);
+          const token = formatCommitMentionToken(segment.commit);
+          textParts.push(token);
+          textWithoutLargePastesParts.push(token);
+        } else if (segment.type === "gitFileMention") {
+          gitFileMentions.push(segment.file);
+          const token = formatGitFileMentionToken(segment.file);
           textParts.push(token);
           textWithoutLargePastesParts.push(token);
         }
@@ -1201,6 +1649,8 @@ export const MentionComposer = memo(
         textWithoutLargePastes,
         largePastes,
         skillMentions,
+        commitMentions,
+        gitFileMentions,
         isEmpty: editorTextIsEmpty(el),
       };
     }, []);
@@ -1278,6 +1728,7 @@ export const MentionComposer = memo(
           if (!el) return;
           el.innerHTML = "";
           largePastesRef.current.clear();
+          setCommitTooltip(null);
           if (isLargePasteText(text)) {
             insertLargePaste(text);
           } else {
@@ -1291,6 +1742,7 @@ export const MentionComposer = memo(
           if (!el) return;
           el.innerHTML = "";
           largePastesRef.current.clear();
+          setCommitTooltip(null);
 
           if (draft.segments.length === 0 && draft.text) {
             if (isLargePasteText(draft.text)) {
@@ -1305,6 +1757,10 @@ export const MentionComposer = memo(
                 el.appendChild(createLargePasteChip(segment.paste));
               } else if (segment.type === "skillMention") {
                 el.appendChild(createSkillMentionChip(segment.skill));
+              } else if (segment.type === "commitMention") {
+                el.appendChild(createCommitMentionChip(segment.commit));
+              } else if (segment.type === "gitFileMention") {
+                el.appendChild(createGitFileMentionChip(segment.file));
               } else if (segment.text) {
                 el.appendChild(document.createTextNode(segment.text));
               }
@@ -1327,11 +1783,28 @@ export const MentionComposer = memo(
           closeMentionSession();
           refreshEmptyState();
         },
+        insertCommitMention: (commit: MentionComposerCommitMention) => {
+          const el = editorRef.current;
+          if (!el) return;
+          el.focus();
+          insertNodeAtCursor(el, createCommitMentionChip(commit), { ensureSpaceAfterNode: true });
+          closeMentionSession();
+          refreshEmptyState();
+        },
+        insertGitFileMention: (file: MentionComposerGitFileMention) => {
+          const el = editorRef.current;
+          if (!el) return;
+          el.focus();
+          insertNodeAtCursor(el, createGitFileMentionChip(file), { ensureSpaceAfterNode: true });
+          closeMentionSession();
+          refreshEmptyState();
+        },
         clear: () => {
           const el = editorRef.current;
           if (!el) return;
           el.innerHTML = "";
           largePastesRef.current.clear();
+          setCommitTooltip(null);
           closeMentionSession();
           refreshEmptyState();
         },
@@ -1396,6 +1869,56 @@ export const MentionComposer = memo(
         refreshMention();
       }
     }, [refreshMention]);
+
+    const updateCommitTooltipFromTarget = useCallback((target: EventTarget | null) => {
+      const editor = editorRef.current;
+      if (!(target instanceof Element) || !editor) {
+        setCommitTooltip(null);
+        return;
+      }
+      const chip = target.closest<HTMLElement>(`[${COMMIT_MENTION_SHA_ATTR}]`);
+      if (!chip || !editor.contains(chip)) {
+        setCommitTooltip(null);
+        return;
+      }
+      const commit = commitMentionFromElement(chip);
+      if (!commit) {
+        setCommitTooltip(null);
+        return;
+      }
+      setCommitTooltip({ commit, rect: chip.getBoundingClientRect() });
+    }, []);
+
+    const cancelCommitTooltipClose = useCallback(() => {
+      if (commitTooltipCloseTimerRef.current === null) return;
+      window.clearTimeout(commitTooltipCloseTimerRef.current);
+      commitTooltipCloseTimerRef.current = null;
+    }, []);
+
+    const scheduleCommitTooltipClose = useCallback(() => {
+      cancelCommitTooltipClose();
+      commitTooltipCloseTimerRef.current = window.setTimeout(() => {
+        commitTooltipCloseTimerRef.current = null;
+        setCommitTooltip(null);
+      }, 120);
+    }, [cancelCommitTooltipClose]);
+
+    useEffect(() => cancelCommitTooltipClose, [cancelCommitTooltipClose]);
+
+    const handleMouseMove = useCallback(
+      (event: MouseEvent<HTMLDivElement>) => {
+        cancelCommitTooltipClose();
+        updateCommitTooltipFromTarget(event.target);
+      },
+      [cancelCommitTooltipClose, updateCommitTooltipFromTarget],
+    );
+
+    const handleFocus = useCallback(
+      (event: FocusEvent<HTMLDivElement>) => {
+        updateCommitTooltipFromTarget(event.target);
+      },
+      [updateCommitTooltipFromTarget],
+    );
 
     const handleKeyDown = useCallback(
       (e: KeyboardEvent<HTMLDivElement>) => {
@@ -1589,7 +2112,9 @@ export const MentionComposer = memo(
       }
       setBusy(false);
       closeMentionSession();
-    }, [closeMentionSession, setBusy]);
+      cancelCommitTooltipClose();
+      setCommitTooltip(null);
+    }, [cancelCommitTooltipClose, closeMentionSession, setBusy]);
 
     return (
       <div ref={wrapperRef} className="relative w-full min-w-0 max-w-full flex-1">
@@ -1605,6 +2130,14 @@ export const MentionComposer = memo(
             onSelect={selectSuggestion}
           />
         )}
+        {commitTooltip ? (
+          <CommitMentionTooltip
+            commit={commitTooltip.commit}
+            rect={commitTooltip.rect}
+            onMouseEnter={cancelCommitTooltipClose}
+            onMouseLeave={scheduleCommitTooltipClose}
+          />
+        ) : null}
         <div
           ref={editorRef}
           contentEditable={!disabled}
@@ -1616,6 +2149,9 @@ export const MentionComposer = memo(
           onInput={handleInput}
           onKeyDown={handleKeyDown}
           onKeyUp={handleKeyUp}
+          onFocus={handleFocus}
+          onMouseLeave={scheduleCommitTooltipClose}
+          onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onPaste={handlePaste}
           onCompositionStart={handleCompositionStart}

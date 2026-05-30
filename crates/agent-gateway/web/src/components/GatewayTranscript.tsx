@@ -29,7 +29,13 @@ import {
 import { Markdown } from "@/components/Markdown";
 import { ImagePreview, type ImagePreviewSlide } from "@/components/chat/ImagePreview";
 import { useLocale } from "@/i18n/LocaleContext";
-import { UserMessageContent } from "@/lib/chat/userMessageContent";
+import {
+  buildGitHubCommitUrl,
+  type CommitDetailsLoader,
+  type CommitDisplayReference,
+  UserMessageContent,
+} from "@/lib/chat/userMessageContent";
+import type { GitClient } from "@/lib/git/types";
 import { cn } from "@/lib/shared/utils";
 import {
   AssistantAvatar,
@@ -71,6 +77,7 @@ type GatewayTranscriptProps = {
   showUsage?: boolean;
   usageContextWindow?: number;
   workspaceRoot?: string;
+  gitClient?: GitClient | null;
   onLoadUploadedImagePreview?: UploadedImagePreviewLoader;
   onResendFromEdit?: (
     messageRef: HistoryMessageRef,
@@ -721,6 +728,7 @@ const GatewayTranscriptHistory = memo(function GatewayTranscriptHistory(props: {
   showUsage: boolean;
   usageContextWindow?: number;
   workspaceRoot?: string;
+  gitClient?: GitClient | null;
   onLoadUploadedImagePreview?: UploadedImagePreviewLoader;
   onResendFromEdit?: (
     messageRef: HistoryMessageRef,
@@ -746,6 +754,7 @@ const GatewayTranscriptHistory = memo(function GatewayTranscriptHistory(props: {
     showUsage,
     usageContextWindow,
     workspaceRoot,
+    gitClient,
     onLoadUploadedImagePreview,
     onResendFromEdit,
     onResolveUserMessageRef,
@@ -757,12 +766,50 @@ const GatewayTranscriptHistory = memo(function GatewayTranscriptHistory(props: {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [resolvingEditMessageId, setResolvingEditMessageId] = useState<string | null>(null);
   const [resolvedMessageRefs, setResolvedMessageRefs] = useState<Record<string, HistoryMessageRef>>({});
+  const commitDetailsCacheRef = useRef(new Map<string, CommitDisplayReference>());
   const historyIdentityKey = `${conversationId ?? ""}\n${items[0]?.id ?? ""}`;
+
+  const loadCommitDetails = useCallback<CommitDetailsLoader>(
+    async (commit) => {
+      const workdir = workspaceRoot?.trim() ?? "";
+      const sha = commit.sha.trim();
+      if (!gitClient || !workdir || !sha) return null;
+      const cacheKey = `${workdir}\u0000${sha}`;
+      const cached = commitDetailsCacheRef.current.get(cacheKey);
+      if (cached) return cached;
+      const response = await gitClient.commitDetails(workdir, sha);
+      const details = response.commit;
+      const resolved: CommitDisplayReference = {
+        sha: details.sha,
+        shortSha: details.shortSha,
+        subject: details.subject,
+        body: details.body,
+        authorName: details.authorName,
+        authorEmail: details.authorEmail,
+        authorDate: details.authorDate,
+        fileCount: details.fileCount,
+        filesChanged: details.filesChanged,
+        insertions: details.insertions,
+        deletions: details.deletions,
+        stat: details.stat,
+        remoteName: details.remoteName,
+        remoteUrl: details.remoteUrl,
+        githubUrl:
+          commit.githubUrl ||
+          buildGitHubCommitUrl(details.remoteUrl || response.state.remoteUrl, details.sha) ||
+          undefined,
+      };
+      commitDetailsCacheRef.current.set(cacheKey, resolved);
+      return resolved;
+    },
+    [gitClient, workspaceRoot],
+  );
 
   useEffect(() => {
     setEditingMessageId(null);
     setResolvingEditMessageId(null);
     setResolvedMessageRefs({});
+    commitDetailsCacheRef.current.clear();
   }, [historyIdentityKey]);
 
   useEffect(() => {
@@ -883,6 +930,7 @@ const GatewayTranscriptHistory = memo(function GatewayTranscriptHistory(props: {
                       <UserMessageContent
                         text={item.text}
                         pastedTextFiles={pastedTextFiles}
+                        loadCommitDetails={loadCommitDetails}
                       />
                     ) : null}
                   </div>
@@ -1186,6 +1234,7 @@ export function GatewayTranscript({
   showUsage = false,
   usageContextWindow,
   workspaceRoot,
+  gitClient,
   onLoadUploadedImagePreview,
   onResendFromEdit,
   onResolveUserMessageRef,
@@ -1300,6 +1349,7 @@ export function GatewayTranscript({
           showUsage={showUsage}
           usageContextWindow={usageContextWindow}
           workspaceRoot={workspaceRoot}
+          gitClient={gitClient}
           onLoadUploadedImagePreview={onLoadUploadedImagePreview}
           onResendFromEdit={onResendFromEdit}
           onResolveUserMessageRef={onResolveUserMessageRef}

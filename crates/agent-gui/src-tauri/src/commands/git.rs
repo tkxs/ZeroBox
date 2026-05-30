@@ -1,6 +1,7 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
@@ -14,8 +15,12 @@ use crate::runtime::process::{configure_child_process_group, kill_child_process_
 const GIT_DIFF_MAX_BYTES: usize = 512 * 1024;
 const GIT_UNTRACKED_FILE_MAX_BYTES: u64 = 128 * 1024;
 const GIT_COMMAND_TIMEOUT_SECS: u64 = 60;
+const GIT_TRANSIENT_RETRY_ATTEMPTS: usize = 3;
+const GIT_TRANSIENT_RETRY_DELAY_MS: u64 = 160;
 const GIT_LOG_DEFAULT_LIMIT: usize = 80;
 const GIT_LOG_MAX_LIMIT: usize = 200;
+const GIT_MISSING_REMOTE_MESSAGE: &str = "当前仓库还没有设置远端仓库。";
+const GIT_MISSING_ORIGIN_REMOTE_MESSAGE: &str = "当前分支没有 upstream，且找不到 origin remote。";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +51,8 @@ pub struct GitRepositoryState {
     pub workdir: String,
     pub head: String,
     pub upstream: String,
+    pub remote_name: String,
+    pub remote_url: String,
     pub ahead: i32,
     pub behind: i32,
     pub dirty_counts: GitDirtyCounts,
@@ -108,6 +115,7 @@ pub struct GitCommitSummary {
     pub author_date: String,
     pub files: Vec<GitCommitFile>,
     pub file_count: usize,
+    pub local_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +123,33 @@ pub struct GitCommitSummary {
 pub struct GitLogResponse {
     pub state: GitRepositoryState,
     pub commits: Vec<GitCommitSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitDetails {
+    pub sha: String,
+    pub short_sha: String,
+    pub subject: String,
+    pub body: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub author_date: String,
+    pub files: Vec<GitCommitFile>,
+    pub file_count: usize,
+    pub files_changed: usize,
+    pub insertions: usize,
+    pub deletions: usize,
+    pub stat: String,
+    pub remote_name: String,
+    pub remote_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitDetailsResponse {
+    pub state: GitRepositoryState,
+    pub commit: GitCommitDetails,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,9 +169,11 @@ struct GitGatewayArgs {
     kind: Option<String>,
     path: Option<String>,
     old_path: Option<String>,
+    remote_url: Option<String>,
     message: Option<String>,
     mode: Option<String>,
     commit: Option<String>,
+    start_point: Option<String>,
     limit: Option<usize>,
     user_name: Option<String>,
     user_email: Option<String>,
@@ -180,6 +217,7 @@ fn git_output(workdir: &str, args: &[&str]) -> Result<Output, String> {
         .args(args)
         .current_dir(workdir)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_target))
         .stderr(Stdio::from(stderr_target))
@@ -204,14 +242,33 @@ fn git_output(workdir: &str, args: &[&str]) -> Result<Output, String> {
 }
 
 fn git_success(workdir: &str, args: &[&str]) -> Result<GitOutput, String> {
-    let output = git_output(workdir, args)?;
-    let stdout = trim_output(&output.stdout);
-    let stderr = trim_output(&output.stderr);
-    if output.status.success() {
-        Ok(GitOutput { stdout, stderr })
-    } else {
-        Err(if stderr.is_empty() { stdout } else { stderr })
+    let mut last_error = String::new();
+    for attempt in 0..GIT_TRANSIENT_RETRY_ATTEMPTS {
+        let output = git_output(workdir, args)?;
+        let stdout = trim_output(&output.stdout);
+        let stderr = trim_output(&output.stderr);
+        if output.status.success() {
+            return Ok(GitOutput { stdout, stderr });
+        }
+        let message = if stderr.is_empty() { stdout } else { stderr };
+        if attempt + 1 < GIT_TRANSIENT_RETRY_ATTEMPTS && is_transient_git_lock_error(&message) {
+            last_error = message;
+            std::thread::sleep(Duration::from_millis(GIT_TRANSIENT_RETRY_DELAY_MS));
+            continue;
+        }
+        return Err(message);
     }
+    Err(last_error)
+}
+
+fn is_transient_git_lock_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("another git process")
+        || lower.contains("index.lock")
+        || lower.contains("cannot lock ref")
+        || lower.contains("could not lock")
+        || (lower.contains("unable to create") && lower.contains(".lock"))
+        || lower.contains("failed to lock")
 }
 
 fn discover_repo(workdir: &str) -> Result<Option<String>, String> {
@@ -248,6 +305,8 @@ fn not_repo_state(workdir: &str) -> GitRepositoryState {
         workdir: workdir.trim().to_string(),
         head: String::new(),
         upstream: String::new(),
+        remote_name: String::new(),
+        remote_url: String::new(),
         ahead: 0,
         behind: 0,
         dirty_counts: GitDirtyCounts::default(),
@@ -403,6 +462,8 @@ pub(crate) fn git_status_sync(workdir: String) -> Result<GitRepositoryState, Str
             workdir,
             head: String::new(),
             upstream: String::new(),
+            remote_name: String::new(),
+            remote_url: String::new(),
             ahead: 0,
             behind: 0,
             dirty_counts: GitDirtyCounts::default(),
@@ -412,11 +473,14 @@ pub(crate) fn git_status_sync(workdir: String) -> Result<GitRepositoryState, Str
         });
     }
     let (head, upstream, ahead, behind, entries) = parse_status_porcelain_v2(&output.stdout);
+    let (remote_name, remote_url) = resolve_state_remote(&repo_root, &upstream);
     Ok(GitRepositoryState {
         repo_root,
         workdir,
         head,
         upstream,
+        remote_name,
+        remote_url,
         ahead,
         behind,
         dirty_counts: dirty_counts(&entries),
@@ -431,6 +495,14 @@ fn branch_name_from_remote(remote_short: &str) -> String {
         .split_once('/')
         .map(|(_, name)| name.to_string())
         .unwrap_or_else(|| remote_short.to_string())
+}
+
+fn remote_ref_to_local_branch(remote: &str) -> String {
+    let short = remote
+        .trim()
+        .strip_prefix("refs/remotes/")
+        .unwrap_or_else(|| remote.trim());
+    branch_name_from_remote(short)
 }
 
 pub(crate) fn git_branches_sync(workdir: String) -> Result<GitBranchesResponse, String> {
@@ -480,6 +552,22 @@ pub(crate) fn git_branches_sync(workdir: String) -> Result<GitBranchesResponse, 
             upstream: parts[2].trim().to_string(),
             ahead: if current { state.ahead } else { 0 },
             behind: if current { state.behind } else { 0 },
+        });
+    }
+    if !state.head.trim().is_empty()
+        && state.head != "(detached)"
+        && !branches
+            .iter()
+            .any(|branch| branch.kind == "local" && branch.full_name == state.head)
+    {
+        branches.push(GitBranch {
+            name: state.head.clone(),
+            full_name: state.head.clone(),
+            kind: "local".to_string(),
+            current: true,
+            upstream: state.upstream.clone(),
+            ahead: state.ahead,
+            behind: state.behind,
         });
     }
     branches.sort_by(|left, right| {
@@ -536,6 +624,73 @@ fn validate_repo_relative_path(path: &str) -> Result<String, String> {
     Ok(trimmed)
 }
 
+fn nearest_existing_location_for_system_file_manager(target: &Path, repo_root: &Path) -> PathBuf {
+    if target.exists() {
+        return target.to_path_buf();
+    }
+    let mut current = target
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| repo_root.to_path_buf());
+    while !current.exists() {
+        if !current.pop() {
+            return repo_root.to_path_buf();
+        }
+    }
+    current
+}
+
+fn spawn_system_file_manager(program: &str, args: &[String]) -> Result<(), String> {
+    let mut command = Command::new(program);
+    configure_child_process_group(&mut command);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("打开系统资源管理器失败：{error}"))?;
+    Ok(())
+}
+
+fn open_system_file_location(target: &Path, repo_root: &Path) -> Result<(), String> {
+    let location = nearest_existing_location_for_system_file_manager(target, repo_root);
+    #[cfg(target_os = "windows")]
+    {
+        if target.exists() {
+            spawn_system_file_manager("explorer.exe", &[format!("/select,{}", target.display())])
+        } else {
+            spawn_system_file_manager("explorer.exe", &[location.display().to_string()])
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if target.exists() {
+            spawn_system_file_manager("open", &["-R".to_string(), target.display().to_string()])
+        } else {
+            spawn_system_file_manager("open", &[location.display().to_string()])
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let directory = if location.is_dir() {
+            location
+        } else {
+            location
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| repo_root.to_path_buf())
+        };
+        spawn_system_file_manager("xdg-open", &[directory.display().to_string()])
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = target;
+        let _ = repo_root;
+        Err("当前系统不支持打开系统资源管理器。".to_string())
+    }
+}
+
 fn validate_branch_name(repo_root: &str, branch: &str) -> Result<String, String> {
     let branch = branch.trim();
     if branch.is_empty() {
@@ -572,6 +727,62 @@ fn validate_git_config_value(label: &str, value: Option<String>) -> Result<Optio
         return Err(format!("{label} 不能包含换行或空字符。"));
     }
     Ok(Some(value.to_string()))
+}
+
+fn validate_git_remote_url(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("远端仓库地址不能为空。".to_string());
+    }
+    if value.chars().any(|ch| matches!(ch, '\0' | '\n' | '\r')) {
+        return Err("远端仓库地址不能包含换行或空字符。".to_string());
+    }
+    Ok(value.to_string())
+}
+
+fn git_remote_names(repo_root: &str) -> Result<Vec<String>, String> {
+    let output = git_success(repo_root, &["remote"])?;
+    Ok(output
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|remote| !remote.is_empty())
+        .map(ToString::to_string)
+        .collect())
+}
+
+fn git_origin_remote_exists(repo_root: &str) -> bool {
+    git_success(repo_root, &["remote", "get-url", "origin"]).is_ok()
+}
+
+fn git_remote_url(repo_root: &str, remote: &str) -> Option<String> {
+    git_success(repo_root, &["remote", "get-url", remote])
+        .ok()
+        .map(|output| output.stdout.trim().to_string())
+        .filter(|url| !url.is_empty())
+}
+
+fn resolve_state_remote(repo_root: &str, upstream: &str) -> (String, String) {
+    let upstream_remote = upstream
+        .split_once('/')
+        .map(|(remote, _)| remote.trim())
+        .filter(|remote| !remote.is_empty());
+    if let Some(remote) = upstream_remote {
+        if let Some(url) = git_remote_url(repo_root, remote) {
+            return (remote.to_string(), url);
+        }
+    }
+    if let Some(url) = git_remote_url(repo_root, "origin") {
+        return ("origin".to_string(), url);
+    }
+    if let Ok(remotes) = git_remote_names(repo_root) {
+        for remote in remotes {
+            if let Some(url) = git_remote_url(repo_root, &remote) {
+                return (remote, url);
+            }
+        }
+    }
+    (String::new(), String::new())
 }
 
 fn append_output(target: &mut String, value: &str) {
@@ -737,7 +948,20 @@ pub(crate) fn git_switch_branch_sync(
 ) -> Result<GitOperationResponse, String> {
     let state = ensure_ready_state(&workdir)?;
     let branch = validate_branch_name(&state.repo_root, &branch)?;
-    let args = if kind.as_deref() == Some("remote") || branch.starts_with("origin/") {
+    let is_remote = kind.as_deref() == Some("remote") || branch.starts_with("origin/");
+    let local_branch = if is_remote {
+        let candidate = remote_ref_to_local_branch(&branch);
+        if ref_exists(&state.repo_root, &format!("refs/heads/{candidate}")) {
+            Some(candidate)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let args = if let Some(local_branch) = local_branch.as_deref() {
+        vec!["switch", local_branch]
+    } else if is_remote {
         vec!["switch", "--track", branch.as_str()]
     } else {
         vec!["switch", branch.as_str()]
@@ -752,12 +976,23 @@ pub(crate) fn git_switch_branch_sync(
 pub(crate) fn git_create_branch_sync(
     workdir: String,
     branch: String,
+    start_point: Option<String>,
 ) -> Result<GitOperationResponse, String> {
     let state = ensure_ready_state(&workdir)?;
     let branch = validate_branch_name(&state.repo_root, &branch)?;
+    let validated_start_point = start_point
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| validate_commit_sha(&state.repo_root, value))
+        .transpose()?;
+    let mut args = vec!["switch", "-c", branch.as_str()];
+    if let Some(start_point) = validated_start_point.as_deref() {
+        args.push(start_point);
+    }
     operation_response(
         &workdir,
-        git_success(&state.repo_root, &["switch", "-c", branch.as_str()]),
+        git_success(&state.repo_root, &args),
         "分支已创建并检出。",
     )
 }
@@ -862,6 +1097,24 @@ fn resolve_review_base(state: &GitRepositoryState) -> String {
         "master",
         "develop",
     ] {
+        if ref_exists(&state.repo_root, candidate) {
+            return candidate.to_string();
+        }
+    }
+    String::new()
+}
+
+fn resolve_cloud_tracking_ref(state: &GitRepositoryState) -> String {
+    if !state.upstream.trim().is_empty() {
+        return state.upstream.clone();
+    }
+    if !state.head.trim().is_empty() && state.head != "(detached)" {
+        let same_name_remote = format!("origin/{}", state.head);
+        if ref_exists(&state.repo_root, &same_name_remote) {
+            return same_name_remote;
+        }
+    }
+    for candidate in ["origin/main", "origin/master", "origin/develop"] {
         if ref_exists(&state.repo_root, candidate) {
             return candidate.to_string();
         }
@@ -1081,9 +1334,53 @@ fn parse_git_log(raw: &str) -> Vec<GitCommitSummary> {
                 subject: fields[7].trim().to_string(),
                 file_count: files.len(),
                 files,
+                local_only: false,
             })
         })
         .collect()
+}
+
+fn local_only_commit_shas(repo_root: &str, cloud_ref: &str) -> HashSet<String> {
+    let cloud_ref = cloud_ref.trim();
+    if cloud_ref.is_empty() {
+        return HashSet::new();
+    }
+    let rev_range = format!("HEAD...{cloud_ref}");
+    git_success(repo_root, &["rev-list", "--left-only", &rev_range])
+        .map(|output| {
+            output
+                .stdout
+                .lines()
+                .map(str::trim)
+                .filter(|sha| !sha.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_shortstat_count(segment: &str) -> usize {
+    segment
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+fn parse_shortstat(raw: &str) -> (usize, usize, usize) {
+    let mut files_changed = 0;
+    let mut insertions = 0;
+    let mut deletions = 0;
+    for segment in raw.split(',').map(str::trim) {
+        if segment.contains("file") && segment.contains("changed") {
+            files_changed = parse_shortstat_count(segment);
+        } else if segment.contains("insertion") {
+            insertions = parse_shortstat_count(segment);
+        } else if segment.contains("deletion") {
+            deletions = parse_shortstat_count(segment);
+        }
+    }
+    (files_changed, insertions, deletions)
 }
 
 fn validate_commit_sha(repo_root: &str, value: &str) -> Result<String, String> {
@@ -1136,19 +1433,143 @@ pub(crate) fn git_log_sync(
         "--pretty=format:%x1e%H%x1f%h%x1f%P%x1f%D%x1f%an%x1f%ae%x1f%aI%x1f%s".to_string(),
         "HEAD".to_string(),
     ];
-    let cloud_ref = if !state.upstream.trim().is_empty() {
+    let review_ref = if !state.upstream.trim().is_empty() {
         state.upstream.clone()
     } else {
         resolve_review_base(&state)
     };
-    if !cloud_ref.trim().is_empty() && cloud_ref != "HEAD" {
-        args.push(cloud_ref);
+    if !review_ref.trim().is_empty() && review_ref != "HEAD" {
+        args.push(review_ref);
     }
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let output = git_success(&state.repo_root, &arg_refs)?;
-    Ok(GitLogResponse {
+    let mut commits = parse_git_log(&output.stdout);
+    let cloud_ref = resolve_cloud_tracking_ref(&state);
+    let local_only_shas = local_only_commit_shas(&state.repo_root, &cloud_ref);
+    if cloud_ref.trim().is_empty() {
+        for commit in &mut commits {
+            commit.local_only = true;
+        }
+    } else {
+        for commit in &mut commits {
+            commit.local_only = local_only_shas.contains(&commit.sha);
+        }
+    }
+    Ok(GitLogResponse { state, commits })
+}
+
+pub(crate) fn git_commit_details_sync(
+    workdir: String,
+    commit: String,
+) -> Result<GitCommitDetailsResponse, String> {
+    let state = ensure_ready_state(&workdir)?;
+    let commit = validate_commit_sha(&state.repo_root, &commit)?;
+    let metadata_output = git_success(
+        &state.repo_root,
+        &[
+            "show",
+            "-s",
+            "--date=iso-strict",
+            "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%b",
+            &commit,
+        ],
+    )?;
+    let fields: Vec<&str> = metadata_output.stdout.splitn(7, '\x1f').collect();
+    if fields.len() < 7 {
+        return Err("无法解析 Git commit 详情。".to_string());
+    }
+    let files_output = git_success(
+        &state.repo_root,
+        &[
+            "show",
+            "--format=",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            &commit,
+        ],
+    )?;
+    let files = parse_name_status_records(&files_output.stdout);
+    let stat_output = git_success(
+        &state.repo_root,
+        &["show", "--format=", "--stat", "--find-renames", &commit],
+    )?;
+    let shortstat_output = git_success(
+        &state.repo_root,
+        &[
+            "show",
+            "--format=",
+            "--shortstat",
+            "--find-renames",
+            &commit,
+        ],
+    )?;
+    let (files_changed, insertions, deletions) = parse_shortstat(&shortstat_output.stdout);
+    let details = GitCommitDetails {
+        sha: fields[0].trim().to_string(),
+        short_sha: fields[1].trim().to_string(),
+        author_name: fields[2].trim().to_string(),
+        author_email: fields[3].trim().to_string(),
+        author_date: fields[4].trim().to_string(),
+        subject: fields[5].trim().to_string(),
+        body: fields[6].trim().to_string(),
+        file_count: files.len(),
+        files,
+        files_changed,
+        insertions,
+        deletions,
+        stat: stat_output.stdout.trim().to_string(),
+        remote_name: state.remote_name.clone(),
+        remote_url: state.remote_url.clone(),
+    };
+    Ok(GitCommitDetailsResponse {
         state,
-        commits: parse_git_log(&output.stdout),
+        commit: details,
+    })
+}
+
+pub(crate) fn git_compare_commit_with_remote_sync(
+    workdir: String,
+    commit: String,
+) -> Result<GitDiffResponse, String> {
+    let state = ensure_ready_state(&workdir)?;
+    let commit = validate_commit_sha(&state.repo_root, &commit)?;
+    let remote_ref = resolve_cloud_tracking_ref(&state);
+    if remote_ref.trim().is_empty() {
+        return Err(
+            "找不到可用于比较的远端分支。请先设置 upstream 或 fetch 远端分支。".to_string(),
+        );
+    }
+    let range = format!("{remote_ref}...{commit}");
+    let output = git_success(
+        &state.repo_root,
+        &["diff", "--patch", "--stat", "--find-renames", &range],
+    )?;
+    let files = git_success(
+        &state.repo_root,
+        &["diff", "--name-only", "--find-renames", &range],
+    )
+    .map(|output| {
+        output
+            .stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToString::to_string)
+            .collect()
+    })
+    .unwrap_or_default();
+    let (stat, patch) = split_stat_and_patch(&output.stdout);
+    let (patch, truncated) = truncate_patch(patch);
+    Ok(GitDiffResponse {
+        base_ref: remote_ref,
+        head_ref: commit,
+        mode: "remote_compare".to_string(),
+        files,
+        patch,
+        stat,
+        truncated,
+        binary_files: Vec::new(),
     })
 }
 
@@ -1478,6 +1899,24 @@ pub(crate) fn git_add_to_gitignore_sync(
     )
 }
 
+pub(crate) fn git_open_system_file_location_sync(
+    workdir: String,
+    path: String,
+) -> Result<GitOperationResponse, String> {
+    let state = ensure_ready_state(&workdir)?;
+    let path = validate_repo_relative_path(&path)?;
+    let repo_root_path = Path::new(&state.repo_root);
+    let target = repo_root_path.join(path);
+    open_system_file_location(&target, repo_root_path)?;
+    Ok(GitOperationResponse {
+        ok: true,
+        state: git_status_sync(workdir)?,
+        stdout: String::new(),
+        stderr: String::new(),
+        message: "已在系统资源管理器中打开。".to_string(),
+    })
+}
+
 pub(crate) fn git_commit_sync(
     workdir: String,
     message: String,
@@ -1503,20 +1942,51 @@ pub(crate) fn git_commit_sync(
 
 pub(crate) fn git_fetch_sync(workdir: String) -> Result<GitOperationResponse, String> {
     let state = ensure_ready_state(&workdir)?;
-    operation_response(
-        &workdir,
-        git_success(&state.repo_root, &["fetch", "--prune"]),
-        "Fetch 完成。",
-    )
+    let result = match git_remote_names(&state.repo_root) {
+        Ok(remotes) if remotes.is_empty() => Err(GIT_MISSING_REMOTE_MESSAGE.to_string()),
+        Ok(_) => git_success(&state.repo_root, &["fetch", "--prune"]),
+        Err(error) => Err(error),
+    };
+    operation_response(&workdir, result, "Fetch 完成。")
 }
 
 pub(crate) fn git_pull_sync(workdir: String) -> Result<GitOperationResponse, String> {
     let state = ensure_ready_state(&workdir)?;
-    operation_response(
-        &workdir,
-        git_success(&state.repo_root, &["pull", "--ff-only"]),
-        "Pull 完成。",
-    )
+    let result = if state.upstream.trim().is_empty() {
+        if state.head.trim().is_empty() || state.head == "(detached)" {
+            Err("当前不在可拉取的本地分支上。".to_string())
+        } else if !git_origin_remote_exists(&state.repo_root) {
+            Err(GIT_MISSING_ORIGIN_REMOTE_MESSAGE.to_string())
+        } else {
+            git_success(
+                &state.repo_root,
+                &["pull", "--ff-only", "origin", state.head.as_str()],
+            )
+        }
+    } else {
+        git_success(&state.repo_root, &["pull", "--ff-only"])
+    };
+    operation_response(&workdir, result, "Pull 完成。")
+}
+
+pub(crate) fn git_set_remote_sync(
+    workdir: String,
+    remote_url: String,
+) -> Result<GitOperationResponse, String> {
+    let state = ensure_ready_state(&workdir)?;
+    let remote_url = validate_git_remote_url(&remote_url)?;
+    let result = if git_origin_remote_exists(&state.repo_root) {
+        git_success(
+            &state.repo_root,
+            &["remote", "set-url", "origin", remote_url.as_str()],
+        )
+    } else {
+        git_success(
+            &state.repo_root,
+            &["remote", "add", "origin", remote_url.as_str()],
+        )
+    };
+    operation_response(&workdir, result, "远端仓库已保存。")
 }
 
 pub(crate) fn git_push_sync(workdir: String) -> Result<GitOperationResponse, String> {
@@ -1524,8 +1994,8 @@ pub(crate) fn git_push_sync(workdir: String) -> Result<GitOperationResponse, Str
     let result = if state.upstream.trim().is_empty() {
         if state.head.trim().is_empty() || state.head == "(detached)" {
             Err("当前不在可推送的本地分支上。".to_string())
-        } else if git_success(&state.repo_root, &["remote", "get-url", "origin"]).is_err() {
-            Err("当前分支没有 upstream，且找不到 origin remote。".to_string())
+        } else if !git_origin_remote_exists(&state.repo_root) {
+            Err(GIT_MISSING_ORIGIN_REMOTE_MESSAGE.to_string())
         } else {
             git_success(
                 &state.repo_root,
@@ -1569,8 +2039,17 @@ pub(crate) fn git_gateway_action_sync(
         "create_branch" => serde_json::to_value(git_create_branch_sync(
             workdir,
             args.branch.unwrap_or_default(),
+            args.start_point,
         )?),
         "log" => serde_json::to_value(git_log_sync(workdir, args.limit)?),
+        "commit_details" => serde_json::to_value(git_commit_details_sync(
+            workdir,
+            args.commit.unwrap_or_default(),
+        )?),
+        "compare_commit_with_remote" => serde_json::to_value(git_compare_commit_with_remote_sync(
+            workdir,
+            args.commit.unwrap_or_default(),
+        )?),
         "commit_diff" => serde_json::to_value(git_commit_diff_sync(
             workdir,
             args.commit.unwrap_or_default(),
@@ -1593,11 +2072,19 @@ pub(crate) fn git_gateway_action_sync(
             workdir,
             args.path.unwrap_or_default(),
         )?),
+        "open_system_file_location" => serde_json::to_value(git_open_system_file_location_sync(
+            workdir,
+            args.path.unwrap_or_default(),
+        )?),
         "commit" => {
             serde_json::to_value(git_commit_sync(workdir, args.message.unwrap_or_default())?)
         }
         "fetch" => serde_json::to_value(git_fetch_sync(workdir)?),
         "pull" => serde_json::to_value(git_pull_sync(workdir)?),
+        "set_remote" => serde_json::to_value(git_set_remote_sync(
+            workdir,
+            args.remote_url.unwrap_or_default(),
+        )?),
         "push" => serde_json::to_value(git_push_sync(workdir)?),
         "" => return Err("Git action 不能为空。".to_string()),
         other => return Err(format!("不支持的 Git action：{other}")),
@@ -1635,10 +2122,13 @@ pub async fn git_switch_branch(
 pub async fn git_create_branch(
     workdir: String,
     branch: String,
+    start_point: Option<String>,
 ) -> Result<GitOperationResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || git_create_branch_sync(workdir, branch))
-        .await
-        .map_err(|error| format!("git_create_branch join 失败：{error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        git_create_branch_sync(workdir, branch, start_point)
+    })
+    .await
+    .map_err(|error| format!("git_create_branch join 失败：{error}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1676,6 +2166,28 @@ pub async fn git_log(workdir: String, limit: Option<usize>) -> Result<GitLogResp
     tauri::async_runtime::spawn_blocking(move || git_log_sync(workdir, limit))
         .await
         .map_err(|error| format!("git_log join 失败：{error}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn git_commit_details(
+    workdir: String,
+    commit: String,
+) -> Result<GitCommitDetailsResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || git_commit_details_sync(workdir, commit))
+        .await
+        .map_err(|error| format!("git_commit_details join 失败：{error}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn git_compare_commit_with_remote(
+    workdir: String,
+    commit: String,
+) -> Result<GitDiffResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_compare_commit_with_remote_sync(workdir, commit)
+    })
+    .await
+    .map_err(|error| format!("git_compare_commit_with_remote join 失败：{error}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1746,6 +2258,16 @@ pub async fn git_add_to_gitignore(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn git_open_system_file_location(
+    workdir: String,
+    path: String,
+) -> Result<GitOperationResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || git_open_system_file_location_sync(workdir, path))
+        .await
+        .map_err(|error| format!("git_open_system_file_location join 失败：{error}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn git_commit(workdir: String, message: String) -> Result<GitOperationResponse, String> {
     tauri::async_runtime::spawn_blocking(move || git_commit_sync(workdir, message))
         .await
@@ -1764,6 +2286,16 @@ pub async fn git_pull(workdir: String) -> Result<GitOperationResponse, String> {
     tauri::async_runtime::spawn_blocking(move || git_pull_sync(workdir))
         .await
         .map_err(|error| format!("git_pull join 失败：{error}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn git_set_remote(
+    workdir: String,
+    remote_url: String,
+) -> Result<GitOperationResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || git_set_remote_sync(workdir, remote_url))
+        .await
+        .map_err(|error| format!("git_set_remote join 失败：{error}"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1828,6 +2360,8 @@ mod tests {
             workdir: ".".to_string(),
             head: "feature".to_string(),
             upstream: "origin/feature".to_string(),
+            remote_name: "origin".to_string(),
+            remote_url: String::new(),
             ahead: 0,
             behind: 0,
             dirty_counts: GitDirtyCounts::default(),
@@ -1979,6 +2513,29 @@ mod tests {
     }
 
     #[test]
+    fn git_branches_includes_unborn_current_branch() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let temp = tempfile::tempdir().expect("temp repo");
+        let workdir = temp.path().to_string_lossy().to_string();
+        let initialized =
+            git_init_sync(workdir.clone(), "main".to_string(), None, None).expect("init repo");
+        assert!(initialized.ok, "init failed: {}", initialized.message);
+        assert!(!ref_exists(&workdir, "HEAD"));
+
+        let response = git_branches_sync(workdir).expect("branch list");
+        assert_eq!(response.state.status, "ready");
+        assert_eq!(response.state.head, "main");
+        assert_eq!(response.branches.len(), 1);
+        let branch = &response.branches[0];
+        assert_eq!(branch.name, "main");
+        assert_eq!(branch.full_name, "main");
+        assert_eq!(branch.kind, "local");
+        assert!(branch.current);
+    }
+
+    #[test]
     fn git_unborn_repo_can_unstage_and_discard_changes() {
         if Command::new("git").arg("--version").output().is_err() {
             return;
@@ -2053,8 +2610,9 @@ mod tests {
         assert_eq!(initial.status, "ready");
         assert!(!initial.head.is_empty());
 
-        let created = git_create_branch_sync(workdir.clone(), "feature/git-review".to_string())
-            .expect("create branch");
+        let created =
+            git_create_branch_sync(workdir.clone(), "feature/git-review".to_string(), None)
+                .expect("create branch");
         assert!(created.ok, "create branch failed: {}", created.message);
         assert_eq!(created.state.head, "feature/git-review");
 
@@ -2233,5 +2791,428 @@ mod tests {
             1
         );
         assert!(gitignore.lines().any(|line| line == "/README.md"));
+    }
+
+    #[test]
+    fn git_commit_details_parse_message_stats_and_remote() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let remote = tempfile::tempdir().expect("bare remote temp dir");
+        run_temp_git(remote.path(), &["init", "--bare"]);
+        let workdir = repo.path().to_string_lossy().to_string();
+        let saved =
+            git_set_remote_sync(workdir.clone(), remote.path().to_string_lossy().to_string())
+                .expect("set origin remote");
+        assert!(saved.ok, "set remote failed: {}", saved.message);
+
+        fs::write(repo.path().join("details.txt"), "one\ntwo\n").expect("write details file");
+        run_temp_git(repo.path(), &["add", "details.txt"]);
+        run_temp_git(
+            repo.path(),
+            &["commit", "-m", "details subject", "-m", "details body"],
+        );
+        let sha = git_success(&workdir, &["rev-parse", "HEAD"])
+            .expect("read head")
+            .stdout;
+
+        let details = git_commit_details_sync(workdir, sha).expect("commit details");
+        assert_eq!(details.commit.subject, "details subject");
+        assert_eq!(details.commit.body, "details body");
+        assert_eq!(details.commit.remote_name, "origin");
+        assert!(
+            details
+                .commit
+                .files
+                .iter()
+                .any(|file| { file.path == "details.txt" && file.status == "A" }),
+            "commit files: {:?}",
+            details.commit.files
+        );
+        assert_eq!(details.commit.files_changed, 1);
+        assert_eq!(details.commit.insertions, 2);
+        assert_eq!(details.commit.deletions, 0);
+        assert!(
+            details.commit.stat.contains("details.txt"),
+            "commit stat: {}",
+            details.commit.stat
+        );
+    }
+
+    #[test]
+    fn git_create_branch_can_start_from_commit() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let workdir = repo.path().to_string_lossy().to_string();
+        let initial_sha = git_success(&workdir, &["rev-parse", "HEAD"])
+            .expect("read initial head")
+            .stdout;
+
+        fs::write(repo.path().join("later.txt"), "later\n").expect("write later file");
+        run_temp_git(repo.path(), &["add", "later.txt"]);
+        run_temp_git(repo.path(), &["commit", "-m", "later"]);
+
+        let created = git_create_branch_sync(
+            workdir.clone(),
+            "commit/initial".to_string(),
+            Some(initial_sha.clone()),
+        )
+        .expect("create branch from commit");
+        assert!(created.ok, "create branch failed: {}", created.message);
+        assert_eq!(created.state.head, "commit/initial");
+        let branch_head = git_success(&workdir, &["rev-parse", "HEAD"])
+            .expect("read branch head")
+            .stdout;
+        assert_eq!(branch_head, initial_sha);
+    }
+
+    #[test]
+    fn git_compare_commit_with_remote_uses_origin_fallback() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let remote = tempfile::tempdir().expect("bare remote temp dir");
+        run_temp_git(remote.path(), &["init", "--bare"]);
+        let workdir = repo.path().to_string_lossy().to_string();
+        let saved =
+            git_set_remote_sync(workdir.clone(), remote.path().to_string_lossy().to_string())
+                .expect("set origin remote");
+        assert!(saved.ok, "set remote failed: {}", saved.message);
+        let pushed = git_push_sync(workdir.clone()).expect("initial push");
+        assert!(pushed.ok, "initial push failed: {}", pushed.message);
+        if let Err(error) = git_success(&workdir, &["branch", "--unset-upstream"]) {
+            assert!(
+                error.contains("no upstream"),
+                "unexpected unset-upstream error: {error}"
+            );
+        }
+
+        let state_without_upstream = git_status_sync(workdir.clone()).expect("status");
+        assert!(
+            state_without_upstream.upstream.is_empty(),
+            "upstream should be empty for fallback test: {}",
+            state_without_upstream.upstream
+        );
+        fs::write(repo.path().join("remote-compare.txt"), "compare\n").expect("write compare file");
+        run_temp_git(repo.path(), &["add", "remote-compare.txt"]);
+        run_temp_git(repo.path(), &["commit", "-m", "compare local"]);
+        let sha = git_success(&workdir, &["rev-parse", "HEAD"])
+            .expect("read compare head")
+            .stdout;
+
+        let diff = git_compare_commit_with_remote_sync(workdir, sha).expect("remote compare");
+        assert!(
+            diff.base_ref.starts_with("origin/"),
+            "base ref should use origin fallback: {}",
+            diff.base_ref
+        );
+        assert_eq!(diff.mode, "remote_compare");
+        assert!(
+            diff.patch.contains("remote-compare.txt") && diff.patch.contains("+compare"),
+            "remote compare patch:\n{}",
+            diff.patch
+        );
+    }
+
+    #[test]
+    fn git_switch_remote_branch_uses_existing_local_branch() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let remote = tempfile::tempdir().expect("bare remote temp dir");
+        run_temp_git(remote.path(), &["init", "--bare"]);
+        let remote_url = remote.path().to_string_lossy().to_string();
+        let workdir = repo.path().to_string_lossy().to_string();
+        let initial = git_status_sync(workdir.clone()).expect("initial status");
+
+        let created =
+            git_create_branch_sync(workdir.clone(), "test".to_string(), None).expect("create test");
+        assert!(created.ok, "create test failed: {}", created.message);
+        run_temp_git(
+            repo.path(),
+            &["remote", "add", "origin", remote_url.as_str()],
+        );
+        run_temp_git(repo.path(), &["push", "-u", "origin", "test"]);
+
+        let switched_back =
+            git_switch_branch_sync(workdir.clone(), initial.head, None).expect("switch back");
+        assert!(
+            switched_back.ok,
+            "switch back failed: {}",
+            switched_back.message
+        );
+
+        let switched_remote = git_switch_branch_sync(
+            workdir,
+            "origin/test".to_string(),
+            Some("remote".to_string()),
+        )
+        .expect("switch remote");
+        assert!(
+            switched_remote.ok,
+            "switch remote failed: {}",
+            switched_remote.message
+        );
+        assert_eq!(switched_remote.state.head, "test");
+    }
+
+    #[test]
+    fn git_discard_handles_added_nested_file_and_staged_rename() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let workdir = repo.path().to_string_lossy().to_string();
+        fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+        fs::write(repo.path().join("src/generated.txt"), "generated\n")
+            .expect("write generated file");
+
+        let staged_added =
+            git_stage_sync(workdir.clone(), "src/generated.txt".to_string()).expect("stage added");
+        assert!(
+            staged_added.ok,
+            "stage added failed: {}",
+            staged_added.message
+        );
+        let discarded_added =
+            git_discard_sync(workdir.clone(), "src/generated.txt".to_string(), None)
+                .expect("discard added");
+        assert!(
+            discarded_added.ok,
+            "discard added failed: {}",
+            discarded_added.message
+        );
+        assert!(!repo.path().join("src/generated.txt").exists());
+        assert!(discarded_added.state.entries.is_empty());
+
+        run_temp_git(repo.path(), &["mv", "README.md", "README-renamed.md"]);
+        let renamed_status = git_status_sync(workdir.clone()).expect("renamed status");
+        let renamed_entry = renamed_status
+            .entries
+            .iter()
+            .find(|entry| entry.kind == "renamed")
+            .expect("renamed entry");
+        assert_eq!(renamed_entry.path, "README-renamed.md");
+        assert_eq!(renamed_entry.old_path.as_deref(), Some("README.md"));
+
+        let discarded_rename = git_discard_sync(
+            workdir,
+            renamed_entry.path.clone(),
+            renamed_entry.old_path.clone(),
+        )
+        .expect("discard rename");
+        assert!(
+            discarded_rename.ok,
+            "discard rename failed: {}",
+            discarded_rename.message
+        );
+        assert!(repo.path().join("README.md").exists());
+        assert!(!repo.path().join("README-renamed.md").exists());
+        assert!(discarded_rename.state.entries.is_empty());
+    }
+
+    #[test]
+    fn git_set_remote_guides_push_without_origin() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let remote = tempfile::tempdir().expect("bare remote temp dir");
+        run_temp_git(remote.path(), &["init", "--bare"]);
+        let workdir = repo.path().to_string_lossy().to_string();
+
+        let missing_origin_push = git_push_sync(workdir.clone()).expect("push without origin");
+        assert!(!missing_origin_push.ok);
+        assert!(
+            missing_origin_push.message.contains("找不到 origin remote"),
+            "unexpected push message: {}",
+            missing_origin_push.message
+        );
+
+        let saved =
+            git_set_remote_sync(workdir.clone(), remote.path().to_string_lossy().to_string())
+                .expect("set origin remote");
+        assert!(saved.ok, "set remote failed: {}", saved.message);
+        let pushed = git_push_sync(workdir).expect("push with configured origin");
+        assert!(pushed.ok, "push failed: {}", pushed.message);
+        assert!(
+            pushed.state.upstream.starts_with("origin/"),
+            "upstream should be configured after push: {}",
+            pushed.state.upstream
+        );
+    }
+
+    #[test]
+    fn git_log_marks_unpushed_commits_local_only() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let remote = tempfile::tempdir().expect("bare remote temp dir");
+        run_temp_git(remote.path(), &["init", "--bare"]);
+        let workdir = repo.path().to_string_lossy().to_string();
+
+        let saved =
+            git_set_remote_sync(workdir.clone(), remote.path().to_string_lossy().to_string())
+                .expect("set origin remote");
+        assert!(saved.ok, "set remote failed: {}", saved.message);
+        let pushed = git_push_sync(workdir.clone()).expect("initial push");
+        assert!(pushed.ok, "initial push failed: {}", pushed.message);
+
+        fs::write(repo.path().join("local.txt"), "local\n").expect("write local file");
+        run_temp_git(repo.path(), &["add", "local.txt"]);
+        run_temp_git(repo.path(), &["commit", "-m", "local only"]);
+
+        let history = git_log_sync(workdir, Some(10)).expect("git log");
+        let local_commit = history
+            .commits
+            .iter()
+            .find(|commit| commit.subject == "local only")
+            .expect("local commit");
+        assert!(
+            local_commit.local_only,
+            "unpushed commit should be local-only"
+        );
+        let pushed_commit = history
+            .commits
+            .iter()
+            .find(|commit| commit.subject == "initial")
+            .expect("pushed commit");
+        assert!(
+            !pushed_commit.local_only,
+            "pushed commit should not be local-only"
+        );
+    }
+
+    #[test]
+    fn git_log_uses_origin_current_branch_when_upstream_missing() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let remote = tempfile::tempdir().expect("bare remote temp dir");
+        run_temp_git(remote.path(), &["init", "--bare"]);
+        let workdir = repo.path().to_string_lossy().to_string();
+
+        let saved =
+            git_set_remote_sync(workdir.clone(), remote.path().to_string_lossy().to_string())
+                .expect("set origin remote");
+        assert!(saved.ok, "set remote failed: {}", saved.message);
+        run_temp_git(repo.path(), &["checkout", "-b", "feature/local-only"]);
+        run_temp_git(repo.path(), &["config", "push.autoSetupRemote", "false"]);
+        run_temp_git(repo.path(), &["push", "origin", "feature/local-only"]);
+        run_temp_git(repo.path(), &["fetch", "origin", "feature/local-only"]);
+        let state = git_status_sync(workdir.clone()).expect("git status");
+        assert!(
+            state.upstream.trim().is_empty(),
+            "test branch should not have upstream: {}",
+            state.upstream
+        );
+
+        fs::write(repo.path().join("feature.txt"), "feature\n").expect("write feature file");
+        run_temp_git(repo.path(), &["add", "feature.txt"]);
+        run_temp_git(repo.path(), &["commit", "-m", "feature local only"]);
+
+        let history = git_log_sync(workdir, Some(10)).expect("git log");
+        let local_commit = history
+            .commits
+            .iter()
+            .find(|commit| commit.subject == "feature local only")
+            .expect("local commit");
+        assert!(
+            local_commit.local_only,
+            "unpushed feature commit should be local-only"
+        );
+        let pushed_commit = history
+            .commits
+            .iter()
+            .find(|commit| commit.subject == "initial")
+            .expect("pushed commit");
+        assert!(
+            !pushed_commit.local_only,
+            "same-name origin branch should prevent pushed commit from being local-only"
+        );
+    }
+
+    #[test]
+    fn git_fetch_guides_without_remote() {
+        let Some(repo) = init_temp_repo() else {
+            return;
+        };
+        let remote = tempfile::tempdir().expect("bare remote temp dir");
+        run_temp_git(remote.path(), &["init", "--bare"]);
+        let workdir = repo.path().to_string_lossy().to_string();
+
+        let missing_remote_fetch = git_fetch_sync(workdir.clone()).expect("fetch without remote");
+        assert!(!missing_remote_fetch.ok);
+        assert!(
+            missing_remote_fetch
+                .message
+                .contains(GIT_MISSING_REMOTE_MESSAGE),
+            "unexpected fetch message: {}",
+            missing_remote_fetch.message
+        );
+
+        let saved =
+            git_set_remote_sync(workdir.clone(), remote.path().to_string_lossy().to_string())
+                .expect("set origin remote");
+        assert!(saved.ok, "set remote failed: {}", saved.message);
+        let fetched = git_fetch_sync(workdir).expect("fetch with configured origin");
+        assert!(fetched.ok, "fetch failed: {}", fetched.message);
+    }
+
+    #[test]
+    fn git_set_remote_guides_pull_without_origin() {
+        let Some(source) = init_temp_repo() else {
+            return;
+        };
+        let remote = tempfile::tempdir().expect("bare remote temp dir");
+        run_temp_git(remote.path(), &["init", "--bare"]);
+        let remote_url = remote.path().to_string_lossy().to_string();
+        run_temp_git(
+            source.path(),
+            &["remote", "add", "origin", remote_url.as_str()],
+        );
+        run_temp_git(source.path(), &["push", "-u", "origin", "HEAD"]);
+
+        let clone_parent = tempfile::tempdir().expect("clone parent");
+        run_temp_git(
+            clone_parent.path(),
+            &["clone", remote_url.as_str(), "local-copy"],
+        );
+        let clone_path = clone_parent.path().join("local-copy");
+        run_temp_git(&clone_path, &["remote", "remove", "origin"]);
+        if let Err(error) = git_success(
+            &clone_path.to_string_lossy(),
+            &["branch", "--unset-upstream"],
+        ) {
+            assert!(
+                error.contains("no upstream"),
+                "unexpected unset-upstream error: {error}"
+            );
+        }
+        assert!(
+            git_status_sync(clone_path.to_string_lossy().to_string())
+                .expect("pull test status")
+                .upstream
+                .is_empty(),
+            "clone should not keep upstream after origin removal"
+        );
+
+        fs::write(source.path().join("README.md"), "updated\n").expect("update readme");
+        run_temp_git(source.path(), &["add", "README.md"]);
+        run_temp_git(source.path(), &["commit", "-m", "update"]);
+        run_temp_git(source.path(), &["push"]);
+
+        let workdir = clone_path.to_string_lossy().to_string();
+        let missing_origin_pull = git_pull_sync(workdir.clone()).expect("pull without origin");
+        assert!(!missing_origin_pull.ok);
+        assert!(
+            missing_origin_pull.message.contains("找不到 origin remote"),
+            "unexpected pull message: {}",
+            missing_origin_pull.message
+        );
+
+        let saved = git_set_remote_sync(workdir.clone(), remote_url).expect("set origin remote");
+        assert!(saved.ok, "set remote failed: {}", saved.message);
+        let pulled = git_pull_sync(workdir).expect("pull with configured origin");
+        assert!(pulled.ok, "pull failed: {}", pulled.message);
     }
 }

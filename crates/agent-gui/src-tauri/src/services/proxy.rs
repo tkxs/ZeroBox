@@ -5,12 +5,12 @@ use std::{
 };
 
 use axum::{
-    Router,
-    body::{Body, to_bytes},
+    body::{to_bytes, Body},
     extract::{OriginalUri, Path, Query, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     response::Response,
     routing::{any, get},
+    Router,
 };
 use reqwest::Url;
 use serde::{Deserialize, Serialize};

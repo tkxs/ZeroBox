@@ -261,6 +261,47 @@
   .tool-text-scroll:hover::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground) / 0.38);
   }
+
+  .git-review-transient-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .git-review-transient-scrollbar::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  .git-review-floating-scrollbar {
+    position: fixed;
+    z-index: 60;
+    border-radius: 999px;
+    background-color: hsl(var(--muted-foreground) / 0.34);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity 0.24s ease,
+      background-color 0.18s ease;
+    user-select: none;
+    touch-action: none;
+    contain: layout paint;
+  }
+  .git-review-floating-scrollbar[data-visible="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .git-review-floating-scrollbar:hover,
+  .git-review-floating-scrollbar[data-dragging="true"] {
+    background-color: hsl(var(--muted-foreground) / 0.52);
+  }
+  .git-review-floating-scrollbar-vertical {
+    width: 4px;
+    min-height: 28px;
+  }
+  .git-review-floating-scrollbar-horizontal {
+    height: 4px;
+    min-width: 28px;
+  }
 }
 
 /* Streamdown content styling via data-streamdown selectors */

@@ -488,6 +488,8 @@ async function resolveRequest(client: GatewayWebSocketClient, method: string, pa
     case "git.create_branch":
     case "git.diff":
     case "git.log":
+    case "git.commit_details":
+    case "git.compare_commit_with_remote":
     case "git.commit_diff":
     case "git.stage":
     case "git.stage_all":
@@ -499,6 +501,7 @@ async function resolveRequest(client: GatewayWebSocketClient, method: string, pa
     case "git.commit":
     case "git.fetch":
     case "git.pull":
+    case "git.set_remote":
     case "git.push":
       return client.gitRequest(
         method.slice("git.".length),

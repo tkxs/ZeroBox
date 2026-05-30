@@ -243,6 +243,7 @@ export function GitBranchSelector(props: {
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
   const [draftBranch, setDraftBranch] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
   const [initModalOpen, setInitModalOpen] = useState(false);
   const [initBranch, setInitBranch] = useState("main");
   const [initUserName, setInitUserName] = useState("");
@@ -337,6 +338,21 @@ export function GitBranchSelector(props: {
     [branches],
   );
 
+  const resetCreateBranch = useCallback(() => {
+    setCreating(false);
+    setDraftBranch("");
+  }, []);
+
+  const handleMenuOpenChange = useCallback(
+    (open: boolean) => {
+      setMenuOpen(open);
+      if (!open) {
+        resetCreateBranch();
+      }
+    },
+    [resetCreateBranch],
+  );
+
   const runBranchMutation = useCallback(
     async (task: () => Promise<unknown>) => {
       if (!gitClient || !workdir.trim()) return;
@@ -380,11 +396,11 @@ export function GitBranchSelector(props: {
     void runBranchMutation(() => gitClient!.createBranch(workdir, name)).then(
       (ok) => {
         if (!ok) return;
-        setDraftBranch("");
-        setCreating(false);
+        resetCreateBranch();
+        setMenuOpen(false);
       },
     );
-  }, [draftBranch, gitClient, runBranchMutation, workdir]);
+  }, [draftBranch, gitClient, resetCreateBranch, runBranchMutation, workdir]);
 
   const openInitModal = useCallback(() => {
     setInitBranch("main");
@@ -460,7 +476,7 @@ export function GitBranchSelector(props: {
 
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu open={menuOpen} onOpenChange={handleMenuOpenChange}>
         <DropdownMenuTrigger
           disabled={disabled || !gitClient || !workdir.trim()}
           className={cn(
@@ -571,7 +587,7 @@ export function GitBranchSelector(props: {
                     onChange={(event) => setDraftBranch(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") createBranch();
-                      if (event.key === "Escape") setCreating(false);
+                      if (event.key === "Escape") resetCreateBranch();
                     }}
                     placeholder={t("git.branchSelector.newBranchPlaceholder")}
                     className="h-8 text-xs"
@@ -579,7 +595,7 @@ export function GitBranchSelector(props: {
                   />
                   <button
                     type="button"
-                    className="rounded bg-foreground px-2 py-1.5 text-xs text-background"
+                    className="inline-flex h-8 shrink-0 items-center justify-center whitespace-nowrap rounded bg-foreground px-2 text-xs text-background"
                     onClick={createBranch}
                   >
                     {t("git.branchSelector.create")}

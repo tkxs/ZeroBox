@@ -123,6 +123,68 @@ func TestWebSocketGitAllowsReadRequestsWhenDisabled(t *testing.T) {
 	if payload["status"] != "ready" || payload["repoRoot"] != "/workspace/project" {
 		t.Fatalf("git status payload = %#v", payload)
 	}
+
+	readCases := []struct {
+		id      string
+		reqType string
+		action  string
+		args    map[string]any
+		result  string
+	}{
+		{
+			id:      "git-commit-details-read",
+			reqType: "git.commit_details",
+			action:  "commit_details",
+			args: map[string]any{
+				"commit": "abc1234",
+			},
+			result: `{"commit":{"sha":"abc1234","shortSha":"abc1234","subject":"subject"}}`,
+		},
+		{
+			id:      "git-compare-remote-read",
+			reqType: "git.compare_commit_with_remote",
+			action:  "compare_commit_with_remote",
+			args: map[string]any{
+				"commit": "def5678",
+			},
+			result: `{"baseRef":"origin/main","headRef":"def5678","patch":""}`,
+		},
+	}
+	for _, tc := range readCases {
+		sendEnvelope(t, conn, tc.id, tc.reqType, map[string]any{
+			"workdir": " /workspace/project ",
+			"args":    tc.args,
+		})
+		outbound := readOutboundEnvelope(t, agentSession)
+		req := outbound.GetGitRequest()
+		if req == nil {
+			t.Fatalf("%s outbound payload = %T, want GitRequest", tc.reqType, outbound.GetPayload())
+		}
+		if req.GetAction() != tc.action || req.GetWorkdir() != "/workspace/project" {
+			t.Fatalf("%s request = %#v", tc.reqType, req)
+		}
+		var args map[string]any
+		if err := json.Unmarshal([]byte(req.GetArgsJson()), &args); err != nil {
+			t.Fatalf("decode %s args: %v", tc.reqType, err)
+		}
+		if args["commit"] != tc.args["commit"] {
+			t.Fatalf("%s args = %#v", tc.reqType, args)
+		}
+		sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+			RequestId: outbound.GetRequestId(),
+			Timestamp: time.Now().Unix(),
+			Payload: &gatewayv1.AgentEnvelope_GitResponse{
+				GitResponse: &gatewayv1.GitResponse{
+					Action:     tc.action,
+					ResultJson: tc.result,
+				},
+			},
+		})
+		resp := receiveEnvelopeWithID(t, conn, tc.id)
+		if resp.Type != "response" {
+			t.Fatalf("%s response = %#v, want response", tc.reqType, resp)
+		}
+	}
 }
 
 func TestWebSocketGitForwardsWriteRequestsWhenEnabled(t *testing.T) {
@@ -134,7 +196,8 @@ func TestWebSocketGitForwardsWriteRequestsWhenEnabled(t *testing.T) {
 	sendEnvelope(t, conn, "git-create-enabled", "git.create_branch", map[string]any{
 		"workdir": " /workspace/project ",
 		"args": map[string]any{
-			"branch": "feature/git-review",
+			"branch":     "feature/git-review",
+			"startPoint": "abc1234",
 		},
 	})
 	outbound := readOutboundEnvelope(t, agentSession)
@@ -150,6 +213,9 @@ func TestWebSocketGitForwardsWriteRequestsWhenEnabled(t *testing.T) {
 		t.Fatalf("decode git args: %v", err)
 	}
 	if args["branch"] != "feature/git-review" {
+		t.Fatalf("git create_branch args = %#v", args)
+	}
+	if args["startPoint"] != "abc1234" {
 		t.Fatalf("git create_branch args = %#v", args)
 	}
 

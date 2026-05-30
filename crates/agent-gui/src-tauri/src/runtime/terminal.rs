@@ -857,8 +857,7 @@ fn configure_terminal_shell_env(cmd: &mut CommandBuilder, shell_command: &str) {
 }
 
 fn configure_zsh_colored_prompt(cmd: &mut CommandBuilder) {
-    let colored_prompt =
-        "%F{green}%n%f%F{yellow}@%f%F{blue}%m%f %F{magenta}%1~%f %F{cyan}%#%f ";
+    let colored_prompt = "%F{green}%n%f%F{yellow}@%f%F{blue}%m%f %F{magenta}%1~%f %F{cyan}%#%f ";
     let zdotdir = create_zsh_prompt_overlay(colored_prompt);
     if let Some(dir) = zdotdir {
         cmd.env("ZDOTDIR", dir.to_string_lossy().as_ref());

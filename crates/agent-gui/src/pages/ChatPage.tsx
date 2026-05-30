@@ -7,7 +7,9 @@ import { MacOsTitleBarSpacer, MacOsTitleBarToggle } from "../components/MacOsTit
 import { ChatHistorySidebar } from "../components/chat/ChatHistorySidebar";
 import { HistoryShareModal } from "../components/chat/HistoryShareModal";
 import type {
+  MentionComposerCommitMention,
   MentionComposerDraft,
+  MentionComposerGitFileMention,
   MentionComposerHandle,
   MentionComposerLargePaste,
 } from "../components/chat/MentionComposer";
@@ -289,6 +291,37 @@ function buildPastedTextFileName(paste: MentionComposerLargePaste, index: number
   return `${baseName || `pasted-text-${index + 1}`}.txt`;
 }
 
+function escapeComposerCommitLinkLabel(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/]/g, "\\]");
+}
+
+function formatComposerCommitLinkDestination(value: string) {
+  const normalized = value.replace(/\\/g, "/");
+  if (/[\s()<>]/.test(normalized)) {
+    return `<${normalized.replace(/</g, "%3C").replace(/>/g, "%3E")}>`;
+  }
+  return normalized;
+}
+
+function formatComposerCommitMention(commit: MentionComposerCommitMention) {
+  const shortSha = commit.shortSha || commit.sha.slice(0, 7);
+  const subject = commit.subject.trim() || shortSha;
+  const label = `commit ${shortSha}: ${subject}`;
+  if (commit.githubUrl?.trim()) {
+    return `[${escapeComposerCommitLinkLabel(label)}](${formatComposerCommitLinkDestination(commit.githubUrl.trim())})`;
+  }
+  return `${label} (${commit.sha})`;
+}
+
+function formatComposerGitFileMention(file: MentionComposerGitFileMention) {
+  const refLabel = file.refName || file.shortSha || file.commitSha.slice(0, 7);
+  const label = `git file ${refLabel}: ${file.path}`;
+  if (file.githubUrl?.trim()) {
+    return `[${escapeComposerCommitLinkLabel(label)}](${formatComposerCommitLinkDestination(file.githubUrl.trim())})`;
+  }
+  return `${label} (${file.commitSha})`;
+}
+
 function buildTextFromComposerDraft(
   draft: MentionComposerDraft,
   pastedFileById?: Map<string, PendingUploadedFile>,
@@ -300,6 +333,12 @@ function buildTextFromComposerDraft(
       }
       if (segment.type === "skillMention") {
         return `$${segment.skill.name}`;
+      }
+      if (segment.type === "commitMention") {
+        return formatComposerCommitMention(segment.commit);
+      }
+      if (segment.type === "gitFileMention") {
+        return formatComposerGitFileMention(segment.file);
       }
       const file = pastedFileById?.get(segment.paste.id);
       return file ? `[${segment.paste.label}: ${file.relativePath}]` : segment.paste.text;
@@ -915,10 +954,8 @@ export function ChatPage(props: ChatPageProps) {
                           : nextProject.kind,
                     updatedAt: item.updatedAt,
                     lastConversationAt:
-                      Math.max(
-                        item.lastConversationAt ?? 0,
-                        nextProject.lastConversationAt ?? 0,
-                      ) || undefined,
+                      Math.max(item.lastConversationAt ?? 0, nextProject.lastConversationAt ?? 0) ||
+                      undefined,
                   }
                 : item,
             )
@@ -1336,7 +1373,9 @@ export function ChatPage(props: ChatPageProps) {
     currentConversationRuntimeWorkdir ||
     (isAgentMode ? activeWorkspaceProjectPath || workdir : "");
   const terminalProjectPath = isAgentMode ? activeWorkspaceProjectPath.trim() : "";
-  const terminalProjectPathKey = terminalProjectPath ? workspaceProjectPathKey(terminalProjectPath) : "";
+  const terminalProjectPathKey = terminalProjectPath
+    ? workspaceProjectPathKey(terminalProjectPath)
+    : "";
   const terminalDisabledMessage = !isAgentMode
     ? "Project tools require Agent project mode."
     : !terminalProjectPath
@@ -1769,9 +1808,7 @@ export function ChatPage(props: ChatPageProps) {
         const currentProject = workspaceProjects.find((item) => item.id === current);
         if (
           current === project.id ||
-          (pathKey &&
-            currentProject &&
-            workspaceProjectPathKey(currentProject.path) === pathKey)
+          (pathKey && currentProject && workspaceProjectPathKey(currentProject.path) === pathKey)
         ) {
           return DEFAULT_WORKSPACE_PROJECT_ID;
         }
@@ -1832,7 +1869,9 @@ export function ChatPage(props: ChatPageProps) {
           const conversationIds = await listChatHistoryIdsForProjectPath(path);
           const runningConversationIdsInProject = conversationIds.filter((id) => {
             const key = id.trim();
-            return key ? isConversationRunning(key) || sidebarRunningConversationIds.has(key) : false;
+            return key
+              ? isConversationRunning(key) || sidebarRunningConversationIds.has(key)
+              : false;
           });
           if (runningConversationIdsInProject.length > 0) {
             setHistoryError(runningMessage);
@@ -3969,7 +4008,11 @@ export function ChatPage(props: ChatPageProps) {
 
   return (
     <div className="flex h-full min-h-0">
-      <MacOsTitleBarToggle sidebarOpen={sidebarOpen} onToggle={handleToggleSidebar} onOpenSettings={() => onOpenSettings()} />
+      <MacOsTitleBarToggle
+        sidebarOpen={sidebarOpen}
+        onToggle={handleToggleSidebar}
+        onOpenSettings={() => onOpenSettings()}
+      />
       {/* ---- Sidebar ---- */}
       <ChatHistorySidebar
         items={historyItems}
@@ -4141,6 +4184,7 @@ export function ChatPage(props: ChatPageProps) {
             <ChatTranscript
               conversationId={currentConversationId}
               workspaceRoot={currentConversationWorkspaceRoot}
+              gitClient={tauriGitClient}
               scrollAreaRef={scrollAreaRef}
               bottomRef={bottomRef}
               hasModels={hasModels}
@@ -4260,22 +4304,13 @@ export function ChatPage(props: ChatPageProps) {
         theme={settings.theme}
         disabledMessage={terminalDisabledMessage}
         activeTab={settings.customSettings.projectToolsPanel.activeTab}
-        tabOrder={getProjectToolsPanelTabOrder(
-          settings.customSettings,
-          terminalProjectPathKey,
-        )}
-        fileTreeOpen={isProjectToolsFileTreeOpen(
-          settings.customSettings,
-          terminalProjectPathKey,
-        )}
+        tabOrder={getProjectToolsPanelTabOrder(settings.customSettings, terminalProjectPathKey)}
+        fileTreeOpen={isProjectToolsFileTreeOpen(settings.customSettings, terminalProjectPathKey)}
         fileTreeState={getProjectToolsFileTreeProjectState(
           settings.customSettings,
           terminalProjectPathKey,
         )}
-        gitReviewOpen={isProjectToolsGitReviewOpen(
-          settings.customSettings,
-          terminalProjectPathKey,
-        )}
+        gitReviewOpen={isProjectToolsGitReviewOpen(settings.customSettings, terminalProjectPathKey)}
         client={tauriTerminalClient}
         gitClient={tauriGitClient}
         gitWriteEnabled
@@ -4305,9 +4340,7 @@ export function ChatPage(props: ChatPageProps) {
           )
         }
         onFileTreeOpenChange={(open) =>
-          setSettings((prev) =>
-            updateProjectToolsFileTreeOpen(prev, terminalProjectPathKey, open),
-          )
+          setSettings((prev) => updateProjectToolsFileTreeOpen(prev, terminalProjectPathKey, open))
         }
         onFileTreeStateChange={(patch) =>
           setSettings((prev) =>
@@ -4315,13 +4348,19 @@ export function ChatPage(props: ChatPageProps) {
           )
         }
         onGitReviewOpenChange={(open) =>
-          setSettings((prev) =>
-            updateProjectToolsGitReviewOpen(prev, terminalProjectPathKey, open),
-          )
+          setSettings((prev) => updateProjectToolsGitReviewOpen(prev, terminalProjectPathKey, open))
         }
         onSessionsChange={setProjectTerminalSessions}
         onInsertFileMention={(path, kind) => {
           composerRef.current?.insertFileMention(path, kind);
+          composerRef.current?.focus();
+        }}
+        onInsertCommitMention={(commit) => {
+          composerRef.current?.insertCommitMention(commit);
+          composerRef.current?.focus();
+        }}
+        onInsertGitFileMention={(file) => {
+          composerRef.current?.insertGitFileMention(file);
           composerRef.current?.focus();
         }}
       />

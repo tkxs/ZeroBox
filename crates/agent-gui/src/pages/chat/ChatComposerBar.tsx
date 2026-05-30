@@ -28,12 +28,12 @@ import {
   formatUploadedFileSize,
   type PendingUploadedFile,
 } from "../../lib/chat/messages/uploadedFiles";
+import type { GitClient } from "../../lib/git/types";
 import {
   type ChatRuntimeControls,
   DEFAULT_CHAT_RUNTIME_CONTROLS,
   type ReasoningLevel,
 } from "../../lib/settings";
-import type { GitClient } from "../../lib/git/types";
 import { cn } from "../../lib/shared/utils";
 
 const REASONING_I18N_KEYS: Record<ReasoningLevel, string> = {
@@ -44,6 +44,10 @@ const REASONING_I18N_KEYS: Record<ReasoningLevel, string> = {
   high: "settings.reasoning.high",
   xhigh: "settings.reasoning.xhigh",
 };
+
+function isReasoningLevel(value: unknown): value is ReasoningLevel {
+  return typeof value === "string" && Object.hasOwn(REASONING_I18N_KEYS, value);
+}
 
 function RuntimeControlTooltip(props: { label: string; children: ReactNode }) {
   return (
@@ -324,7 +328,15 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                             : "",
                         )}
                       />
-                      <SelectValue />
+                      <SelectValue>
+                        {(value) =>
+                          t(
+                            REASONING_I18N_KEYS[
+                              isReasoningLevel(value) ? value : selectedReasoning
+                            ],
+                          )
+                        }
+                      </SelectValue>
                     </span>
                   </SelectTrigger>
                   <SelectContent className="composer-reasoning-dropdown min-w-30 rounded-xl border border-violet-200/40 bg-popover/85 p-1 shadow-[0_14px_34px_-16px_rgba(88,28,135,0.38)] ring-1 ring-white/15 backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-popover/70 dark:border-violet-300/15 dark:bg-popover/70">

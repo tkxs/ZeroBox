@@ -24,7 +24,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { ProjectToolsPanel } from "@/components/project-tools/ProjectToolsPanel";
 import { LocaleContext, t as translate } from "@/i18n";
 import type {
+  MentionComposerCommitMention,
   MentionComposerDraft,
+  MentionComposerGitFileMention,
   MentionComposerHandle,
   MentionComposerLargePaste,
 } from "@/components/chat/MentionComposer";
@@ -221,6 +223,37 @@ function buildPastedTextFileName(paste: MentionComposerLargePaste, index: number
   return `${baseName || `pasted-text-${index + 1}`}.txt`;
 }
 
+function escapeComposerCommitLinkLabel(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/]/g, "\\]");
+}
+
+function formatComposerCommitLinkDestination(value: string) {
+  const normalized = value.replace(/\\/g, "/");
+  if (/[\s()<>]/.test(normalized)) {
+    return `<${normalized.replace(/</g, "%3C").replace(/>/g, "%3E")}>`;
+  }
+  return normalized;
+}
+
+function formatComposerCommitMention(commit: MentionComposerCommitMention) {
+  const shortSha = commit.shortSha || commit.sha.slice(0, 7);
+  const subject = commit.subject.trim() || shortSha;
+  const label = `commit ${shortSha}: ${subject}`;
+  if (commit.githubUrl?.trim()) {
+    return `[${escapeComposerCommitLinkLabel(label)}](${formatComposerCommitLinkDestination(commit.githubUrl.trim())})`;
+  }
+  return `${label} (${commit.sha})`;
+}
+
+function formatComposerGitFileMention(file: MentionComposerGitFileMention) {
+  const refLabel = file.refName || file.shortSha || file.commitSha.slice(0, 7);
+  const label = `git file ${refLabel}: ${file.path}`;
+  if (file.githubUrl?.trim()) {
+    return `[${escapeComposerCommitLinkLabel(label)}](${formatComposerCommitLinkDestination(file.githubUrl.trim())})`;
+  }
+  return `${label} (${file.commitSha})`;
+}
+
 function buildTextFromComposerDraft(
   draft: MentionComposerDraft,
   pastedFileById?: Map<string, PendingUploadedFile>,
@@ -232,6 +265,12 @@ function buildTextFromComposerDraft(
       }
       if (segment.type === "skillMention") {
         return `$${segment.skill.name}`;
+      }
+      if (segment.type === "commitMention") {
+        return formatComposerCommitMention(segment.commit);
+      }
+      if (segment.type === "gitFileMention") {
+        return formatComposerGitFileMention(segment.file);
       }
       const file = pastedFileById?.get(segment.paste.id);
       return file ? `[${segment.paste.label}: ${file.relativePath}]` : segment.paste.text;
@@ -6113,6 +6152,7 @@ export default function App() {
                     showUsage={isAgentDevExecutionMode}
                     usageContextWindow={currentModelContextWindow}
                     workspaceRoot={displayedConversationWorkdir}
+                    gitClient={gitClient}
                     onLoadUploadedImagePreview={handleLoadUploadedImagePreview}
                     onResendFromEdit={hasDetachedSelection ? undefined : handleResendFromEdit}
                     onResolveUserMessageRef={hasDetachedSelection ? undefined : resolveUserMessageRef}
@@ -6382,6 +6422,14 @@ export default function App() {
             onSessionsChange={handleProjectTerminalSessionsChange}
             onInsertFileMention={(path, kind) => {
               composerRef.current?.insertFileMention(path, kind);
+              composerRef.current?.focus();
+            }}
+            onInsertCommitMention={(commit) => {
+              composerRef.current?.insertCommitMention(commit);
+              composerRef.current?.focus();
+            }}
+            onInsertGitFileMention={(file) => {
+              composerRef.current?.insertGitFileMention(file);
               composerRef.current?.focus();
             }}
             onClose={() => setProjectToolsPanelOpen(false)}

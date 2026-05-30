@@ -40,8 +40,14 @@ import {
   type PendingUploadedFile,
   parsePastedTextDisplayReferences,
 } from "../../lib/chat/messages/uploadedFiles";
-import { UserMessageContent } from "../../lib/chat/messages/userMessageContent";
+import {
+  buildGitHubCommitUrl,
+  type CommitDetailsLoader,
+  type CommitDisplayReference,
+  UserMessageContent,
+} from "../../lib/chat/messages/userMessageContent";
 import { normalizeLiveToolStatus, VIBING_STATUS } from "../../lib/chat/page/chatPageHelpers";
+import type { GitClient } from "../../lib/git/types";
 import { cn } from "../../lib/shared/utils";
 import type { SectionId } from "../settings/types";
 import { AssistantAvatar, AssistantBubble, CompactingText, VibingText } from "./AssistantBubble";
@@ -486,6 +492,7 @@ function HistorySwitchLoadingOverlay() {
 type ChatTranscriptProps = {
   conversationId: string;
   workspaceRoot?: string;
+  gitClient?: GitClient | null;
   scrollAreaRef: RefObject<HTMLDivElement | null>;
   bottomRef: RefObject<HTMLDivElement | null>;
   hasModels: boolean;
@@ -512,6 +519,7 @@ type TranscriptHistoryProps = Pick<
   | "historyItems"
   | "conversationId"
   | "workspaceRoot"
+  | "gitClient"
   | "showUsage"
   | "usageContextWindow"
   | "copiedMessageKey"
@@ -689,14 +697,53 @@ const TranscriptHistory = memo(function TranscriptHistory(props: TranscriptHisto
     setCopiedMessageKey,
     onResendFromEdit,
     workspaceRoot,
+    gitClient,
     isSending,
   } = props;
   const { t } = useLocale();
   const [editingMessageKey, setEditingMessageKey] = useState<string | null>(null);
   const copiedResetTimerRef = useRef<number | null>(null);
+  const commitDetailsCacheRef = useRef(new Map<string, CommitDisplayReference>());
+
+  const loadCommitDetails = useCallback<CommitDetailsLoader>(
+    async (commit) => {
+      const workdir = workspaceRoot?.trim() ?? "";
+      const sha = commit.sha.trim();
+      if (!gitClient || !workdir || !sha) return null;
+      const cacheKey = `${workdir}\u0000${sha}`;
+      const cached = commitDetailsCacheRef.current.get(cacheKey);
+      if (cached) return cached;
+      const response = await gitClient.commitDetails(workdir, sha);
+      const details = response.commit;
+      const resolved: CommitDisplayReference = {
+        sha: details.sha,
+        shortSha: details.shortSha,
+        subject: details.subject,
+        body: details.body,
+        authorName: details.authorName,
+        authorEmail: details.authorEmail,
+        authorDate: details.authorDate,
+        fileCount: details.fileCount,
+        filesChanged: details.filesChanged,
+        insertions: details.insertions,
+        deletions: details.deletions,
+        stat: details.stat,
+        remoteName: details.remoteName,
+        remoteUrl: details.remoteUrl,
+        githubUrl:
+          commit.githubUrl ||
+          buildGitHubCommitUrl(details.remoteUrl || response.state.remoteUrl, details.sha) ||
+          undefined,
+      };
+      commitDetailsCacheRef.current.set(cacheKey, resolved);
+      return resolved;
+    },
+    [gitClient, workspaceRoot],
+  );
 
   useEffect(() => {
     setEditingMessageKey(null);
+    commitDetailsCacheRef.current.clear();
   }, [conversationId]);
 
   useEffect(
@@ -790,7 +837,11 @@ const TranscriptHistory = memo(function TranscriptHistory(props: TranscriptHisto
                   <div className="chat-bubble-enter chat-user-bubble rounded-2xl rounded-br-md bg-[hsl(var(--chat-user-bg))] px-4 py-2.5 font-openai-chat text-[14.5px] leading-relaxed text-[hsl(var(--chat-user-fg))]">
                     <UserAttachmentCards files={visibleFiles} workspaceRoot={workspaceRoot} />
                     {item.text ? (
-                      <UserMessageContent text={item.text} pastedTextFiles={pastedTextFiles} />
+                      <UserMessageContent
+                        text={item.text}
+                        pastedTextFiles={pastedTextFiles}
+                        loadCommitDetails={loadCommitDetails}
+                      />
                     ) : null}
                   </div>
                   <div className="mt-1 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
@@ -959,6 +1010,7 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
   const {
     conversationId,
     workspaceRoot,
+    gitClient,
     scrollAreaRef,
     bottomRef,
     hasModels,
@@ -1057,6 +1109,7 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
             <TranscriptHistory
               conversationId={conversationId}
               workspaceRoot={workspaceRoot}
+              gitClient={gitClient}
               scrollViewport={scrollViewport}
               historyItems={historyItems}
               showUsage={showUsage}

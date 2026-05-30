@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use reqwest::Url;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::Emitter;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
@@ -16,13 +16,13 @@ use uuid::Uuid;
 
 use crate::commands::chat_history::{self, ChatHistorySummary};
 use crate::commands::settings::{
-    PROVIDER_API_KEY_UPDATES_FIELD, RemoteSettingsPayload, load_gateway_settings_sync_snapshot,
-    load_remote_settings, normalize_remote_settings_payload, open_db,
-    redact_gateway_settings_sync_payload,
+    load_gateway_settings_sync_snapshot, load_remote_settings, normalize_remote_settings_payload,
+    open_db, redact_gateway_settings_sync_payload, RemoteSettingsPayload,
+    PROVIDER_API_KEY_UPDATES_FIELD,
 };
 use crate::runtime::terminal::{
-    TerminalEventPayload, TerminalSessionRecord, TerminalSessionRegistry, TerminalShellOption,
-    TerminalSnapshotResponse, terminal_shell_options,
+    terminal_shell_options, TerminalEventPayload, TerminalSessionRecord, TerminalSessionRegistry,
+    TerminalShellOption, TerminalSnapshotResponse,
 };
 use crate::services::cron::CronManager;
 use crate::services::gateway_bridge;
@@ -1810,12 +1810,12 @@ fn serialize_settings_sync_payload(payload: &Value) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        GatewayStatusSnapshot, build_chat_event_envelope, build_endpoint, build_grpc_url,
+        build_chat_event_envelope, build_endpoint, build_grpc_url,
         build_local_settings_update_event_payload, merge_settings_sync_snapshot,
-        required_terminal_project_path_key, set_disconnected_status,
+        required_terminal_project_path_key, set_disconnected_status, GatewayStatusSnapshot,
     };
     use crate::commands::settings::RemoteSettingsPayload;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     #[test]
     fn merge_settings_sync_snapshot_keeps_cached_ui_only_fields() {

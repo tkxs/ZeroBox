@@ -226,6 +226,26 @@ html[data-liveagent-webui="gateway"] *::-webkit-scrollbar-corner {
   background: transparent;
 }
 
+html[data-liveagent-webui="gateway"] .git-review-transient-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html[data-liveagent-webui="gateway"] .git-review-transient-scrollbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+html[data-liveagent-webui="gateway"] .git-review-floating-scrollbar {
+  background-color: var(--gateway-scrollbar-thumb-hover);
+}
+
+html[data-liveagent-webui="gateway"] .git-review-floating-scrollbar:hover,
+html[data-liveagent-webui="gateway"] .git-review-floating-scrollbar[data-dragging="true"] {
+  background-color: var(--gateway-scrollbar-thumb-active);
+}
+
 html[data-liveagent-webui="gateway"] [data-radix-scroll-area-viewport] {
   scrollbar-width: none;
   -ms-overflow-style: none;
