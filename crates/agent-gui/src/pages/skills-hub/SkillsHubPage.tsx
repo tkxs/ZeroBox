@@ -483,6 +483,11 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
   }
 
   const skillsEnabled = settings.skills.enabled;
+  const skillsStatusHint = lockedByChatMode
+    ? t("settings.skillsDisabledInChatMode")
+    : skillsEnabled
+      ? null
+      : t("settings.skillsHubDisabledHint");
 
   return (
     <div className="hub-page hub-page-enter relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
@@ -548,13 +553,11 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                         </span>
                       )}
                     </div>
-                    <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
-                      {lockedByChatMode
-                        ? t("settings.skillsDisabledInChatMode")
-                        : skillsEnabled
-                          ? t("settings.skillsHubEnabledHint")
-                          : t("settings.skillsHubDisabledHint")}
-                    </div>
+                    {skillsStatusHint ? (
+                      <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
+                        {skillsStatusHint}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
