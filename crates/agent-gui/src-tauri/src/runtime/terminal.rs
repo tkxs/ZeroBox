@@ -12,6 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 use crate::runtime::platform::expand_tilde_path;
+#[cfg(windows)]
+use crate::runtime::process::configure_child_process_group;
 
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
@@ -772,7 +774,10 @@ fn terminate_process_tree_best_effort(pid: Option<u32>) {
 
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("taskkill")
+        // `taskkill` is a console app; hide its window so app exit stays clean.
+        let mut command = std::process::Command::new("taskkill");
+        configure_child_process_group(&mut command);
+        let _ = command
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
