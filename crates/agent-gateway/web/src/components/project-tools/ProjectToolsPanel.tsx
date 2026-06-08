@@ -34,6 +34,7 @@ import {
   ChevronRight,
   FolderTree,
   GitBranch,
+  Globe,
   GripVertical,
   Plus,
   Terminal,
@@ -54,6 +55,7 @@ import {
   type GitCommitContextPayload,
   type GitFileContextPayload,
 } from "./GitReviewPanel";
+import { LocalTunnelPanel, type LocalTunnelClient } from "./LocalTunnelPanel";
 import { ProjectFileTreePanel } from "./ProjectFileTreePanel";
 
 const MIN_PANEL_WIDTH = 320;
@@ -64,6 +66,7 @@ const DEFAULT_TERMINAL_COLS = 80;
 const DEFAULT_TERMINAL_ROWS = 24;
 const FILE_TREE_TAB_ID = "__file_tree__";
 const GIT_REVIEW_TAB_ID = "__git_review__";
+const TUNNEL_TAB_ID = "__tunnel__";
 const PROJECT_TOOLS_RESIZE_END_EVENT = "liveagent:project-tools-resize-end";
 
 type ProjectToolsPanelProps = {
@@ -81,16 +84,22 @@ type ProjectToolsPanelProps = {
   fileTreeOpen: boolean;
   fileTreeState: ProjectToolsFileTreeProjectState;
   gitReviewOpen: boolean;
+  tunnelOpen?: boolean;
   client: TerminalClient;
   gitClient?: GitClient | null;
   gitWriteEnabled?: boolean;
   gitDisabledMessage?: string;
+  tunnelClient?: LocalTunnelClient | null;
+  tunnelEnabled?: boolean;
+  tunnelDisabledMessage?: string;
+  tunnelRefreshToken?: number;
   onWidthChange: (width: number) => void;
   onActiveTabChange: (tab: ProjectToolsPanelTab) => void;
   onTabOrderChange?: (tabOrder: string[]) => void;
   onFileTreeOpenChange: (open: boolean) => void;
   onFileTreeStateChange: (patch: ProjectToolsFileTreeStatePatch) => void;
   onGitReviewOpenChange: (open: boolean) => void;
+  onTunnelOpenChange?: (open: boolean) => void;
   onSessionsChange?: (sessions: TerminalSession[]) => void;
   onInsertFileMention?: (path: string, kind: "file" | "dir") => void;
   onOpenFile?: (path: string) => void;
@@ -200,6 +209,10 @@ type ProjectToolsTab =
   | {
       id: typeof GIT_REVIEW_TAB_ID;
       kind: "gitReview";
+    }
+  | {
+      id: typeof TUNNEL_TAB_ID;
+      kind: "tunnel";
     };
 
 type TabDragState = {
@@ -727,16 +740,22 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
     fileTreeOpen,
     fileTreeState,
     gitReviewOpen,
+    tunnelOpen = false,
     client,
     gitClient,
     gitWriteEnabled = false,
     gitDisabledMessage,
+    tunnelClient,
+    tunnelEnabled = false,
+    tunnelDisabledMessage,
+    tunnelRefreshToken,
     onWidthChange,
     onActiveTabChange,
     onTabOrderChange,
     onFileTreeOpenChange,
     onFileTreeStateChange,
     onGitReviewOpenChange,
+    onTunnelOpenChange,
     onSessionsChange,
     onInsertFileMention,
     onOpenFile,
@@ -790,10 +809,15 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
   const isControlled = externalSessions !== undefined;
   const fileTreeInitialized = Boolean(projectPathKey && fileTreeOpen);
   const gitReviewInitialized = Boolean(projectPathKey && gitReviewOpen);
+  const tunnelInitialized = Boolean(tunnelOpen && tunnelClient);
+  const tunnelAvailable = Boolean(tunnelClient);
   const previousFileTreeInitializedRef = useRef(fileTreeInitialized);
   const previousGitReviewInitializedRef = useRef(gitReviewInitialized);
+  const previousTunnelInitializedRef = useRef(tunnelInitialized);
   const currentActiveTab: ProjectToolsPanelTab =
-    activeTab === "gitReview" && gitReviewInitialized
+    activeTab === "tunnel" && tunnelInitialized
+      ? "tunnel"
+      : activeTab === "gitReview" && gitReviewInitialized
       ? "gitReview"
       : activeTab === "fileTree" && fileTreeInitialized
         ? "fileTree"
@@ -822,8 +846,11 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
     if (gitReviewInitialized) {
       nextTabs.push({ id: GIT_REVIEW_TAB_ID, kind: "gitReview" });
     }
+    if (tunnelInitialized) {
+      nextTabs.push({ id: TUNNEL_TAB_ID, kind: "tunnel" });
+    }
     return nextTabs;
-  }, [fileTreeInitialized, gitReviewInitialized, sessions]);
+  }, [fileTreeInitialized, gitReviewInitialized, sessions, tunnelInitialized]);
   const effectiveTabOrder = draftTabOrder ?? tabOrder;
   const orderedProjectTabs = useMemo(
     () => orderProjectToolsTabs(visibleTabs, effectiveTabOrder),
@@ -913,6 +940,18 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
       onActiveTabChange("terminal");
     }
   }, [activeTab, gitReviewInitialized, onActiveTabChange]);
+
+  useEffect(() => {
+    const previousTunnelInitialized = previousTunnelInitializedRef.current;
+    previousTunnelInitializedRef.current = tunnelInitialized;
+    if (tunnelInitialized && !previousTunnelInitialized) {
+      onActiveTabChange("tunnel");
+      return;
+    }
+    if (!tunnelInitialized && previousTunnelInitialized && activeTab === "tunnel") {
+      onActiveTabChange("terminal");
+    }
+  }, [activeTab, onActiveTabChange, tunnelInitialized]);
 
   const publishSessions = useCallback(
     (nextSessions: TerminalSession[], options?: { notifyParent?: boolean }) => {
@@ -1047,7 +1086,14 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
     if (!isOpen) return;
     const element = tabsScrollRef.current;
     if (!element) return;
-    const targetTabId = currentActiveTab === "fileTree" ? FILE_TREE_TAB_ID : activeSession?.id;
+    const targetTabId =
+      currentActiveTab === "fileTree"
+        ? FILE_TREE_TAB_ID
+        : currentActiveTab === "gitReview"
+          ? GIT_REVIEW_TAB_ID
+          : currentActiveTab === "tunnel"
+            ? TUNNEL_TAB_ID
+            : activeSession?.id;
     if (!targetTabId) return;
     const target = Array.from(
       element.querySelectorAll<HTMLElement>("[data-project-tools-tab-id]"),
@@ -1540,8 +1586,12 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
     }
   }, []);
 
+  const showDisabledMessage = Boolean(disabledMessage && !tunnelAvailable && !tunnelInitialized);
   const showProjectToolsChooser =
-    projectReady && currentActiveTab === "terminal" && !activeSession;
+    !showDisabledMessage &&
+    (projectReady || tunnelAvailable) &&
+    currentActiveTab === "terminal" &&
+    !activeSession;
 
   const startFileTree = useCallback(() => {
     setFileTreeInitialized(true);
@@ -1597,6 +1647,19 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
       onActiveTabChange("terminal");
     }
   }, [activeTab, onActiveTabChange, onGitReviewOpenChange]);
+
+  const startTunnel = useCallback(() => {
+    if (!tunnelClient) return;
+    onTunnelOpenChange?.(true);
+    onActiveTabChange("tunnel");
+  }, [onActiveTabChange, onTunnelOpenChange, tunnelClient]);
+
+  const closeTunnelTab = useCallback(() => {
+    onTunnelOpenChange?.(false);
+    if (activeTab === "tunnel") {
+      onActiveTabChange("terminal");
+    }
+  }, [activeTab, onActiveTabChange, onTunnelOpenChange]);
 
   const renderCreateTerminalMenuItem = () => {
     if (shellOptions.length > 1) {
@@ -1807,6 +1870,63 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                       );
                     }
 
+                    if (tab.kind === "tunnel") {
+                      return (
+                        <div
+                          key={tab.id}
+                          data-project-tools-tab-id={tab.id}
+                          className={cn(
+                            "project-tools-panel-tab group relative flex h-8 max-w-[12rem] shrink-0 select-none items-center gap-1 rounded-md border border-transparent px-1.5 text-xs text-muted-foreground transition-[background-color,border-color,color,opacity,transform,box-shadow] hover:bg-muted/80 hover:text-foreground",
+                            currentActiveTab === "tunnel" &&
+                              "border-border bg-muted text-foreground shadow-sm",
+                            draggingTabId === tab.id &&
+                              "z-10 scale-[0.98] opacity-80 shadow-md ring-1 ring-ring",
+                          )}
+                          title={t("projectTools.tunnelTitle")}
+                        >
+                          <button
+                            type="button"
+                            aria-label={t("projectTools.tunnelTitle")}
+                            className="absolute inset-0 z-0 rounded-md bg-transparent p-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            onClick={() => {
+                              if (consumeSuppressedTabClick(tab.id)) return;
+                              onActiveTabChange("tunnel");
+                            }}
+                          />
+                          {renderTabDragHandle(tab.id, t("projectTools.tunnelTitle"))}
+                          <div
+                            aria-hidden="true"
+                            className="pointer-events-none relative z-10 flex h-full min-w-0 flex-1 items-center gap-1.5 text-left text-inherit"
+                          >
+                            <Globe className="h-3.5 w-3.5 shrink-0" />
+                            <span className="min-w-0 truncate">
+                              {t("projectTools.tunnelTitle")}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            data-project-tools-tab-action="close"
+                            aria-label={t("projectTools.closeTunnelTab")}
+                            title={t("projectTools.closeTunnelTab")}
+                            className="relative z-10 ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-background hover:text-foreground focus-visible:bg-background focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
+                            onPointerDown={(event) => {
+                              event.stopPropagation();
+                            }}
+                            onMouseDown={(event) => {
+                              event.stopPropagation();
+                            }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              consumeSuppressedTabClick(tab.id);
+                              closeTunnelTab();
+                            }}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      );
+                    }
+
                     const session = tab.session;
                     const isPendingClose = pendingCloseSessionId === session.id;
                     const isClosing = closingSessionId === session.id;
@@ -1914,7 +2034,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   <Button
                     variant="ghost"
                     size="icon"
-                    disabled={!projectReady || creating}
+                    disabled={!(projectReady || tunnelAvailable) || creating}
                     title={t("projectTools.newProjectTool")}
                     className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground"
                   >
@@ -1938,6 +2058,14 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   >
                     <GitBranch className="h-3.5 w-3.5" />
                     {t("projectTools.newGitReview")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={startTunnel}
+                    disabled={!tunnelClient}
+                    className="gap-2 text-xs"
+                  >
+                    <Globe className="h-3.5 w-3.5" />
+                    {t("projectTools.newTunnel")}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -1987,7 +2115,7 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
               </div>
             ) : null}
 
-            {disabledMessage ? (
+            {showDisabledMessage ? (
               <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
                 {disabledMessage}
               </div>
@@ -2024,7 +2152,9 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   <button
                     type="button"
                     onClick={startFileTree}
-                    className="group flex items-center gap-3 rounded-lg border border-border/60 bg-background px-3.5 py-3 text-left text-sm text-foreground transition-all hover:border-border hover:bg-muted/60 hover:shadow-sm"
+                    disabled={!projectReady}
+                    title={disabledMessage}
+                    className="group flex items-center gap-3 rounded-lg border border-border/60 bg-background px-3.5 py-3 text-left text-sm text-foreground transition-all hover:border-border hover:bg-muted/60 hover:shadow-sm disabled:pointer-events-none disabled:opacity-50"
                   >
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted/80 text-muted-foreground transition-colors group-hover:bg-muted group-hover:text-foreground">
                       <FolderTree className="h-4.5 w-4.5" />
@@ -2041,7 +2171,9 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                   <button
                     type="button"
                     onClick={startGitReview}
-                    className="group flex items-center gap-3 rounded-lg border border-border/60 bg-background px-3.5 py-3 text-left text-sm text-foreground transition-all hover:border-border hover:bg-muted/60 hover:shadow-sm"
+                    disabled={!projectReady}
+                    title={disabledMessage}
+                    className="group flex items-center gap-3 rounded-lg border border-border/60 bg-background px-3.5 py-3 text-left text-sm text-foreground transition-all hover:border-border hover:bg-muted/60 hover:shadow-sm disabled:pointer-events-none disabled:opacity-50"
                   >
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted/80 text-muted-foreground transition-colors group-hover:bg-muted group-hover:text-foreground">
                       <GitBranch className="h-4.5 w-4.5" />
@@ -2052,6 +2184,24 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                       </div>
                       <div className="mt-0.5 text-xs leading-tight text-muted-foreground">
                         {t("projectTools.gitReviewDescription")}
+                      </div>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={startTunnel}
+                    disabled={!tunnelClient}
+                    className="group flex items-center gap-3 rounded-lg border border-border/60 bg-background px-3.5 py-3 text-left text-sm text-foreground transition-all hover:border-border hover:bg-muted/60 hover:shadow-sm disabled:pointer-events-none disabled:opacity-50"
+                  >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted/80 text-muted-foreground transition-colors group-hover:bg-muted group-hover:text-foreground">
+                      <Globe className="h-4.5 w-4.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium leading-tight">
+                        {t("projectTools.newTunnel")}
+                      </div>
+                      <div className="mt-0.5 text-xs leading-tight text-muted-foreground">
+                        {t("projectTools.tunnelDescription")}
                       </div>
                     </div>
                   </button>
@@ -2101,6 +2251,22 @@ export function ProjectToolsPanel(props: ProjectToolsPanelProps) {
                       onRevealInFileTree={revealPathInFileTree}
                       onInsertCommitMention={onInsertCommitMention}
                       onInsertGitFileMention={onInsertGitFileMention}
+                    />
+                  </div>
+                ) : null}
+                {tunnelInitialized && tunnelClient ? (
+                  <div
+                    className={cn(
+                      "min-h-0 flex-1",
+                      currentActiveTab === "tunnel" ? "flex flex-col" : "hidden",
+                    )}
+                  >
+                    <LocalTunnelPanel
+                      client={tunnelClient}
+                      enabled={tunnelEnabled}
+                      disabledMessage={tunnelDisabledMessage}
+                      projectPathKey={projectPathKey}
+                      refreshToken={tunnelRefreshToken}
                     />
                   </div>
                 ) : null}

@@ -10,6 +10,10 @@ import (
 
 var ErrAgentOffline = errors.New("agent offline")
 var ErrChatRunNotFound = errors.New("chat run not found")
+var ErrTunnelNotFound = errors.New("tunnel not found")
+var ErrTunnelExpired = errors.New("tunnel expired")
+var ErrTunnelOverLimit = errors.New("tunnel connection limit exceeded")
+var ErrTunnelLimitExceeded = errors.New("tunnel limit exceeded")
 
 const (
 	maxBufferedChatRunEvents = 50000
@@ -29,6 +33,7 @@ type Manager struct {
 	registry  *sessionRegistry
 	syncHub   *syncHub
 	chatStore *chatRunStore
+	tunnels   *tunnelStore
 }
 
 type AgentSession struct {
@@ -38,7 +43,7 @@ type AgentSession struct {
 	ConnectedAt  time.Time
 	LastPing     time.Time
 
-	toAgent chan *gatewayv1.GatewayEnvelope
+	toAgent chan *OutboundEnvelope
 	done    chan struct{}
 
 	closeOnce sync.Once
@@ -117,5 +122,6 @@ func NewManager() *Manager {
 		registry:  newSessionRegistry(),
 		syncHub:   newSyncHub(),
 		chatStore: newChatRunStore(),
+		tunnels:   newTunnelStore(),
 	}
 }

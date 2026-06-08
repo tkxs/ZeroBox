@@ -6,7 +6,17 @@ import {
   type MutableRefObject,
   type ReactNode,
 } from "react";
-import { Brain, Globe2, Lightbulb, Loader2, Paperclip, Send, Square, X } from "../../components/icons";
+import {
+  Brain,
+  Globe2,
+  Lightbulb,
+  Link2,
+  Loader2,
+  Paperclip,
+  Send,
+  Square,
+  X,
+} from "../../components/icons";
 
 import {
   MentionComposer,
@@ -72,7 +82,10 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
   gitClient?: GitClient | null;
   gitWriteEnabled?: boolean;
   gitDisabledMessage?: string;
+  tunnelToolAvailable?: boolean;
+  tunnelToolDisabledMessage?: string;
   onGitChanged?: (workdir: string) => void;
+  onOpenTunnelToolPanel?: () => void;
   onSend: () => void;
   onStop: () => void;
   onComposerBusyChange: (isBusy: boolean) => void;
@@ -96,7 +109,10 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
     gitClient,
     gitWriteEnabled = true,
     gitDisabledMessage,
+    tunnelToolAvailable = false,
+    tunnelToolDisabledMessage,
     onGitChanged,
+    onOpenTunnelToolPanel,
     onSend,
     onStop,
     onComposerBusyChange,
@@ -126,6 +142,11 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
     ? t("chat.runtime.thinkingUnavailable")
     : t("chat.runtime.thinkingTooltip");
   const webSearchTooltip = t("chat.runtime.webSearchTooltip");
+  const tunnelTooltip =
+    tunnelToolDisabledMessage ??
+    (tunnelToolAvailable
+      ? t("chat.runtime.tunnelToolAvailable")
+      : t("chat.runtime.tunnelToolUnavailable"));
 
   useEffect(() => {
     if (
@@ -338,6 +359,31 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                   )}
                 >
                   <Globe2 className="h-4 w-4" />
+                </button>
+              </RuntimeControlTooltip>
+
+              <RuntimeControlTooltip label={tunnelTooltip}>
+                <button
+                  type="button"
+                  disabled={!tunnelToolAvailable}
+                  onClick={() => {
+                    if (!tunnelToolAvailable) return;
+                    onOpenTunnelToolPanel?.();
+                  }}
+                  aria-label={
+                    tunnelToolAvailable
+                      ? t("chat.runtime.tunnelToolAvailable")
+                      : tunnelTooltip
+                  }
+                  className={cn(
+                    "composer-toolbar-action inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full outline-hidden transition-colors",
+                    "disabled:pointer-events-none disabled:opacity-40",
+                    tunnelToolAvailable
+                      ? "text-cyan-600 hover:text-cyan-700 dark:text-cyan-300 dark:hover:text-cyan-200"
+                      : "text-muted-foreground hover:text-foreground dark:hover:text-white",
+                  )}
+                >
+                  <Link2 className="h-4 w-4" />
                 </button>
               </RuntimeControlTooltip>
 

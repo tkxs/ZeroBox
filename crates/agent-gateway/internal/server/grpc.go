@@ -59,6 +59,13 @@ func (s *GRPCServer) AgentConnect(stream gatewayv1.AgentGateway_AgentConnectServ
 	defer cancel()
 
 	go s.heartbeatLoop(ctx, sess)
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-sess.Done():
+			cancel()
+		}
+	}()
 
 	sendErrCh := make(chan error, 1)
 	go func() {
@@ -71,12 +78,23 @@ func (s *GRPCServer) AgentConnect(stream gatewayv1.AgentGateway_AgentConnectServ
 				sendErrCh <- nil
 				cancel()
 				return
-			case env := <-toAgent:
-				if err := stream.Send(env); err != nil {
+			case outbound := <-toAgent:
+				if outbound == nil || outbound.GatewayEnvelope == nil {
+					continue
+				}
+				select {
+				case <-outbound.Context().Done():
+					outbound.Ack(outbound.Context().Err())
+					continue
+				default:
+				}
+				if err := stream.Send(outbound.GatewayEnvelope); err != nil {
+					outbound.Ack(err)
 					sendErrCh <- err
 					cancel()
 					return
 				}
+				outbound.Ack(nil)
 			}
 		}
 	}()

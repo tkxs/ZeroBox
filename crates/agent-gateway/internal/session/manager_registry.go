@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"time"
 
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
@@ -112,6 +113,17 @@ func (m *Manager) SendToAgent(env *gatewayv1.GatewayEnvelope) error {
 	}
 
 	return session.SendToAgent(env)
+}
+
+func (m *Manager) SendToAgentContext(ctx context.Context, env *gatewayv1.GatewayEnvelope) error {
+	m.registry.mu.RLock()
+	session := m.registry.session
+	m.registry.mu.RUnlock()
+	if session == nil {
+		return ErrAgentOffline
+	}
+
+	return session.SendToAgentContext(ctx, env)
 }
 
 func (m *Manager) currentSessionEpoch() uint64 {

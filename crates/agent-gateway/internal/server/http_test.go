@@ -69,7 +69,9 @@ func TestPublicHistoryShareResolvesWithoutAuthorization(t *testing.T) {
 
 	var outbound *gatewayv1.GatewayEnvelope
 	select {
-	case outbound = <-agentSession.Outbound():
+	case delivered := <-agentSession.Outbound():
+		delivered.Ack(nil)
+		outbound = delivered.GatewayEnvelope
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for public share request")
 	}
@@ -164,7 +166,9 @@ func publicHistoryShareErrorStatusForTest(t *testing.T, code int, message string
 
 	var outbound *gatewayv1.GatewayEnvelope
 	select {
-	case outbound = <-agentSession.Outbound():
+	case delivered := <-agentSession.Outbound():
+		delivered.Ack(nil)
+		outbound = delivered.GatewayEnvelope
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for public share request")
 	}

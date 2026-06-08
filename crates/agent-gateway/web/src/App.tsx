@@ -69,6 +69,7 @@ import {
   isAgentDevMode,
   isProjectToolsFileTreeOpen,
   isProjectToolsGitReviewOpen,
+  isProjectToolsTunnelOpen,
   normalizeChatRuntimeControlsForProvider,
   normalizeSettings,
   removeProjectToolsProjectState,
@@ -79,6 +80,7 @@ import {
   updateProjectToolsFileTreeProjectState,
   updateProjectToolsFileTreeOpen,
   updateProjectToolsGitReviewOpen,
+  updateProjectToolsTunnelOpen,
   updateProjectToolsPanelTabOrder,
   type AppSettings,
   type ChatRuntimeControls,
@@ -477,6 +479,38 @@ function isTerminalChatEvent(event: ChatEvent) {
   return event.type === "done" || event.type === "error";
 }
 
+type TunnelManagerToolChange = {
+  action: "create" | "close";
+  projectPathKey: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readTunnelManagerToolChange(event: ChatEvent): TunnelManagerToolChange | null {
+  if (event.type !== "tool_result" || event.isError === true) {
+    return null;
+  }
+  const details = asRecord(event.details);
+  if (details.kind !== "tunnel_manager") {
+    return null;
+  }
+  const action = typeof details.action === "string" ? details.action.trim() : "";
+  if (action !== "create" && action !== "close") {
+    return null;
+  }
+  const tunnel = asRecord(details.tunnel);
+  const projectPathKey =
+    (typeof tunnel.projectPathKey === "string" ? tunnel.projectPathKey.trim() : "") ||
+    (typeof tunnel.project_path_key === "string" ? tunnel.project_path_key.trim() : "") ||
+    event.workdir?.trim() ||
+    "";
+  return { action, projectPathKey };
+}
+
 function buildGatewaySelectedModel(
   selectedModel: SelectedModel | undefined,
   providers: ModelProviderSource[],
@@ -829,6 +863,7 @@ export default function App() {
   const [isFileDropActive, setIsFileDropActive] = useState(false);
   const [activeView, setActiveView] = useState<"chat" | "skills-hub" | "mcp-hub">("chat");
   const [projectToolsPanelOpen, setProjectToolsPanelOpen] = useState(false);
+  const [tunnelRefreshToken, setTunnelRefreshToken] = useState(0);
   const previousProjectToolsFileTreeOpenRef = useRef(false);
   const [workspaceEditorMounted, setWorkspaceEditorMounted] = useState(false);
   const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
@@ -2035,6 +2070,42 @@ export default function App() {
     [queueSettingsSave],
   );
 
+  const openTunnelToolPanel = useCallback(
+    (projectPathKey?: string) => {
+      const targetProjectPathKey =
+        workspaceProjectPathKey(projectPathKey) ||
+        workspaceProjectPathKey(activeWorkspaceProjectPath);
+      if (!targetProjectPathKey) return;
+      setActiveView("chat");
+      setProjectToolsPanelOpen(true);
+      setSettings((prev) =>
+        updateProjectToolsTunnelOpen(
+          updateCustomSettings(prev, {
+            projectToolsPanel: {
+              ...prev.customSettings.projectToolsPanel,
+              activeTab: "tunnel",
+            },
+          }),
+          targetProjectPathKey,
+          true,
+        ),
+      );
+    },
+    [activeWorkspaceProjectPath, setSettings],
+  );
+
+  const handleTunnelManagerChatEvent = useCallback(
+    (event: ChatEvent) => {
+      const change = readTunnelManagerToolChange(event);
+      if (!change) return;
+      setTunnelRefreshToken((current) => current + 1);
+      if (change.action === "create") {
+        openTunnelToolPanel(change.projectPathKey);
+      }
+    },
+    [openTunnelToolPanel],
+  );
+
   const persistProjectConversationActivity = useCallback(
     (activity: ReadonlyMap<string, number>) => {
       if (activity.size === 0) {
@@ -2828,6 +2899,7 @@ export default function App() {
             liveStore.appendEvent(event, {
               flush: event.type === "done" || event.type === "error",
             });
+            handleTunnelManagerChatEvent(event);
 
             if (event.type === "done" || event.type === "error") {
               terminalEventSeen = true;
@@ -2884,6 +2956,7 @@ export default function App() {
       commitTerminalConversationLiveStream,
       getConversationAbortController,
       getConversationLiveStreamStore,
+      handleTunnelManagerChatEvent,
       markCompletedLiveStream,
       markLiveConversationStreamActive,
       recoverUnavailableConversationStream,
@@ -3090,6 +3163,7 @@ export default function App() {
     clearConversationLiveStream,
     getConversationAbortController,
     getHistoryPositionLockedConversationIds,
+    handleTunnelManagerChatEvent,
     hasRecentlyCompletedLiveStream,
     hasRetainedConversationLiveStream,
     isAgentMode,
@@ -3122,14 +3196,17 @@ export default function App() {
         return;
       }
 
+      const visibleBroadcastConversationId = resolveVisibleConversationId(
+        selectedHistoryIdRef.current,
+        conversationIdRef.current,
+      );
       const isTerminalEvent = isTerminalChatEvent(event);
       if (!isTerminalEvent && !isChatStreamNotAvailableEvent(event)) {
         setRemoteConversationRunningState(targetConversationId, true, {
           workdir: event.workdir,
         });
         if (
-          resolveVisibleConversationId(selectedHistoryIdRef.current, conversationIdRef.current) ===
-            targetConversationId &&
+          visibleBroadcastConversationId === targetConversationId &&
           !isConversationLiveStreamAttached(targetConversationId)
         ) {
           attachVisibleConversationLiveStream(targetConversationId, api);
@@ -3177,6 +3254,9 @@ export default function App() {
       liveStore.appendEvent(event, {
         flush: isTerminalEvent,
       });
+      if (visibleBroadcastConversationId === targetConversationId) {
+        handleTunnelManagerChatEvent(event);
+      }
       if (isTerminalEvent) {
         markCompletedLiveStream(targetConversationId);
         commitTerminalConversationLiveStream(targetConversationId);
@@ -3197,6 +3277,7 @@ export default function App() {
     commitTerminalConversationLiveStream,
     getConversationAbortController,
     getConversationLiveStreamStore,
+    handleTunnelManagerChatEvent,
     isConversationLiveStreamAttached,
     markCompletedLiveStream,
     markLiveConversationStreamActive,
@@ -4143,6 +4224,7 @@ export default function App() {
           getConversationLiveStreamStore(activeConversationId)?.appendEvent(event, {
             flush: event.type === "done" || event.type === "error",
           });
+          handleTunnelManagerChatEvent(event);
           if (event.type === "done" || event.type === "error") {
             terminalEventSeen = true;
             markCompletedLiveStream(activeConversationId);
@@ -5530,6 +5612,10 @@ export default function App() {
     settings.customSettings,
     terminalProjectPathKey,
   );
+  const projectToolsTunnelOpen = isProjectToolsTunnelOpen(
+    settings.customSettings,
+    terminalProjectPathKey,
+  );
   const projectToolsDisabledMessage = !settingsSyncReady
     ? "Syncing desktop settings..."
     : !isAgentMode
@@ -5545,6 +5631,29 @@ export default function App() {
   const gitDisabledMessage = !settings.remote.enableWebGit
     ? "WebUI Git is disabled in desktop Remote settings."
     : undefined;
+  const tunnelEnabled =
+    settingsSyncReady && settings.remote.enableWebTunnels === true && status?.online === true;
+  const tunnelDisabledMessage = !settingsSyncReady
+    ? translate("chat.runtime.tunnelSettingsSyncing", settings.locale)
+    : !settings.remote.enableWebTunnels
+      ? translate("projectTools.tunnelWebDisabled", settings.locale)
+      : status?.online !== true
+        ? translate("projectTools.tunnelRemoteOffline", settings.locale)
+        : undefined;
+  const tunnelManagerToolAvailable =
+    settingsSyncReady &&
+    isAgentMode &&
+    settings.remote.enableWebTunnels === true &&
+    status?.online === true;
+  const tunnelManagerToolDisabledMessage = !settingsSyncReady
+    ? translate("chat.runtime.tunnelSettingsSyncing", settings.locale)
+    : !isAgentMode
+      ? translate("chat.runtime.tunnelAgentModeRequired", settings.locale)
+      : !settings.remote.enableWebTunnels
+        ? translate("chat.runtime.tunnelWebDisabled", settings.locale)
+        : status?.online !== true
+          ? translate("chat.runtime.tunnelRemoteOffline", settings.locale)
+          : undefined;
   const handleOpenWorkspaceFile = useCallback(
     (path: string) => {
       if (!terminalProjectPath || !terminalProjectPathKey) return;
@@ -5574,6 +5683,11 @@ export default function App() {
     },
     [terminalProjectPath, terminalProjectPathKey],
   );
+
+  const handleOpenTunnelToolPanel = useCallback(() => {
+    if (!tunnelManagerToolAvailable) return;
+    openTunnelToolPanel();
+  }, [openTunnelToolPanel, tunnelManagerToolAvailable]);
   const requestWorkspaceEditorClose = useCallback(() => {
     setWorkspaceEditorCloseRequestId((current) => current + 1);
   }, []);
@@ -6433,6 +6547,8 @@ export default function App() {
                     gitClient={gitClient}
                     gitWriteEnabled={settings.remote.enableWebGit}
                     gitDisabledMessage={gitDisabledMessage}
+                    tunnelToolAvailable={tunnelManagerToolAvailable}
+                    tunnelToolDisabledMessage={tunnelManagerToolDisabledMessage}
                     onGitChanged={(gitWorkdir) =>
                       window.dispatchEvent(
                         new CustomEvent("liveagent:git-changed", {
@@ -6440,6 +6556,7 @@ export default function App() {
                         }),
                       )
                     }
+                    onOpenTunnelToolPanel={handleOpenTunnelToolPanel}
                     onSend={() => {
                       if (
                         submitInFlightRef.current ||
@@ -6657,10 +6774,15 @@ export default function App() {
               settings.customSettings,
               terminalProjectPathKey,
             )}
+            tunnelOpen={projectToolsTunnelOpen}
             client={terminalClient}
             gitClient={gitClient}
             gitWriteEnabled={settings.remote.enableWebGit}
             gitDisabledMessage={gitDisabledMessage}
+            tunnelClient={isAgentMode ? api : null}
+            tunnelEnabled={tunnelEnabled}
+            tunnelDisabledMessage={tunnelDisabledMessage}
+            tunnelRefreshToken={tunnelRefreshToken}
             onWidthChange={(nextWidth) =>
               setSettings((prev) =>
                 updateCustomSettings(prev, {
@@ -6700,6 +6822,9 @@ export default function App() {
               setSettings((prev) =>
                 updateProjectToolsGitReviewOpen(prev, terminalProjectPathKey, open),
               )
+            }
+            onTunnelOpenChange={(open) =>
+              setSettings((prev) => updateProjectToolsTunnelOpen(prev, terminalProjectPathKey, open))
             }
             onSessionsChange={handleProjectTerminalSessionsChange}
             onInsertFileMention={(path, kind) => {

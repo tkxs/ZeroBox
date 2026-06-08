@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 
@@ -159,106 +160,140 @@ export function useGatewayBridgeListeners(params: UseGatewayBridgeListenersParam
       }
     };
 
-    void listen<GatewayChatRequestEvent>("gateway:chat-request", (event) => {
-      void (async () => {
-        const requestId = event.payload.requestId.trim();
-        const clientRequestId = event.payload.clientRequestId?.trim() ?? "";
-        const message = event.payload.message.trim();
-        const uploadedFiles = Array.isArray(event.payload.uploadedFiles)
-          ? event.payload.uploadedFiles
-          : [];
-        const targetConversationId = event.payload.conversationId.trim();
-        let resolvedConversationId = targetConversationId;
-        let gatewayBridgeRequest: ActiveGatewayBridgeRequest | null = null;
-        let claimedRequest = false;
+    const handleGatewayChatRequest = async (payload: GatewayChatRequestEvent) => {
+      const requestId = payload.requestId.trim();
+      const clientRequestId = payload.clientRequestId?.trim() ?? "";
+      const message = payload.message.trim();
+      const uploadedFiles = Array.isArray(payload.uploadedFiles) ? payload.uploadedFiles : [];
+      const targetConversationId = payload.conversationId.trim();
+      let resolvedConversationId = targetConversationId;
+      let gatewayBridgeRequest: ActiveGatewayBridgeRequest | null = null;
+      let claimedRequest = false;
 
-        if (!requestId) {
-          return;
-        }
-        if (!message && uploadedFiles.length === 0) {
+      if (!requestId) {
+        return;
+      }
+      if (!message && uploadedFiles.length === 0) {
+        queueGatewayBridgeEventForRequest(requestId, {
+          type: "error",
+          message: "Remote chat message cannot be empty.",
+          conversation_id: targetConversationId,
+        });
+        return;
+      }
+      if (!claimGatewayBridgeRequest(requestId, clientRequestId)) {
+        return;
+      }
+      claimedRequest = true;
+
+      try {
+        resolvedConversationId = await ensureGatewayBridgeConversationReadyRef.current(
+          targetConversationId,
+          {
+            forceHydrate: payload.forceHydrate === true,
+            historyTruncationKey: payload.historyTruncationKey,
+          },
+        );
+
+        const runningRequest =
+          getActiveGatewayBridgeRequestByConversationId(resolvedConversationId) ||
+          (clientRequestId ? getActiveGatewayBridgeRequestByClientRequestId(clientRequestId) : null);
+        if (
+          runningRequest ||
+          isConversationRunning(resolvedConversationId) ||
+          getConversationAbortController(resolvedConversationId)
+        ) {
           queueGatewayBridgeEventForRequest(requestId, {
             type: "error",
-            message: "Remote chat message cannot be empty.",
-            conversation_id: targetConversationId,
+            message: "Another remote gateway chat request is already running.",
+            conversation_id: runningRequest?.conversationId || resolvedConversationId,
           });
           return;
         }
-        if (!claimGatewayBridgeRequest(requestId, clientRequestId)) {
-          return;
+
+        gatewayBridgeRequest = setActiveGatewayBridgeRequest({
+          requestId,
+          conversationId: resolvedConversationId,
+          clientRequestId: clientRequestId || undefined,
+          startedAt: Date.now(),
+          selectedModelOverride: payload.selectedModel,
+          runtimeControlsOverride: payload.runtimeControls
+            ? normalizeChatRuntimeControls(payload.runtimeControls)
+            : undefined,
+          executionModeOverride: normalizeGatewayExecutionMode(payload.executionMode),
+          workdirOverride: normalizeGatewayWorkdir(payload.workdir),
+          selectedSystemToolIdsOverride: normalizeSystemToolSelection(payload.selectedSystemTools),
+        });
+        await sendActionRef.current({
+          textOverride: message,
+          uploadedFilesOverride: uploadedFiles,
+          conversationIdOverride: resolvedConversationId,
+          executionModeOverride: gatewayBridgeRequest.executionModeOverride,
+          workdirOverride: gatewayBridgeRequest.workdirOverride,
+          selectedSystemToolIdsOverride: gatewayBridgeRequest.selectedSystemToolIdsOverride,
+          runtimeControlsOverride: gatewayBridgeRequest.runtimeControlsOverride,
+          gatewayBridgeRequestOverride: gatewayBridgeRequest,
+        });
+      } catch (error) {
+        queueGatewayBridgeEventForRequest(requestId, {
+          type: "error",
+          message: asErrorMessage(error, "Failed to execute the remote gateway chat request."),
+          conversation_id:
+            resolvedConversationId || targetConversationId || currentConversationIdRef.current,
+        });
+      } finally {
+        if (claimedRequest) {
+          releaseGatewayBridgeRequestClaim(requestId, clientRequestId, gatewayBridgeRequest);
         }
-        claimedRequest = true;
+      }
+    };
 
-        try {
-          resolvedConversationId = await ensureGatewayBridgeConversationReadyRef.current(
-            targetConversationId,
-            {
-              forceHydrate: event.payload.forceHydrate === true,
-              historyTruncationKey: event.payload.historyTruncationKey,
-            },
-          );
-
-          const runningRequest =
-            getActiveGatewayBridgeRequestByConversationId(resolvedConversationId) ||
-            (clientRequestId
-              ? getActiveGatewayBridgeRequestByClientRequestId(clientRequestId)
-              : null);
-          if (
-            runningRequest ||
-            isConversationRunning(resolvedConversationId) ||
-            getConversationAbortController(resolvedConversationId)
-          ) {
-            queueGatewayBridgeEventForRequest(requestId, {
-              type: "error",
-              message: "Another remote gateway chat request is already running.",
-              conversation_id: runningRequest?.conversationId || resolvedConversationId,
-            });
+    const takeAndHandleGatewayChatRequest = (requestId: string) => {
+      const normalizedRequestId = requestId.trim();
+      if (!normalizedRequestId) {
+        return;
+      }
+      void invoke<GatewayChatRequestEvent | null>("gateway_take_chat_request", {
+        request_id: normalizedRequestId,
+      })
+        .then((payload) => {
+          if (!payload || disposed) {
             return;
           }
-
-          gatewayBridgeRequest = setActiveGatewayBridgeRequest({
-            requestId,
-            conversationId: resolvedConversationId,
-            clientRequestId: clientRequestId || undefined,
-            startedAt: Date.now(),
-            selectedModelOverride: event.payload.selectedModel,
-            runtimeControlsOverride: event.payload.runtimeControls
-              ? normalizeChatRuntimeControls(event.payload.runtimeControls)
-              : undefined,
-            executionModeOverride: normalizeGatewayExecutionMode(event.payload.executionMode),
-            workdirOverride: normalizeGatewayWorkdir(event.payload.workdir),
-            selectedSystemToolIdsOverride: normalizeSystemToolSelection(
-              event.payload.selectedSystemTools,
-            ),
-          });
-          await sendActionRef.current({
-            textOverride: message,
-            uploadedFilesOverride: uploadedFiles,
-            conversationIdOverride: resolvedConversationId,
-            executionModeOverride: gatewayBridgeRequest.executionModeOverride,
-            workdirOverride: gatewayBridgeRequest.workdirOverride,
-            selectedSystemToolIdsOverride: gatewayBridgeRequest.selectedSystemToolIdsOverride,
-            runtimeControlsOverride: gatewayBridgeRequest.runtimeControlsOverride,
-            gatewayBridgeRequestOverride: gatewayBridgeRequest,
-          });
-        } catch (error) {
-          queueGatewayBridgeEventForRequest(requestId, {
+          void handleGatewayChatRequest(payload);
+        })
+        .catch((error) => {
+          queueGatewayBridgeEventForRequest(normalizedRequestId, {
             type: "error",
-            message: asErrorMessage(error, "Failed to execute the remote gateway chat request."),
-            conversation_id:
-              resolvedConversationId || targetConversationId || currentConversationIdRef.current,
+            message: asErrorMessage(error, "Failed to claim the remote gateway chat request."),
           });
-        } finally {
-          if (claimedRequest) {
-            releaseGatewayBridgeRequestClaim(requestId, clientRequestId, gatewayBridgeRequest);
+        });
+    };
+
+    const drainPendingGatewayChatRequests = () => {
+      void invoke<GatewayChatRequestEvent[]>("gateway_take_pending_chat_requests")
+        .then((requests) => {
+          if (disposed) {
+            return;
           }
-        }
-      })();
+          for (const payload of requests) {
+            void handleGatewayChatRequest(payload);
+          }
+        })
+        .catch((error) => {
+          console.warn("gateway_take_pending_chat_requests failed", error);
+        });
+    };
+
+    void listen<GatewayChatRequestEvent>("gateway:chat-request", (event) => {
+      takeAndHandleGatewayChatRequest(event.payload.requestId);
     }).then((dispose) => {
       if (disposed) {
         dispose();
         return;
       }
       unlistenChatRequest = dispose;
+      drainPendingGatewayChatRequests();
     });
 
     void listen<GatewayChatCancelEvent>("gateway:chat-cancel", (event) => {

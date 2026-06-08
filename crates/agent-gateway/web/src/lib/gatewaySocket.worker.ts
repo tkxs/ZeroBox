@@ -574,6 +574,71 @@ async function resolveRequest(client: GatewayWebSocketClient, method: string, pa
         String(body.project_path_key ?? ""),
       );
       return undefined;
+    case "tunnel.list":
+      return {
+        tunnels: await client.listTunnels(),
+      };
+    case "tunnel.create": {
+      const projectPathKey =
+        typeof body.projectPathKey === "string"
+          ? body.projectPathKey.trim()
+          : typeof body.project_path_key === "string"
+            ? body.project_path_key.trim()
+            : "";
+      return {
+        tunnel: await client.createTunnel({
+          targetUrl: String(body.targetUrl ?? body.target_url ?? ""),
+          ttlSeconds:
+            body.ttlSeconds === 0 ||
+            body.ttlSeconds === 900 ||
+            body.ttlSeconds === 3600 ||
+            body.ttlSeconds === 14400
+              ? body.ttlSeconds
+              : body.ttl_seconds === 0 ||
+                  body.ttl_seconds === 900 ||
+                  body.ttl_seconds === 3600 ||
+                  body.ttl_seconds === 14400
+                ? body.ttl_seconds
+                : 3600,
+          name: typeof body.name === "string" ? body.name : undefined,
+          ...(projectPathKey ? { projectPathKey } : {}),
+        }),
+      };
+    }
+    case "tunnel.update": {
+      const projectPathKey =
+        typeof body.projectPathKey === "string"
+          ? body.projectPathKey.trim()
+          : typeof body.project_path_key === "string"
+            ? body.project_path_key.trim()
+            : "";
+      return {
+        tunnel: await client.updateTunnel({
+          id: String(body.id ?? body.tunnelId ?? body.tunnel_id ?? body.slug ?? ""),
+          targetUrl: String(body.targetUrl ?? body.target_url ?? ""),
+          ttlSeconds:
+            body.ttlSeconds === 0 ||
+            body.ttlSeconds === 900 ||
+            body.ttlSeconds === 3600 ||
+            body.ttlSeconds === 14400
+              ? body.ttlSeconds
+              : body.ttl_seconds === 0 ||
+                  body.ttl_seconds === 900 ||
+                  body.ttl_seconds === 3600 ||
+                  body.ttl_seconds === 14400
+                ? body.ttl_seconds
+                : 3600,
+          name: typeof body.name === "string" ? body.name : undefined,
+          ...(projectPathKey ? { projectPathKey } : {}),
+        }),
+      };
+    }
+    case "tunnel.close":
+      return {
+        tunnel: await client.closeTunnel(
+          String(body.id ?? body.tunnelId ?? body.tunnel_id ?? body.slug ?? ""),
+        ),
+      };
     case "provider.models":
       return client.getProviderModels(
         String(body.type ?? ""),

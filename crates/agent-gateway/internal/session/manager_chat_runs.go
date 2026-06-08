@@ -491,6 +491,16 @@ func (m *Manager) dispatchFromAgent(expected *AgentSession, env *gatewayv1.Agent
 		return
 	}
 
+	if tunnelFrame := env.GetTunnelFrame(); tunnelFrame != nil {
+		m.dispatchTunnelFrame(tunnelFrame)
+		return
+	}
+
+	if tunnelControl := env.GetTunnelControl(); tunnelControl != nil {
+		m.handleAgentTunnelControl(session, env.GetRequestId(), tunnelControl)
+		return
+	}
+
 	session.dispatch(env)
 }
 

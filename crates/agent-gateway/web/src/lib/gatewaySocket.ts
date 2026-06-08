@@ -154,6 +154,58 @@ export type UploadedImagePreviewResponse = {
   data: string;
 };
 
+export type TunnelCreateInput = {
+  targetUrl: string;
+  name?: string;
+  ttlSeconds: 0 | 900 | 3600 | 14400;
+  projectPathKey?: string;
+};
+
+export type TunnelUpdateInput = {
+  id: string;
+  targetUrl: string;
+  name?: string;
+  ttlSeconds: 0 | 900 | 3600 | 14400;
+  projectPathKey?: string;
+};
+
+export type TunnelSummary = {
+  id: string;
+  slug: string;
+  name: string;
+  targetUrl: string;
+  publicUrl: string;
+  createdAt: number;
+  expiresAt: number;
+  activeConnections: number;
+  status: "active" | "expired" | "offline";
+  projectPathKey: string;
+};
+
+type RawTunnelSummary = {
+  id?: string;
+  slug?: string;
+  name?: string;
+  targetUrl?: string;
+  target_url?: string;
+  publicUrl?: string;
+  public_url?: string;
+  createdAt?: number;
+  created_at?: number;
+  expiresAt?: number;
+  expires_at?: number;
+  activeConnections?: number;
+  active_connections?: number;
+  status?: string;
+  projectPathKey?: string;
+  project_path_key?: string;
+};
+
+type RawTunnelResponse = {
+  tunnel?: RawTunnelSummary;
+  tunnels?: RawTunnelSummary[];
+};
+
 type HistoryGetOptions = {
   maxMessages?: number;
 };
@@ -441,6 +493,42 @@ function normalizeTerminalEvent(input: RawTerminalEvent): TerminalEvent | null {
     outputStartOffset,
     outputEndOffset,
   };
+}
+
+function normalizeTunnelStatus(input: unknown): TunnelSummary["status"] {
+  return input === "expired" || input === "offline" ? input : "active";
+}
+
+function fallbackTunnelPublicUrl(slug: string) {
+  const origin = getRuntimeOrigin().replace(/\/$/, "");
+  return origin && slug ? `${origin}/t/${slug}/` : "";
+}
+
+function normalizeTunnelSummary(input: RawTunnelSummary): TunnelSummary {
+  const slug = input.slug?.trim() ?? "";
+  return {
+    id: input.id?.trim() ?? "",
+    slug,
+    name: input.name?.trim() ?? "",
+    targetUrl: input.targetUrl ?? input.target_url ?? "",
+    publicUrl: input.publicUrl ?? input.public_url ?? fallbackTunnelPublicUrl(slug),
+    createdAt: Number(input.createdAt ?? input.created_at ?? 0),
+    expiresAt: Number(input.expiresAt ?? input.expires_at ?? 0),
+    activeConnections: Number(input.activeConnections ?? input.active_connections ?? 0),
+    status: normalizeTunnelStatus(input.status),
+    projectPathKey: (input.projectPathKey ?? input.project_path_key ?? "").trim(),
+  };
+}
+
+function normalizeTunnelListResponse(input: RawTunnelResponse): TunnelSummary[] {
+  return (input.tunnels ?? []).map(normalizeTunnelSummary);
+}
+
+function normalizeTunnelResponse(input: RawTunnelResponse): TunnelSummary {
+  if (!input.tunnel) {
+    throw new Error("Tunnel response did not include a tunnel");
+  }
+  return normalizeTunnelSummary(input.tunnel);
 }
 
 function normalizeOptionalOffset(value: unknown) {
@@ -881,6 +969,49 @@ export class GatewayWebSocketClient {
       session_id: sessionId,
       project_path_key: projectPathKey,
     });
+  }
+
+  async listTunnels(): Promise<TunnelSummary[]> {
+    return normalizeTunnelListResponse(
+      await this.requestWithRecovery<RawTunnelResponse>("tunnel.list", {}),
+    );
+  }
+
+  async createTunnel(input: TunnelCreateInput): Promise<TunnelSummary> {
+    const payload: Record<string, unknown> = {
+      targetUrl: input.targetUrl,
+      ttlSeconds: input.ttlSeconds,
+      name: input.name,
+    };
+    if (input.projectPathKey?.trim()) {
+      payload.projectPathKey = input.projectPathKey.trim();
+    }
+    return normalizeTunnelResponse(
+      await this.request<RawTunnelResponse>("tunnel.create", payload),
+    );
+  }
+
+  async updateTunnel(input: TunnelUpdateInput): Promise<TunnelSummary> {
+    const payload: Record<string, unknown> = {
+      id: input.id,
+      targetUrl: input.targetUrl,
+      ttlSeconds: input.ttlSeconds,
+      name: input.name,
+    };
+    if (input.projectPathKey?.trim()) {
+      payload.projectPathKey = input.projectPathKey.trim();
+    }
+    return normalizeTunnelResponse(
+      await this.request<RawTunnelResponse>("tunnel.update", payload),
+    );
+  }
+
+  async closeTunnel(id: string): Promise<TunnelSummary> {
+    return normalizeTunnelResponse(
+      await this.request<RawTunnelResponse>("tunnel.close", {
+        id,
+      }),
+    );
   }
 
   async listHistory(
@@ -1869,6 +2000,10 @@ export type GatewayWebSocketClientLike = {
   closeTerminal(sessionId: string, projectPathKey?: string): Promise<TerminalSession>;
   closeProjectTerminals(projectPathKey: string): Promise<TerminalSession[]>;
   detachTerminal(sessionId: string, projectPathKey?: string): Promise<void>;
+  listTunnels(): Promise<TunnelSummary[]>;
+  createTunnel(input: TunnelCreateInput): Promise<TunnelSummary>;
+  updateTunnel(input: TunnelUpdateInput): Promise<TunnelSummary>;
+  closeTunnel(id: string): Promise<TunnelSummary>;
   listHistory(page: number, pageSize: number, filter?: HistoryListFilter): Promise<HistoryList>;
   listHistoryWorkdirs(): Promise<HistoryWorkdirsResponse>;
   listSharedHistory(page: number, pageSize: number): Promise<HistoryList>;
@@ -2427,6 +2562,47 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
       session_id: sessionId,
       project_path_key: projectPathKey,
     });
+  }
+
+  async listTunnels(): Promise<TunnelSummary[]> {
+    return normalizeTunnelListResponse(await this.request<RawTunnelResponse>("tunnel.list", {}));
+  }
+
+  async createTunnel(input: TunnelCreateInput): Promise<TunnelSummary> {
+    const payload: Record<string, unknown> = {
+      targetUrl: input.targetUrl,
+      ttlSeconds: input.ttlSeconds,
+      name: input.name,
+    };
+    if (input.projectPathKey?.trim()) {
+      payload.projectPathKey = input.projectPathKey.trim();
+    }
+    return normalizeTunnelResponse(
+      await this.request<RawTunnelResponse>("tunnel.create", payload),
+    );
+  }
+
+  async updateTunnel(input: TunnelUpdateInput): Promise<TunnelSummary> {
+    const payload: Record<string, unknown> = {
+      id: input.id,
+      targetUrl: input.targetUrl,
+      ttlSeconds: input.ttlSeconds,
+      name: input.name,
+    };
+    if (input.projectPathKey?.trim()) {
+      payload.projectPathKey = input.projectPathKey.trim();
+    }
+    return normalizeTunnelResponse(
+      await this.request<RawTunnelResponse>("tunnel.update", payload),
+    );
+  }
+
+  async closeTunnel(id: string): Promise<TunnelSummary> {
+    return normalizeTunnelResponse(
+      await this.request<RawTunnelResponse>("tunnel.close", {
+        id,
+      }),
+    );
   }
 
   async listHistory(

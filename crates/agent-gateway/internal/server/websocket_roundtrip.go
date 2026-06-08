@@ -53,7 +53,7 @@ func awaitAgentUnaryResponse(
 	}
 	defer cleanup()
 
-	if err := sm.SendToAgent(envelope); err != nil {
+	if err := sm.SendToAgentContext(ctx, envelope); err != nil {
 		return nil, err
 	}
 

@@ -1618,6 +1618,208 @@ test("Gateway SharedWorker forwards history share requests", async () => {
   globalThis.onconnect = previousOnConnect;
 });
 
+test("Gateway SharedWorker forwards tunnel requests", async () => {
+  installBrowser();
+  const loader = createWebModuleLoader();
+  const gatewaySocketPath = loader.resolveLocal("src/lib/gatewaySocket.ts");
+  const clientInstances = [];
+
+  class MockGatewayWebSocketClient {
+    calls = [];
+
+    constructor(token) {
+      this.token = token;
+      clientInstances.push(this);
+    }
+
+    subscribeStatus() {
+      return () => {};
+    }
+
+    subscribeHistory() {
+      return () => {};
+    }
+
+    subscribeConversation() {
+      return () => {};
+    }
+
+    subscribeSettings() {
+      return () => {};
+    }
+
+    subscribeTerminal() {
+      return () => {};
+    }
+
+    listTunnels() {
+      this.calls.push(["listTunnels"]);
+      return [
+        {
+          id: "tun-1",
+          slug: "slug-1",
+          name: "App",
+          targetUrl: "http://localhost:3000",
+          publicUrl: "https://gateway.example/t/slug-1/",
+          createdAt: 10,
+          expiresAt: 3700,
+          activeConnections: 0,
+          status: "active",
+        },
+      ];
+    }
+
+    createTunnel(input) {
+      this.calls.push(["createTunnel", input]);
+      return {
+        id: "tun-2",
+        slug: "slug-2",
+        name: input.name ?? "",
+        targetUrl: input.targetUrl,
+        publicUrl: "https://gateway.example/t/slug-2/",
+        createdAt: 20,
+        expiresAt: 920,
+        activeConnections: 0,
+        status: "active",
+      };
+    }
+
+    updateTunnel(input) {
+      this.calls.push(["updateTunnel", input]);
+      return {
+        id: input.id,
+        slug: "slug-2",
+        name: input.name ?? "",
+        targetUrl: input.targetUrl,
+        publicUrl: "https://gateway.example/t/slug-2/",
+        createdAt: 20,
+        expiresAt: input.ttlSeconds === 0 ? 0 : 920,
+        activeConnections: 0,
+        status: "active",
+        projectPathKey: input.projectPathKey ?? "",
+      };
+    }
+
+    closeTunnel(id) {
+      this.calls.push(["closeTunnel", id]);
+      return {
+        id,
+        slug: "slug-2",
+        name: "Closed",
+        targetUrl: "http://localhost:3000",
+        publicUrl: "https://gateway.example/t/slug-2/",
+        createdAt: 20,
+        expiresAt: 920,
+        activeConnections: 0,
+        status: "expired",
+      };
+    }
+
+    dispose() {}
+  }
+
+  const workerLoader = createWebModuleLoader({
+    mocks: {
+      [gatewaySocketPath]: {
+        GatewayWebSocketClient: MockGatewayWebSocketClient,
+      },
+    },
+  });
+
+  const previousOnConnect = globalThis.onconnect;
+  workerLoader.loadModule("src/lib/gatewaySocket.worker.ts");
+
+  const port = new FakeMessagePort();
+  globalThis.onconnect({ ports: [port] });
+  port.emit({ type: "connect", connection_id: "connection-1", token: " token " });
+  assert.equal(clientInstances.length, 1);
+
+  port.emit({
+    type: "request",
+    connection_id: "connection-1",
+    request_id: "tunnel-list",
+    method: "tunnel.list",
+    payload: {},
+  });
+  await waitFor(
+    () => port.messages.some((message) => message.request_id === "tunnel-list"),
+    "shared worker tunnel list response",
+  );
+  assert.deepEqual(clientInstances[0].calls.at(-1), ["listTunnels"]);
+  assert.equal(port.messages.at(-1).payload.tunnels[0].id, "tun-1");
+
+  port.emit({
+    type: "request",
+    connection_id: "connection-1",
+    request_id: "tunnel-create",
+    method: "tunnel.create",
+    payload: {
+      targetUrl: "http://localhost:3000/app",
+      ttlSeconds: 900,
+      name: "App",
+    },
+  });
+  await waitFor(
+    () => port.messages.some((message) => message.request_id === "tunnel-create"),
+    "shared worker tunnel create response",
+  );
+  assert.deepEqual(clientInstances[0].calls.at(-1), [
+    "createTunnel",
+    {
+      targetUrl: "http://localhost:3000/app",
+      ttlSeconds: 900,
+      name: "App",
+    },
+  ]);
+  assert.equal(port.messages.at(-1).payload.tunnel.id, "tun-2");
+
+  port.emit({
+    type: "request",
+    connection_id: "connection-1",
+    request_id: "tunnel-update-infinite",
+    method: "tunnel.update",
+    payload: {
+      id: "tun-2",
+      targetUrl: "http://localhost:4000/dashboard",
+      ttlSeconds: 0,
+      name: "Dashboard",
+      projectPathKey: "project:/tmp/liveagent",
+    },
+  });
+  await waitFor(
+    () => port.messages.some((message) => message.request_id === "tunnel-update-infinite"),
+    "shared worker tunnel update response",
+  );
+  assert.deepEqual(clientInstances[0].calls.at(-1), [
+    "updateTunnel",
+    {
+      id: "tun-2",
+      targetUrl: "http://localhost:4000/dashboard",
+      ttlSeconds: 0,
+      name: "Dashboard",
+      projectPathKey: "project:/tmp/liveagent",
+    },
+  ]);
+  assert.equal(port.messages.at(-1).payload.tunnel.expiresAt, 0);
+  assert.equal(port.messages.at(-1).payload.tunnel.projectPathKey, "project:/tmp/liveagent");
+
+  port.emit({
+    type: "request",
+    connection_id: "connection-1",
+    request_id: "tunnel-close",
+    method: "tunnel.close",
+    payload: { id: "tun-2" },
+  });
+  await waitFor(
+    () => port.messages.some((message) => message.request_id === "tunnel-close"),
+    "shared worker tunnel close response",
+  );
+  assert.deepEqual(clientInstances[0].calls.at(-1), ["closeTunnel", "tun-2"]);
+  assert.equal(port.messages.at(-1).payload.tunnel.status, "expired");
+
+  globalThis.onconnect = previousOnConnect;
+});
+
 test("Gateway SharedWorker forwards chat.attach streams to the requesting port", async () => {
   installBrowser();
   const loader = createWebModuleLoader();

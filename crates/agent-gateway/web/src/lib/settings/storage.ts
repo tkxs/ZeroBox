@@ -8,6 +8,7 @@ import {
   normalizeChatRuntimeControls,
   normalizeProjectToolsFileTreeSettings,
   normalizeProjectToolsGitReviewSettings,
+  normalizeProjectToolsTunnelSettings,
   normalizeProjectToolsPanelTabOrders,
   type ChatRuntimeControls,
   normalizeSkillsSettings,
@@ -56,6 +57,7 @@ function toPersistedLocalCustomSettings(
     ...customSettings,
     projectToolsFileTree: normalizeProjectToolsFileTreeSettings({}),
     projectToolsGitReview: normalizeProjectToolsGitReviewSettings({}),
+    projectToolsTunnel: normalizeProjectToolsTunnelSettings({}),
   };
 }
 
@@ -92,7 +94,8 @@ function readLocalUiSettings(): {
     const projectToolsPanelActiveTab =
       projectToolsPanel.activeTab === "terminal" ||
       projectToolsPanel.activeTab === "fileTree" ||
-      projectToolsPanel.activeTab === "gitReview"
+      projectToolsPanel.activeTab === "gitReview" ||
+      projectToolsPanel.activeTab === "tunnel"
         ? projectToolsPanel.activeTab
         : "fileTree";
     return toPersistedLocalCustomSettings({
@@ -110,6 +113,7 @@ function readLocalUiSettings(): {
       },
       projectToolsFileTree: normalizeProjectToolsFileTreeSettings({}),
       projectToolsGitReview: normalizeProjectToolsGitReviewSettings({}),
+      projectToolsTunnel: normalizeProjectToolsTunnelSettings({}),
     });
   }
 

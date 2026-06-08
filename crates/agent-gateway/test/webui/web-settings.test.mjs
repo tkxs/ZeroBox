@@ -198,6 +198,10 @@ test("loadWebSettings forces current gateway URL/token over stale persisted remo
     openProjectPathKeys: ["/stale/project"],
     openVersion: 1,
   };
+  stale.customSettings.projectToolsTunnel = {
+    openProjectPathKeys: ["/stale/project"],
+    openVersion: 1,
+  };
   store.set("liveagent.gateway.webui.settings.v1", JSON.stringify(stale));
 
   const loaded = webSettings.loadWebSettings(" new-token ");
@@ -207,6 +211,7 @@ test("loadWebSettings forces current gateway URL/token over stale persisted remo
   assert.equal(loaded.remote.enabled, true);
   assert.deepEqual(loaded.customSettings.projectToolsFileTree.openProjectPathKeys, []);
   assert.deepEqual(loaded.customSettings.projectToolsGitReview.openProjectPathKeys, []);
+  assert.deepEqual(loaded.customSettings.projectToolsTunnel.openProjectPathKeys, []);
 });
 
 test("gateway settings sync keeps remote connection local and syncs web terminal setting", () => {
@@ -249,6 +254,7 @@ test("gateway settings sync keeps remote connection local and syncs web terminal
   assert.deepEqual(payload.remote, {
     enableWebTerminal: synced.remote.enableWebTerminal,
     enableWebGit: synced.remote.enableWebGit,
+    enableWebTunnels: synced.remote.enableWebTunnels,
   });
   assert.deepEqual(payload.chatRuntimeControls, synced.chatRuntimeControls);
 });
@@ -338,11 +344,22 @@ test("gateway settings sync preserves active workspace project by path when ids 
   assert.equal(synced.system.activeWorkspaceProjectId, "desktop-project-a");
 });
 
-test("gateway settings sync keeps newer git review tab open state", () => {
+test("gateway settings sync keeps newer project tool tab open state", () => {
   installWindow();
   const current = settings.normalizeSettings({
     customSettings: {
+      projectToolsPanel: {
+        width: 612,
+        activeTab: "gitReview",
+        tabOrders: {
+          "/web/project": ["__git_review__", "__file_tree__"],
+        },
+      },
       projectToolsGitReview: {
+        openProjectPathKeys: ["/web/project"],
+        openVersion: 2,
+      },
+      projectToolsTunnel: {
         openProjectPathKeys: ["/web/project"],
         openVersion: 2,
       },
@@ -351,7 +368,18 @@ test("gateway settings sync keeps newer git review tab open state", () => {
 
   const staleSynced = settingsSync.applyGatewaySettingsSyncPayload(current, {
     customSettings: {
+      projectToolsPanel: {
+        width: 360,
+        activeTab: "terminal",
+        tabOrders: {
+          "/desktop/project": ["terminal-1", "__file_tree__"],
+        },
+      },
       projectToolsGitReview: {
+        openProjectPathKeys: [],
+        openVersion: 1,
+      },
+      projectToolsTunnel: {
         openProjectPathKeys: [],
         openVersion: 1,
       },
@@ -361,10 +389,30 @@ test("gateway settings sync keeps newer git review tab open state", () => {
     "/web/project",
   ]);
   assert.equal(staleSynced.customSettings.projectToolsGitReview.openVersion, 2);
+  assert.deepEqual(staleSynced.customSettings.projectToolsTunnel.openProjectPathKeys, [
+    "/web/project",
+  ]);
+  assert.equal(staleSynced.customSettings.projectToolsTunnel.openVersion, 2);
+  assert.equal(staleSynced.customSettings.projectToolsPanel.width, 612);
+  assert.equal(staleSynced.customSettings.projectToolsPanel.activeTab, "terminal");
+  assert.deepEqual(staleSynced.customSettings.projectToolsPanel.tabOrders, {
+    "/web/project": ["__git_review__", "__file_tree__"],
+  });
 
   const newerSynced = settingsSync.applyGatewaySettingsSyncPayload(staleSynced, {
     customSettings: {
+      projectToolsPanel: {
+        width: 360,
+        activeTab: "tunnel",
+        tabOrders: {
+          "/desktop/project": ["terminal-1", "__tunnel__"],
+        },
+      },
       projectToolsGitReview: {
+        openProjectPathKeys: ["/desktop/project"],
+        openVersion: 3,
+      },
+      projectToolsTunnel: {
         openProjectPathKeys: ["/desktop/project"],
         openVersion: 3,
       },
@@ -374,9 +422,27 @@ test("gateway settings sync keeps newer git review tab open state", () => {
     "/desktop/project",
   ]);
   assert.equal(newerSynced.customSettings.projectToolsGitReview.openVersion, 3);
+  assert.deepEqual(newerSynced.customSettings.projectToolsTunnel.openProjectPathKeys, [
+    "/desktop/project",
+  ]);
+  assert.equal(newerSynced.customSettings.projectToolsTunnel.openVersion, 3);
+  assert.equal(newerSynced.customSettings.projectToolsPanel.width, 612);
+  assert.equal(newerSynced.customSettings.projectToolsPanel.activeTab, "tunnel");
+  assert.deepEqual(newerSynced.customSettings.projectToolsPanel.tabOrders, {
+    "/web/project": ["__git_review__", "__file_tree__"],
+  });
 
   const payload = settingsSync.buildGatewaySettingsSyncPayload(newerSynced);
+  assert.deepEqual(payload.customSettings.projectToolsPanel, {
+    activeTab: "tunnel",
+  });
+  assert.equal(Object.hasOwn(payload.customSettings.projectToolsPanel, "width"), false);
+  assert.equal(Object.hasOwn(payload.customSettings.projectToolsPanel, "tabOrders"), false);
   assert.deepEqual(payload.customSettings.projectToolsGitReview, {
+    openProjectPathKeys: ["/desktop/project"],
+    openVersion: 3,
+  });
+  assert.deepEqual(payload.customSettings.projectToolsTunnel, {
     openProjectPathKeys: ["/desktop/project"],
     openVersion: 3,
   });

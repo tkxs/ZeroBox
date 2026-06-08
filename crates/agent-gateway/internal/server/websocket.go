@@ -431,6 +431,25 @@ func (c *websocketConnection) awaitAgentResponse(
 	return awaitAgentUnaryResponse(ctx, c.sm, requestID, envelope)
 }
 
+func (c *websocketConnection) sendToAgent(envelope *gatewayv1.GatewayEnvelope) error {
+	timeout := c.cfg.WebSocketWriteTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-c.done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	return c.sm.SendToAgentContext(ctx, envelope)
+}
+
 func (c *websocketConnection) writeResponse(requestID string, payload any) error {
 	return c.writeEnvelope(websocketEnvelope{
 		ID:      requestID,

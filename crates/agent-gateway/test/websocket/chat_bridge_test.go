@@ -90,7 +90,8 @@ func readOutboundEnvelope(t *testing.T, agentSession *session.AgentSession) *gat
 	t.Helper()
 	select {
 	case outbound := <-agentSession.Outbound():
-		return outbound
+		outbound.Ack(nil)
+		return outbound.GatewayEnvelope
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for gateway request to reach agent")
 		return nil
@@ -184,7 +185,9 @@ func TestWebSocketChatStartForwardsNormalizedRequestAndStreamsEvents(t *testing.
 
 	var outbound *gatewayv1.GatewayEnvelope
 	select {
-	case outbound = <-agentSession.Outbound():
+	case delivered := <-agentSession.Outbound():
+		delivered.Ack(nil)
+		outbound = delivered.GatewayEnvelope
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for chat request to reach agent")
 	}
@@ -275,6 +278,46 @@ func TestWebSocketChatStartForwardsNormalizedRequestAndStreamsEvents(t *testing.
 	}
 	if donePayload["type"] != "done" || donePayload["title"] != "Done" {
 		t.Fatalf("done payload = %#v", donePayload)
+	}
+}
+
+func TestWebSocketChatStartClearsRunWhenAgentDeliveryStalls(t *testing.T) {
+	t.Parallel()
+
+	sm := session.NewManager()
+	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
+	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(agentSession)
+
+	handler := server.NewWebSocketServer(&config.Config{
+		Token:                 "ws-token",
+		RequestTimeout:        time.Second,
+		WebSocketWriteTimeout: 50 * time.Millisecond,
+	}, sm)
+	conn, cleanup := dialGatewayWebSocket(t, handler)
+	defer cleanup()
+
+	authWebSocket(t, conn, "ws-token")
+	sendEnvelope(t, conn, "chat-stalled", "chat.start", map[string]any{
+		"conversation_id": "conversation-stalled",
+		"message":         "hello gateway",
+	})
+
+	select {
+	case outbound := <-agentSession.Outbound():
+		if outbound.GetChatRequest() == nil {
+			t.Fatalf("outbound payload = %T, want ChatRequest", outbound.GetPayload())
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for chat request to be enqueued")
+	}
+
+	env := receiveEnvelope(t, conn)
+	if env.ID != "chat-stalled" || env.Type != "error" || env.Error != "request timed out" {
+		t.Fatalf("stalled delivery response = %#v, want timeout error", env)
+	}
+	if got := sm.ActiveChatRunConversationIDs(); len(got) != 0 {
+		t.Fatalf("active chat runs after stalled delivery = %#v, want empty", got)
 	}
 }
 

@@ -76,7 +76,7 @@ func (c *websocketConnection) handleChatStart(req websocketRequest) {
 	defer c.releaseActiveChat(responseID)
 
 	if created {
-		if err := c.sm.SendToAgent(&gatewayv1.GatewayEnvelope{
+		if err := c.sendToAgent(&gatewayv1.GatewayEnvelope{
 			RequestId: sourceRequestID,
 			Timestamp: time.Now().Unix(),
 			Payload: &gatewayv1.GatewayEnvelope_ChatRequest{
@@ -328,7 +328,7 @@ func (c *websocketConnection) handleChatCancel(req websocketRequest) {
 		return
 	}
 
-	if err := c.sm.SendToAgent(&gatewayv1.GatewayEnvelope{
+	if err := c.sendToAgent(&gatewayv1.GatewayEnvelope{
 		RequestId: req.ID,
 		Timestamp: time.Now().Unix(),
 		Payload: &gatewayv1.GatewayEnvelope_CancelChat{

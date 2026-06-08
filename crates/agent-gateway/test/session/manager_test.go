@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -155,6 +156,28 @@ func TestSendToAgentUnblocksWhenSessionCloses(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("SendToAgent did not unblock after session close")
+	}
+}
+
+func TestSendToAgentContextReturnsWhenOutboundQueueIsFull(t *testing.T) {
+	t.Parallel()
+
+	sm := newTestSessionManager()
+	sess := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(sess)
+
+	for i := 0; i < 64; i += 1 {
+		if err := sm.SendToAgent(&gatewayv1.GatewayEnvelope{RequestId: fmt.Sprintf("queued-%d", i)}); err != nil {
+			t.Fatalf("prime outbound queue: %v", err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := sm.SendToAgentContext(ctx, &gatewayv1.GatewayEnvelope{RequestId: "blocked"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SendToAgentContext with full queue = %v, want context deadline exceeded", err)
 	}
 }
 

@@ -127,7 +127,7 @@ export type ChatSidebarSettings = {
   recentCollapsed: boolean;
 };
 
-export type ProjectToolsPanelTab = "terminal" | "fileTree" | "gitReview";
+export type ProjectToolsPanelTab = "terminal" | "fileTree" | "gitReview" | "tunnel";
 
 export type ProjectToolsPanelSettings = {
   width: number;
@@ -154,6 +154,11 @@ export type ProjectToolsGitReviewSettings = {
   openVersion: number;
 };
 
+export type ProjectToolsTunnelSettings = {
+  openProjectPathKeys: string[];
+  openVersion: number;
+};
+
 export type ProjectToolsFileTreeStatePatch = Partial<ProjectToolsFileTreeProjectState> & {
   bumpRevision?: boolean;
   bumpStateVersion?: boolean;
@@ -165,6 +170,7 @@ export type CustomSettings = {
   projectToolsPanel: ProjectToolsPanelSettings;
   projectToolsFileTree: ProjectToolsFileTreeSettings;
   projectToolsGitReview: ProjectToolsGitReviewSettings;
+  projectToolsTunnel: ProjectToolsTunnelSettings;
 };
 
 export type UpdateSettings = {
@@ -256,6 +262,7 @@ export type RemoteSettings = {
   heartbeatInterval: number;
   enableWebTerminal: boolean;
   enableWebGit: boolean;
+  enableWebTunnels: boolean;
 };
 
 export type AppSettings = {
@@ -1047,6 +1054,7 @@ export function normalizeRemoteSettings(input: unknown): RemoteSettings {
     heartbeatInterval: normalizePositiveInteger(obj.heartbeatInterval, 30),
     enableWebTerminal: obj.enableWebTerminal === true,
     enableWebGit: obj.enableWebGit === true,
+    enableWebTunnels: obj.enableWebTunnels === true,
   };
 }
 
@@ -1537,6 +1545,23 @@ export function normalizeProjectToolsGitReviewSettings(
   };
 }
 
+export function normalizeProjectToolsTunnelSettings(
+  input: unknown,
+): ProjectToolsTunnelSettings {
+  const obj = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const openProjectPathKeys = Array.from(
+    new Set(
+      (Array.isArray(obj.openProjectPathKeys) ? obj.openProjectPathKeys : [])
+        .map((pathKey) => workspaceProjectPathKey(pathKey))
+        .filter(Boolean),
+    ),
+  ).sort();
+  return {
+    openProjectPathKeys,
+    openVersion: normalizeIntegerInRange(obj.openVersion, 0, Number.MAX_SAFE_INTEGER, 0),
+  };
+}
+
 export function normalizeProjectToolsPanelTabOrder(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
   const order: string[] = [];
@@ -1585,7 +1610,8 @@ export function normalizeCustomSettings(
   const projectToolsPanelActiveTab =
     projectToolsPanel.activeTab === "terminal" ||
     projectToolsPanel.activeTab === "fileTree" ||
-    projectToolsPanel.activeTab === "gitReview"
+    projectToolsPanel.activeTab === "gitReview" ||
+    projectToolsPanel.activeTab === "tunnel"
       ? projectToolsPanel.activeTab
       : "fileTree";
   const projectToolsFileTree = (
@@ -1596,6 +1622,11 @@ export function normalizeCustomSettings(
   const projectToolsGitReview = (
     obj.projectToolsGitReview && typeof obj.projectToolsGitReview === "object"
       ? obj.projectToolsGitReview
+      : {}
+  ) as unknown;
+  const projectToolsTunnel = (
+    obj.projectToolsTunnel && typeof obj.projectToolsTunnel === "object"
+      ? obj.projectToolsTunnel
       : {}
   ) as unknown;
   return {
@@ -1619,6 +1650,7 @@ export function normalizeCustomSettings(
     },
     projectToolsFileTree: normalizeProjectToolsFileTreeSettings(projectToolsFileTree),
     projectToolsGitReview: normalizeProjectToolsGitReviewSettings(projectToolsGitReview),
+    projectToolsTunnel: normalizeProjectToolsTunnelSettings(projectToolsTunnel),
   };
 }
 
@@ -1660,6 +1692,7 @@ export function getDefaultSettings(): AppSettings {
       heartbeatInterval: 30,
       enableWebTerminal: false,
       enableWebGit: false,
+      enableWebTunnels: false,
     },
     memory: normalizeMemorySettings({}, customProviders),
     customSettings: normalizeCustomSettings({}, customProviders),
@@ -1799,6 +1832,10 @@ function hasProjectToolsGitReviewSessionState(state: ProjectToolsGitReviewSettin
   return state.openVersion > 0 || state.openProjectPathKeys.length > 0;
 }
 
+function hasProjectToolsTunnelSessionState(state: ProjectToolsTunnelSettings): boolean {
+  return state.openVersion > 0 || state.openProjectPathKeys.length > 0;
+}
+
 export function preserveProjectToolsSessionState(
   next: AppSettings,
   current: AppSettings,
@@ -1808,6 +1845,9 @@ export function preserveProjectToolsSessionState(
   );
   const currentGitReview = normalizeProjectToolsGitReviewSettings(
     current.customSettings.projectToolsGitReview,
+  );
+  const currentTunnel = normalizeProjectToolsTunnelSettings(
+    current.customSettings.projectToolsTunnel,
   );
 
   return normalizeSettings({
@@ -1820,6 +1860,9 @@ export function preserveProjectToolsSessionState(
       projectToolsGitReview: hasProjectToolsGitReviewSessionState(currentGitReview)
         ? currentGitReview
         : next.customSettings.projectToolsGitReview,
+      projectToolsTunnel: hasProjectToolsTunnelSessionState(currentTunnel)
+        ? currentTunnel
+        : next.customSettings.projectToolsTunnel,
     },
   });
 }
@@ -1881,15 +1924,22 @@ export function removeProjectToolsProjectState(
     (pathKey) => pathKey !== normalizedPathKey,
   );
   const removedOpenProjectPathKey = nextOpenProjectPathKeys.length !== openProjectPathKeys.length;
-  const gitReviewOpenProjectPathKeys =
-    prev.customSettings.projectToolsGitReview.openProjectPathKeys
-      .map((pathKey) => workspaceProjectPathKey(pathKey))
-      .filter(Boolean);
+  const gitReviewOpenProjectPathKeys = prev.customSettings.projectToolsGitReview.openProjectPathKeys
+    .map((pathKey) => workspaceProjectPathKey(pathKey))
+    .filter(Boolean);
   const nextGitReviewOpenProjectPathKeys = gitReviewOpenProjectPathKeys.filter(
     (pathKey) => pathKey !== normalizedPathKey,
   );
   const removedGitReviewOpenProjectPathKey =
     nextGitReviewOpenProjectPathKeys.length !== gitReviewOpenProjectPathKeys.length;
+  const tunnelOpenProjectPathKeys = prev.customSettings.projectToolsTunnel.openProjectPathKeys
+    .map((pathKey) => workspaceProjectPathKey(pathKey))
+    .filter(Boolean);
+  const nextTunnelOpenProjectPathKeys = tunnelOpenProjectPathKeys.filter(
+    (pathKey) => pathKey !== normalizedPathKey,
+  );
+  const removedTunnelOpenProjectPathKey =
+    nextTunnelOpenProjectPathKeys.length !== tunnelOpenProjectPathKeys.length;
   const hasFileTreeProjectState = Object.hasOwn(
     prev.customSettings.projectToolsFileTree.projects,
     normalizedPathKey,
@@ -1900,6 +1950,7 @@ export function removeProjectToolsProjectState(
     !hasTabOrder &&
     !removedOpenProjectPathKey &&
     !removedGitReviewOpenProjectPathKey &&
+    !removedTunnelOpenProjectPathKey &&
     !hasFileTreeProjectState
   ) {
     return prev;
@@ -1942,6 +1993,15 @@ export function removeProjectToolsProjectState(
       openVersion: removedGitReviewOpenProjectPathKey
         ? prev.customSettings.projectToolsGitReview.openVersion + 1
         : prev.customSettings.projectToolsGitReview.openVersion,
+    },
+    projectToolsTunnel: {
+      ...prev.customSettings.projectToolsTunnel,
+      openProjectPathKeys: removedTunnelOpenProjectPathKey
+        ? nextTunnelOpenProjectPathKeys.sort()
+        : prev.customSettings.projectToolsTunnel.openProjectPathKeys,
+      openVersion: removedTunnelOpenProjectPathKey
+        ? prev.customSettings.projectToolsTunnel.openVersion + 1
+        : prev.customSettings.projectToolsTunnel.openVersion,
     },
   });
 }
@@ -2030,6 +2090,44 @@ export function updateProjectToolsGitReviewOpen(
       ...prev.customSettings.projectToolsGitReview,
       openProjectPathKeys: Array.from(openProjectPathKeys).sort(),
       openVersion: prev.customSettings.projectToolsGitReview.openVersion + 1,
+    },
+  });
+}
+
+export function isProjectToolsTunnelOpen(
+  customSettings: CustomSettings,
+  projectPathKey: string,
+): boolean {
+  const normalizedPathKey = workspaceProjectPathKey(projectPathKey);
+  return (
+    normalizedPathKey !== "" &&
+    customSettings.projectToolsTunnel.openProjectPathKeys.includes(normalizedPathKey)
+  );
+}
+
+export function updateProjectToolsTunnelOpen(
+  prev: AppSettings,
+  projectPathKey: string,
+  open: boolean,
+): AppSettings {
+  const normalizedPathKey = workspaceProjectPathKey(projectPathKey);
+  if (!normalizedPathKey) return prev;
+  const openProjectPathKeys = new Set(
+    prev.customSettings.projectToolsTunnel.openProjectPathKeys
+      .map((pathKey) => workspaceProjectPathKey(pathKey))
+      .filter(Boolean),
+  );
+  if (openProjectPathKeys.has(normalizedPathKey) === open) return prev;
+  if (open) {
+    openProjectPathKeys.add(normalizedPathKey);
+  } else {
+    openProjectPathKeys.delete(normalizedPathKey);
+  }
+  return updateCustomSettings(prev, {
+    projectToolsTunnel: {
+      ...prev.customSettings.projectToolsTunnel,
+      openProjectPathKeys: Array.from(openProjectPathKeys).sort(),
+      openVersion: prev.customSettings.projectToolsTunnel.openVersion + 1,
     },
   });
 }

@@ -27,6 +27,12 @@ import { type NotifyItem, NotifyToast } from "../components/chat/NotifyToast";
 import { SharedHistoryManagerModal } from "../components/chat/SharedHistoryManagerModal";
 import { Ban, PanelRightClose, PanelRightOpen, Terminal, Upload } from "../components/icons";
 import { ProjectToolsPanel } from "../components/project-tools/ProjectToolsPanel";
+import type {
+  LocalTunnelClient,
+  TunnelCreateInput,
+  TunnelSummary,
+  TunnelUpdateInput,
+} from "../components/project-tools/LocalTunnelPanel";
 import type { WorkspaceCodeEditorOpenRequest } from "../components/workspace-editor/WorkspaceCodeEditorOverlay";
 import type { WorkspaceImagePreviewOpenRequest } from "../components/workspace-editor/WorkspaceImagePreviewOverlay";
 import { isWorkspaceImagePath } from "../components/workspace-editor/workspaceImagePreview";
@@ -112,6 +118,7 @@ import {
   isAgentExecutionMode,
   isProjectToolsFileTreeOpen,
   isProjectToolsGitReviewOpen,
+  isProjectToolsTunnelOpen,
   normalizeChatRuntimeControlsForProvider,
   type ProviderId,
   type SelectedModel,
@@ -125,6 +132,7 @@ import {
   updateProjectToolsFileTreeProjectState,
   updateProjectToolsFileTreeOpen,
   updateProjectToolsGitReviewOpen,
+  updateProjectToolsTunnelOpen,
   updateProjectToolsPanelTabOrder,
   updateChatRuntimeControlsForProvider,
   updateMcp,
@@ -700,6 +708,7 @@ export function ChatPage(props: ChatPageProps) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeView, setActiveView] = useState<"chat" | "skills-hub" | "mcp-hub">("chat");
   const [projectToolsPanelOpen, setProjectToolsPanelOpen] = useState(false);
+  const [tunnelRefreshToken, setTunnelRefreshToken] = useState(0);
   const previousProjectToolsFileTreeOpenRef = useRef(false);
   const [workspaceEditorMounted, setWorkspaceEditorMounted] = useState(false);
   const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
@@ -716,6 +725,17 @@ export function ChatPage(props: ChatPageProps) {
   const [projectTerminalSessions, setProjectTerminalSessions] = useState<TerminalSession[]>([]);
   const [remoteRuntimeStatus, setRemoteRuntimeStatus] = useState<GatewayRuntimeStatus>(() =>
     buildFallbackGatewayStatus(settings.remote),
+  );
+  const tauriTunnelClient = useMemo<LocalTunnelClient>(
+    () => ({
+      listTunnels: () => invoke<TunnelSummary[]>("gateway_tunnel_list"),
+      createTunnel: (input: TunnelCreateInput) =>
+        invoke<TunnelSummary>("gateway_tunnel_create", { input }),
+      updateTunnel: (input: TunnelUpdateInput) =>
+        invoke<TunnelSummary>("gateway_tunnel_update", { input }),
+      closeTunnel: (id: string) => invoke<TunnelSummary>("gateway_tunnel_close", { tunnel_id: id }),
+    }),
+    [],
   );
 
   const {
@@ -762,6 +782,15 @@ export function ChatPage(props: ChatPageProps) {
     remoteRuntimeStatus.online === true &&
     remoteRuntimeStatus.enabled === true &&
     remoteRuntimeStatus.configured === true;
+  const tunnelManagerToolAvailable =
+    isAgentMode && settings.remote.enableWebTunnels === true && canShareHistory;
+  const tunnelManagerToolDisabledMessage = !isAgentMode
+    ? t("chat.runtime.tunnelAgentModeRequired")
+    : !settings.remote.enableWebTunnels
+      ? t("chat.runtime.tunnelWebDisabled")
+      : !canShareHistory
+        ? t("chat.runtime.tunnelRemoteOffline")
+        : undefined;
 
   const refreshHistoryWorkdirs = useCallback(async () => {
     try {
@@ -1087,6 +1116,31 @@ export function ChatPage(props: ChatPageProps) {
     },
     [activateWorkspaceProject, checkWorkspaceProjectDirectory, setSettings],
   );
+
+  const openTunnelToolPanel = useCallback((projectPathKey?: string) => {
+    const targetProjectPathKey =
+      workspaceProjectPathKey(projectPathKey) || workspaceProjectPathKey(activeWorkspaceProjectPath);
+    if (!targetProjectPathKey) return;
+    setActiveView("chat");
+    setProjectToolsPanelOpen(true);
+    setSettings((prev) =>
+      updateProjectToolsTunnelOpen(
+        updateCustomSettings(prev, {
+          projectToolsPanel: {
+            ...prev.customSettings.projectToolsPanel,
+            activeTab: "tunnel",
+          },
+        }),
+        targetProjectPathKey,
+        true,
+      ),
+    );
+  }, [activeWorkspaceProjectPath, setSettings]);
+
+  const handleOpenTunnelToolPanel = useCallback(() => {
+    if (!tunnelManagerToolAvailable) return;
+    openTunnelToolPanel();
+  }, [openTunnelToolPanel, tunnelManagerToolAvailable]);
 
   const handleBrowseWorkspaceProjectInSystemFileManager = useCallback(
     async (project: WorkspaceProject) => {
@@ -1478,10 +1532,20 @@ export function ChatPage(props: ChatPageProps) {
     settings.customSettings,
     terminalProjectPathKey,
   );
+  const projectToolsTunnelOpen = isProjectToolsTunnelOpen(
+    settings.customSettings,
+    terminalProjectPathKey,
+  );
   const terminalDisabledMessage = !isAgentMode
     ? "Project tools require Agent project mode."
     : !terminalProjectPath
       ? "Select a project to use project tools."
+      : undefined;
+  const tunnelEnabled = settings.remote.enableWebTunnels === true && remoteRuntimeStatus.online;
+  const tunnelDisabledMessage = !settings.remote.enableWebTunnels
+    ? t("projectTools.tunnelWebDisabled")
+    : !remoteRuntimeStatus.online
+      ? t("projectTools.tunnelRemoteOffline")
       : undefined;
   const handleOpenWorkspaceFile = useCallback(
     (path: string) => {
@@ -2649,7 +2713,14 @@ export function ChatPage(props: ChatPageProps) {
       gatewayBridgeEvents.emitError(message, conversationId);
       throw new Error(message);
     }
-    if (runtimeEntry.isSending) return;
+    if (runtimeEntry.isSending) {
+      if (gatewayBridgeRequest) {
+        const message = "Conversation is already sending.";
+        gatewayBridgeEvents.emitError(message, conversationId);
+        gatewayBridgeEvents.close();
+      }
+      return;
+    }
     if (isImportingPastedTextRef.current && typeof overrides?.textOverride !== "string") {
       return;
     }
@@ -2767,7 +2838,14 @@ export function ChatPage(props: ChatPageProps) {
     }
 
     const userMessage = createUserMessageWithUploads(text, uploadedFiles, Date.now());
-    if (!userMessage) return;
+    if (!userMessage) {
+      if (gatewayBridgeRequest) {
+        const message = "Message is required.";
+        gatewayBridgeEvents.emitError(message, conversationId);
+        gatewayBridgeEvents.close();
+      }
+      return;
+    }
     const pendingUserMessage = userMessage;
     const content =
       typeof pendingUserMessage.content === "string" ? pendingUserMessage.content : "";
@@ -3546,6 +3624,14 @@ export function ChatPage(props: ChatPageProps) {
           },
           enabledMcpServerIds,
           selectableMcpServers,
+          remoteWebTunnelsEnabled: settings.remote.enableWebTunnels,
+          remoteGatewayOnline: canShareHistory,
+          onTunnelsChanged: (change) => {
+            setTunnelRefreshToken((current) => current + 1);
+            if (change.action === "create") {
+              openTunnelToolPanel(change.tunnel.projectPathKey);
+            }
+          },
           sessionId,
           conversationId,
           conversationCwd,
@@ -4441,6 +4527,8 @@ export function ChatPage(props: ChatPageProps) {
                 chatRuntimeControls={chatRuntimeControlsForCurrentProvider}
                 reasoningOptions={chatRuntimeReasoningOptions}
                 gitClient={tauriGitClient}
+                tunnelToolAvailable={tunnelManagerToolAvailable}
+                tunnelToolDisabledMessage={tunnelManagerToolDisabledMessage}
                 onGitChanged={(gitWorkdir) =>
                   window.dispatchEvent(
                     new CustomEvent("liveagent:git-changed", {
@@ -4448,6 +4536,7 @@ export function ChatPage(props: ChatPageProps) {
                     }),
                   )
                 }
+                onOpenTunnelToolPanel={handleOpenTunnelToolPanel}
                 onSend={handleSend}
                 onStop={handleStopSending}
                 onComposerBusyChange={handleComposerBusyChange}
@@ -4590,9 +4679,14 @@ export function ChatPage(props: ChatPageProps) {
           terminalProjectPathKey,
         )}
         gitReviewOpen={isProjectToolsGitReviewOpen(settings.customSettings, terminalProjectPathKey)}
+        tunnelOpen={projectToolsTunnelOpen}
         client={tauriTerminalClient}
         gitClient={tauriGitClient}
         gitWriteEnabled
+        tunnelClient={isAgentMode ? tauriTunnelClient : null}
+        tunnelEnabled={tunnelEnabled}
+        tunnelDisabledMessage={tunnelDisabledMessage}
+        tunnelRefreshToken={tunnelRefreshToken}
         onWidthChange={(nextWidth) =>
           setSettings((prev) =>
             updateCustomSettings(prev, {
@@ -4628,6 +4722,9 @@ export function ChatPage(props: ChatPageProps) {
         }
         onGitReviewOpenChange={(open) =>
           setSettings((prev) => updateProjectToolsGitReviewOpen(prev, terminalProjectPathKey, open))
+        }
+        onTunnelOpenChange={(open) =>
+          setSettings((prev) => updateProjectToolsTunnelOpen(prev, terminalProjectPathKey, open))
         }
         onSessionsChange={setProjectTerminalSessions}
         onInsertFileMention={(path, kind) => {

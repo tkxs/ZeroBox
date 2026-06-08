@@ -34,6 +34,7 @@ import { createShellTools } from "./shellTools";
 import type { SkillAccessPolicy } from "./skillAccessPolicy";
 import { createSkillTools } from "./skillTools";
 import { createTerminalTools } from "./terminalTools";
+import { createTunnelManagerTools } from "./tunnelManagerTools";
 
 export type BuiltinToolRegistry = {
   tools: BuiltinToolBundle["tools"];
@@ -166,6 +167,23 @@ type BuildBuiltinBaseToolRegistryParams = {
   onMcpLoadError?: (message: string) => void;
   mcpLoadFailureMode?: "continue" | "throw";
   memoryToolMode?: "rw" | "ro";
+  remoteWebTunnelsEnabled?: boolean;
+  remoteGatewayOnline?: boolean;
+  tunnelProjectPathKey?: string;
+  onTunnelsChanged?: (change: {
+    action: "create" | "close";
+    tunnel: {
+      id: string;
+      slug: string;
+      name: string;
+      targetUrl: string;
+      publicUrl: string;
+      createdAt: number;
+      expiresAt: number;
+      status: "active" | "expired" | "offline";
+      projectPathKey?: string;
+    };
+  }) => void | Promise<void>;
 };
 
 async function buildBaseBuiltinToolBundles(params: BuildBuiltinBaseToolRegistryParams) {
@@ -216,6 +234,15 @@ async function buildBaseBuiltinToolBundles(params: BuildBuiltinBaseToolRegistryP
     createMemoryTools({
       workdir: params.workdir,
       mode: params.memoryToolMode ?? "rw",
+    }),
+    createTunnelManagerTools({
+      enabled:
+        params.remoteWebTunnelsEnabled === true &&
+        params.remoteGatewayOnline === true &&
+        params.runtimeScope === "chat",
+      runtimeScope: params.runtimeScope,
+      projectPathKey: params.tunnelProjectPathKey,
+      onTunnelsChanged: params.onTunnelsChanged,
     }),
     ...(params.runtimeScope === "chat"
       ? [

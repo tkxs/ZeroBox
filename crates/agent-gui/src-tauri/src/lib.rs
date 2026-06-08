@@ -195,8 +195,14 @@ macro_rules! app_invoke_handler {
             commands::gateway::gateway_disconnect,
             commands::gateway::gateway_status,
             commands::gateway::gateway_send_chat_event,
+            commands::gateway::gateway_take_chat_request,
+            commands::gateway::gateway_take_pending_chat_requests,
             commands::gateway::gateway_publish_conversation_activity,
             commands::gateway::gateway_publish_settings_sync,
+            commands::gateway::gateway_tunnel_list,
+            commands::gateway::gateway_tunnel_create,
+            commands::gateway::gateway_tunnel_update,
+            commands::gateway::gateway_tunnel_close,
             services::proxy::proxy_get_server_info,
         ]
     };

@@ -50,7 +50,16 @@ import type { SubagentRuntimeManager } from "../../lib/chat/subagent/subagentRun
 import { createSubagentScheduler } from "../../lib/chat/subagent/subagentScheduler";
 import type { StreamDebugLogger } from "../../lib/debug/agentDebug";
 import { assistantMessageToText } from "../../lib/providers/llm";
-import type { AppSettings, ProviderId, SystemToolId } from "../../lib/settings";
+import {
+  type AppSettings,
+  type ProviderId,
+  type SystemToolId,
+  workspaceProjectPathKey,
+} from "../../lib/settings";
+import {
+  TUNNEL_MANAGER_CHANGED_EVENT,
+  type TunnelManagerChange,
+} from "../../lib/tools/tunnelManagerTools";
 import { buildBuiltinToolRegistry } from "../../lib/tools/builtinRegistry";
 import type { BuiltinToolExecutionContext } from "../../lib/tools/builtinTypes";
 import { createFileToolState } from "../../lib/tools/fileToolState";
@@ -276,6 +285,9 @@ type RunAgentConversationTurnParams = {
   updateMcpSettings?: (next: AppSettings["mcp"]) => void;
   enabledMcpServerIds: string[];
   selectableMcpServers: AppSettings["mcp"]["servers"];
+  remoteWebTunnelsEnabled?: boolean;
+  remoteGatewayOnline?: boolean;
+  onTunnelsChanged?: (change: TunnelManagerChange) => void;
   sessionId: string;
   conversationId: string;
   conversationCwd?: string;
@@ -357,6 +369,9 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
     updateMcpSettings,
     enabledMcpServerIds,
     selectableMcpServers,
+    remoteWebTunnelsEnabled,
+    remoteGatewayOnline,
+    onTunnelsChanged,
     sessionId,
     conversationId,
     conversationCwd,
@@ -474,6 +489,15 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
     updateMcpSettings,
     enabledMcpServerIds,
     selectableMcpServers,
+    remoteWebTunnelsEnabled,
+    remoteGatewayOnline,
+    tunnelProjectPathKey: workspaceProjectPathKey(effectiveWorkdir),
+    onTunnelsChanged: (change) => {
+      onTunnelsChanged?.(change);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(TUNNEL_MANAGER_CHANGED_EVENT));
+      }
+    },
     onMcpLoadError: (message) => {
       const warning = `MCP 工具加载失败，已跳过并继续对话：${message || "未知错误"}`;
       console.warn(warning);

@@ -1,15 +1,19 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::io;
 use std::sync::{Arc, Mutex, Once};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use futures_util::{SinkExt, StreamExt};
+use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::Url;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::Emitter;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tonic::metadata::MetadataValue;
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use uuid::Uuid;
@@ -42,6 +46,7 @@ const UI_ONLY_SETTINGS_SYNC_FIELDS: &[&str] = &[
 ];
 const GATEWAY_GRPC_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const GATEWAY_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+const TUNNEL_BODY_CHUNK_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,47 +62,98 @@ pub struct GatewayStatusSnapshot {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct GatewaySelectedModelEvent {
-    custom_provider_id: String,
-    model: String,
-    provider_type: String,
+pub struct GatewayTunnelCreateInput {
+    pub target_url: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub ttl_seconds: u32,
+    #[serde(default)]
+    pub project_path_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayTunnelUpdateInput {
+    pub id: String,
+    pub target_url: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub ttl_seconds: u32,
+    #[serde(default)]
+    pub project_path_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct GatewayChatRuntimeControlsEvent {
-    thinking_enabled: bool,
-    native_web_search_enabled: bool,
-    reasoning: String,
+pub struct GatewayTunnelSummary {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub target_url: String,
+    pub public_url: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub active_connections: u32,
+    pub status: String,
+    pub project_path_key: String,
+}
+
+#[derive(Debug, Clone)]
+struct LocalTunnelRecord {
+    summary: GatewayTunnelSummary,
+    target: TunnelTarget,
+}
+
+#[derive(Debug, Clone)]
+struct TunnelTarget {
+    url: Url,
+}
+
+type TunnelHttpBodySender = mpsc::Sender<Result<Vec<u8>, io::Error>>;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySelectedModelEvent {
+    pub custom_provider_id: String,
+    pub model: String,
+    pub provider_type: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct GatewayUploadedFileEvent {
-    relative_path: String,
-    absolute_path: String,
-    file_name: String,
-    kind: String,
-    size_bytes: i64,
+pub struct GatewayChatRuntimeControlsEvent {
+    pub thinking_enabled: bool,
+    pub native_web_search_enabled: bool,
+    pub reasoning: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct GatewayChatRequestEvent {
-    request_id: String,
-    conversation_id: String,
-    client_request_id: String,
-    message: String,
-    force_hydrate: bool,
-    selected_model: Option<GatewaySelectedModelEvent>,
-    runtime_controls: Option<GatewayChatRuntimeControlsEvent>,
-    execution_mode: String,
-    workdir: String,
-    selected_system_tools: Vec<String>,
-    uploaded_files: Vec<GatewayUploadedFileEvent>,
-    history_truncation_key: Option<String>,
+pub struct GatewayUploadedFileEvent {
+    pub relative_path: String,
+    pub absolute_path: String,
+    pub file_name: String,
+    pub kind: String,
+    pub size_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayChatRequestEvent {
+    pub request_id: String,
+    pub conversation_id: String,
+    pub client_request_id: String,
+    pub message: String,
+    pub force_hydrate: bool,
+    pub selected_model: Option<GatewaySelectedModelEvent>,
+    pub runtime_controls: Option<GatewayChatRuntimeControlsEvent>,
+    pub execution_mode: String,
+    pub workdir: String,
+    pub selected_system_tools: Vec<String>,
+    pub uploaded_files: Vec<GatewayUploadedFileEvent>,
+    pub history_truncation_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -155,6 +211,11 @@ pub struct GatewayController {
     outbound_tx: Mutex<Option<mpsc::Sender<proto::AgentEnvelope>>>,
     settings_snapshot: Mutex<Option<Value>>,
     pending_history_truncations: Mutex<HashMap<String, String>>,
+    pending_chat_requests: Mutex<Vec<GatewayChatRequestEvent>>,
+    tunnels: Mutex<HashMap<String, LocalTunnelRecord>>,
+    tunnel_http_streams: Mutex<HashMap<String, TunnelHttpBodySender>>,
+    tunnel_ws_streams: Mutex<HashMap<String, mpsc::Sender<proto::TunnelFrame>>>,
+    pending_tunnel_controls: Mutex<HashMap<String, oneshot::Sender<proto::TunnelControlResponse>>>,
     terminal_forwarder_once: Once,
 }
 
@@ -188,6 +249,11 @@ impl GatewayController {
             outbound_tx: Mutex::new(None),
             settings_snapshot: Mutex::new(None),
             pending_history_truncations: Mutex::new(HashMap::new()),
+            pending_chat_requests: Mutex::new(Vec::new()),
+            tunnels: Mutex::new(HashMap::new()),
+            tunnel_http_streams: Mutex::new(HashMap::new()),
+            tunnel_ws_streams: Mutex::new(HashMap::new()),
+            pending_tunnel_controls: Mutex::new(HashMap::new()),
             terminal_forwarder_once: Once::new(),
         }
     }
@@ -353,6 +419,132 @@ impl GatewayController {
         self.send_agent_envelope(envelope).await
     }
 
+    pub async fn tunnel_list(&self) -> Result<Vec<GatewayTunnelSummary>, String> {
+        if !self.status().online {
+            return self.local_tunnel_summaries("offline");
+        }
+        let response = self
+            .send_tunnel_control_request(proto::TunnelControlRequest {
+                action: "list".to_string(),
+                ..Default::default()
+            })
+            .await?;
+        if !response.error_message.trim().is_empty() {
+            return Err(response.error_message);
+        }
+        let summaries = response
+            .tunnels
+            .into_iter()
+            .map(gateway_tunnel_summary_from_proto)
+            .collect::<Vec<_>>();
+        self.merge_tunnel_summaries(&summaries)?;
+        Ok(summaries)
+    }
+
+    pub async fn tunnel_create(
+        &self,
+        input: GatewayTunnelCreateInput,
+    ) -> Result<GatewayTunnelSummary, String> {
+        if !self.status().online {
+            return Err("gateway outbound stream is offline".to_string());
+        }
+        let target = validate_tunnel_target_url(&input.target_url)?;
+        let target_url = target.url.to_string();
+        let public_base_url = self.config_tx.borrow().gateway_url.clone();
+        let response = self
+            .send_tunnel_control_request(proto::TunnelControlRequest {
+                action: "create".to_string(),
+                target_url: target_url.clone(),
+                name: input.name.unwrap_or_default().trim().to_string(),
+                ttl_seconds: normalize_tunnel_ttl(input.ttl_seconds)?,
+                public_base_url,
+                project_path_key: input
+                    .project_path_key
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+                ..Default::default()
+            })
+            .await?;
+        if !response.error_message.trim().is_empty() {
+            return Err(response.error_message);
+        }
+        let summary = response
+            .tunnel
+            .map(gateway_tunnel_summary_from_proto)
+            .ok_or_else(|| "gateway tunnel create returned no tunnel".to_string())?;
+        self.store_local_tunnel(summary.clone(), target)?;
+        Ok(summary)
+    }
+
+    pub async fn tunnel_update(
+        &self,
+        input: GatewayTunnelUpdateInput,
+    ) -> Result<GatewayTunnelSummary, String> {
+        if !self.status().online {
+            return Err("gateway outbound stream is offline".to_string());
+        }
+        let tunnel_id = input.id.trim().to_string();
+        if tunnel_id.is_empty() {
+            return Err("tunnel id is required".to_string());
+        }
+        let target = validate_tunnel_target_url(&input.target_url)?;
+        let ttl_seconds = normalize_tunnel_ttl(input.ttl_seconds)?;
+        let expires_at = tunnel_expires_at(ttl_seconds);
+        let response = self
+            .send_tunnel_control_request(proto::TunnelControlRequest {
+                action: "update".to_string(),
+                tunnel_id,
+                target_url: target.url.to_string(),
+                name: input.name.unwrap_or_default().trim().to_string(),
+                ttl_seconds,
+                expires_at,
+                project_path_key: input
+                    .project_path_key
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+                ..Default::default()
+            })
+            .await?;
+        if !response.error_message.trim().is_empty() {
+            return Err(response.error_message);
+        }
+        let summary = response
+            .tunnel
+            .map(gateway_tunnel_summary_from_proto)
+            .ok_or_else(|| "gateway tunnel update returned no tunnel".to_string())?;
+        self.store_local_tunnel(summary.clone(), target)?;
+        Ok(summary)
+    }
+
+    pub async fn tunnel_close(&self, tunnel_id: String) -> Result<GatewayTunnelSummary, String> {
+        let tunnel_id = tunnel_id.trim().to_string();
+        if tunnel_id.is_empty() {
+            return Err("tunnel id is required".to_string());
+        }
+        if !self.status().online {
+            let local = self.remove_local_tunnel(&tunnel_id)?;
+            return Ok(local.summary);
+        }
+        let response = self
+            .send_tunnel_control_request(proto::TunnelControlRequest {
+                action: "close".to_string(),
+                tunnel_id: tunnel_id.clone(),
+                ..Default::default()
+            })
+            .await?;
+        if !response.error_message.trim().is_empty() {
+            return Err(response.error_message);
+        }
+        let local = self.remove_local_tunnel(&tunnel_id).ok();
+        Ok(response
+            .tunnel
+            .map(gateway_tunnel_summary_from_proto)
+            .or_else(|| local.map(|record| record.summary))
+            .ok_or_else(|| "gateway tunnel close returned no tunnel".to_string())?)
+    }
+
     async fn run(self: Arc<Self>, mut config_rx: watch::Receiver<RemoteSettingsPayload>) {
         loop {
             let config = config_rx.borrow().clone();
@@ -410,7 +602,7 @@ impl GatewayController {
     }
 
     async fn connect_and_serve(
-        &self,
+        self: &Arc<Self>,
         config: RemoteSettingsPayload,
         config_rx: &mut watch::Receiver<RemoteSettingsPayload>,
     ) -> Result<(), String> {
@@ -488,6 +680,9 @@ impl GatewayController {
         if let Err(error) = self.publish_current_terminal_sessions().await {
             eprintln!("publish gateway terminal sessions failed: {error}");
         }
+        if let Err(error) = self.publish_current_tunnels().await {
+            eprintln!("publish gateway tunnels failed: {error}");
+        }
 
         let timeout_seconds = i64::try_from(config.heartbeat_interval.max(5)).unwrap_or(30) * 3;
 
@@ -521,7 +716,7 @@ impl GatewayController {
     }
 
     async fn handle_gateway_envelope(
-        &self,
+        self: &Arc<Self>,
         envelope: proto::GatewayEnvelope,
     ) -> Result<(), String> {
         let request_id = envelope.request_id.clone();
@@ -536,6 +731,16 @@ impl GatewayController {
                     })),
                 })
                 .await
+            }
+            Some(proto::gateway_envelope::Payload::TunnelControlResp(response)) => {
+                self.resolve_pending_tunnel_control(request_id, response)
+            }
+            Some(proto::gateway_envelope::Payload::TunnelControl(request)) => {
+                self.handle_tunnel_control_request(request_id, request)
+                    .await
+            }
+            Some(proto::gateway_envelope::Payload::TunnelFrame(frame)) => {
+                self.handle_tunnel_frame(frame).await
             }
             Some(proto::gateway_envelope::Payload::ChatRequest(request)) => {
                 let proto::ChatRequest {
@@ -570,33 +775,32 @@ impl GatewayController {
                         native_web_search_enabled: runtime_controls.native_web_search_enabled,
                         reasoning: runtime_controls.reasoning,
                     });
+                let event_payload = GatewayChatRequestEvent {
+                    request_id,
+                    conversation_id,
+                    client_request_id,
+                    message,
+                    force_hydrate,
+                    selected_model,
+                    runtime_controls,
+                    execution_mode,
+                    workdir,
+                    selected_system_tools,
+                    uploaded_files: uploaded_files
+                        .into_iter()
+                        .map(|file| GatewayUploadedFileEvent {
+                            relative_path: file.relative_path,
+                            absolute_path: file.absolute_path,
+                            file_name: file.file_name,
+                            kind: file.kind,
+                            size_bytes: file.size_bytes,
+                        })
+                        .collect(),
+                    history_truncation_key,
+                };
+                self.queue_pending_chat_request(event_payload.clone())?;
                 self.app_handle
-                    .emit(
-                        "gateway:chat-request",
-                        GatewayChatRequestEvent {
-                            request_id,
-                            conversation_id,
-                            client_request_id,
-                            message,
-                            force_hydrate,
-                            selected_model,
-                            runtime_controls,
-                            execution_mode,
-                            workdir,
-                            selected_system_tools,
-                            uploaded_files: uploaded_files
-                                .into_iter()
-                                .map(|file| GatewayUploadedFileEvent {
-                                    relative_path: file.relative_path,
-                                    absolute_path: file.absolute_path,
-                                    file_name: file.file_name,
-                                    kind: file.kind,
-                                    size_bytes: file.size_bytes,
-                                })
-                                .collect(),
-                            history_truncation_key,
-                        },
-                    )
+                    .emit("gateway:chat-request", event_payload)
                     .map_err(|e| format!("emit gateway chat request failed: {e}"))
             }
             Some(proto::gateway_envelope::Payload::CancelChat(request)) => self
@@ -1449,6 +1653,34 @@ impl GatewayController {
         Ok(())
     }
 
+    async fn publish_current_tunnels(&self) -> Result<(), String> {
+        let tunnels = self.local_tunnel_summaries("")?;
+        for tunnel in tunnels {
+            if tunnel.status == "expired" {
+                continue;
+            }
+            self.send_agent_envelope(proto::AgentEnvelope {
+                request_id: format!("tunnel-resume-{}", tunnel.id),
+                timestamp: now_unix_seconds(),
+                payload: Some(proto::agent_envelope::Payload::TunnelControl(
+                    proto::TunnelControlRequest {
+                        action: "resume".to_string(),
+                        tunnel_id: tunnel.id,
+                        slug: tunnel.slug,
+                        target_url: tunnel.target_url,
+                        public_url: tunnel.public_url,
+                        name: tunnel.name,
+                        expires_at: tunnel.expires_at,
+                        project_path_key: tunnel.project_path_key,
+                        ..Default::default()
+                    },
+                )),
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
     pub async fn refresh_settings_sync_from_db(&self) -> Result<Value, String> {
         let snapshot = self.current_settings_snapshot().await?;
         self.app_handle
@@ -1456,6 +1688,32 @@ impl GatewayController {
             .map_err(|e| format!("emit gateway settings sync failed: {e}"))?;
         self.publish_settings_sync(snapshot.clone()).await?;
         Ok(snapshot)
+    }
+
+    pub fn take_pending_chat_request(
+        &self,
+        request_id: String,
+    ) -> Result<Option<GatewayChatRequestEvent>, String> {
+        let request_id = request_id.trim();
+        if request_id.is_empty() {
+            return Ok(None);
+        }
+        let mut pending = self
+            .pending_chat_requests
+            .lock()
+            .map_err(|_| "gateway pending chat request lock poisoned".to_string())?;
+        let index = pending
+            .iter()
+            .position(|request| request.request_id.trim() == request_id);
+        Ok(index.map(|index| pending.remove(index)))
+    }
+
+    pub fn take_pending_chat_requests(&self) -> Result<Vec<GatewayChatRequestEvent>, String> {
+        let mut pending = self
+            .pending_chat_requests
+            .lock()
+            .map_err(|_| "gateway pending chat request lock poisoned".to_string())?;
+        Ok(std::mem::take(&mut *pending))
     }
 
     async fn current_settings_snapshot(&self) -> Result<Value, String> {
@@ -1486,6 +1744,994 @@ impl GatewayController {
         *guard = Some(snapshot.clone());
         Ok(snapshot)
     }
+
+    fn queue_pending_chat_request(&self, request: GatewayChatRequestEvent) -> Result<(), String> {
+        let request_id = request.request_id.trim();
+        if request_id.is_empty() {
+            return Ok(());
+        }
+        let mut pending = self
+            .pending_chat_requests
+            .lock()
+            .map_err(|_| "gateway pending chat request lock poisoned".to_string())?;
+        pending.retain(|item| item.request_id.trim() != request_id);
+        pending.push(request);
+        Ok(())
+    }
+
+    async fn send_tunnel_control_request(
+        &self,
+        request: proto::TunnelControlRequest,
+    ) -> Result<proto::TunnelControlResponse, String> {
+        let request_id = format!("tunnel-control-{}", Uuid::new_v4());
+        let (tx, rx) = oneshot::channel();
+        self.pending_tunnel_controls
+            .lock()
+            .map_err(|_| "gateway tunnel control lock poisoned".to_string())?
+            .insert(request_id.clone(), tx);
+
+        let send_result = self
+            .send_agent_envelope(proto::AgentEnvelope {
+                request_id: request_id.clone(),
+                timestamp: now_unix_seconds(),
+                payload: Some(proto::agent_envelope::Payload::TunnelControl(request)),
+            })
+            .await;
+        if let Err(error) = send_result {
+            let _ = self
+                .pending_tunnel_controls
+                .lock()
+                .map(|mut pending| pending.remove(&request_id));
+            return Err(error);
+        }
+
+        match tokio::time::timeout(Duration::from_secs(30), rx).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_)) => Err("gateway tunnel control response dropped".to_string()),
+            Err(_) => {
+                let _ = self
+                    .pending_tunnel_controls
+                    .lock()
+                    .map(|mut pending| pending.remove(&request_id));
+                Err("gateway tunnel control timed out".to_string())
+            }
+        }
+    }
+
+    fn resolve_pending_tunnel_control(
+        &self,
+        request_id: String,
+        response: proto::TunnelControlResponse,
+    ) -> Result<(), String> {
+        let sender = self
+            .pending_tunnel_controls
+            .lock()
+            .map_err(|_| "gateway tunnel control lock poisoned".to_string())?
+            .remove(request_id.trim());
+        if let Some(sender) = sender {
+            let _ = sender.send(response);
+        }
+        Ok(())
+    }
+
+    async fn handle_tunnel_control_request(
+        self: &Arc<Self>,
+        request_id: String,
+        request: proto::TunnelControlRequest,
+    ) -> Result<(), String> {
+        let response = self.handle_tunnel_control_request_inner(request);
+        self.send_agent_envelope(proto::AgentEnvelope {
+            request_id,
+            timestamp: now_unix_seconds(),
+            payload: Some(proto::agent_envelope::Payload::TunnelControlResp(response)),
+        })
+        .await
+    }
+
+    fn handle_tunnel_control_request_inner(
+        &self,
+        request: proto::TunnelControlRequest,
+    ) -> proto::TunnelControlResponse {
+        let action = request.action.trim().to_ascii_lowercase();
+        match action.as_str() {
+            "list" => proto::TunnelControlResponse {
+                action,
+                tunnels: self
+                    .local_tunnel_summaries("active")
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(proto_tunnel_summary_from_gateway)
+                    .collect(),
+                tunnel: None,
+                error_code: String::new(),
+                error_message: String::new(),
+            },
+            "create" => match self.create_local_tunnel_from_control(&request) {
+                Ok(summary) => proto::TunnelControlResponse {
+                    action,
+                    tunnels: self
+                        .local_tunnel_summaries("active")
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(proto_tunnel_summary_from_gateway)
+                        .collect(),
+                    tunnel: Some(proto_tunnel_summary_from_gateway(summary)),
+                    error_code: String::new(),
+                    error_message: String::new(),
+                },
+                Err(error) => tunnel_control_error_response(action, "invalid_target", error),
+            },
+            "update" => match self.update_local_tunnel_from_control(&request) {
+                Ok(summary) => proto::TunnelControlResponse {
+                    action,
+                    tunnels: self
+                        .local_tunnel_summaries("active")
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(proto_tunnel_summary_from_gateway)
+                        .collect(),
+                    tunnel: Some(proto_tunnel_summary_from_gateway(summary)),
+                    error_code: String::new(),
+                    error_message: String::new(),
+                },
+                Err(error) => tunnel_control_error_response(action, "not_found", error),
+            },
+            "close" => {
+                let identifier = if request.tunnel_id.trim().is_empty() {
+                    request.slug.trim().to_string()
+                } else {
+                    request.tunnel_id.trim().to_string()
+                };
+                match self.remove_local_tunnel(&identifier) {
+                    Ok(record) => proto::TunnelControlResponse {
+                        action,
+                        tunnels: self
+                            .local_tunnel_summaries("active")
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(proto_tunnel_summary_from_gateway)
+                            .collect(),
+                        tunnel: Some(proto_tunnel_summary_from_gateway(record.summary)),
+                        error_code: String::new(),
+                        error_message: String::new(),
+                    },
+                    Err(error) => tunnel_control_error_response(action, "not_found", error),
+                }
+            }
+            "resume" => match self.resume_local_tunnel_from_control(&request) {
+                Ok(summary) => proto::TunnelControlResponse {
+                    action,
+                    tunnels: self
+                        .local_tunnel_summaries("active")
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(proto_tunnel_summary_from_gateway)
+                        .collect(),
+                    tunnel: Some(proto_tunnel_summary_from_gateway(summary)),
+                    error_code: String::new(),
+                    error_message: String::new(),
+                },
+                Err(error) => tunnel_control_error_response(action, "not_found", error),
+            },
+            _ => tunnel_control_error_response(
+                action,
+                "invalid_action",
+                "unsupported tunnel action".to_string(),
+            ),
+        }
+    }
+
+    async fn handle_tunnel_frame(
+        self: &Arc<Self>,
+        frame: proto::TunnelFrame,
+    ) -> Result<(), String> {
+        match frame.kind() {
+            proto::TunnelFrameKind::HttpRequestStart => {
+                let stream_id = frame.stream_id.trim().to_string();
+                let tunnel_id = frame.tunnel_id.clone();
+                let slug = frame.slug.clone();
+                if let Err(error) = self.start_tunnel_http_stream(frame).await {
+                    self.spawn_tunnel_frame_error(stream_id, tunnel_id, slug, error);
+                }
+                Ok(())
+            }
+            proto::TunnelFrameKind::HttpRequestBody => {
+                let stream_id = frame.stream_id.trim().to_string();
+                let tunnel_id = frame.tunnel_id.clone();
+                let slug = frame.slug.clone();
+                let sender = self
+                    .tunnel_http_streams
+                    .lock()
+                    .map_err(|_| "gateway tunnel http stream lock poisoned".to_string())?
+                    .get(&stream_id)
+                    .cloned();
+                if let Some(sender) = sender {
+                    match sender.try_send(Ok(frame.body)) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            self.remove_tunnel_http_stream(&stream_id);
+                            self.spawn_tunnel_frame_error(
+                                stream_id,
+                                tunnel_id,
+                                slug,
+                                "local tunnel request body queue is full".to_string(),
+                            );
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {}
+                    }
+                }
+                Ok(())
+            }
+            proto::TunnelFrameKind::HttpRequestEnd => {
+                self.remove_tunnel_http_stream(&frame.stream_id);
+                Ok(())
+            }
+            proto::TunnelFrameKind::WsOpen => {
+                let stream_id = frame.stream_id.trim().to_string();
+                let tunnel_id = frame.tunnel_id.clone();
+                let slug = frame.slug.clone();
+                if let Err(error) = self.start_tunnel_ws_stream(frame).await {
+                    self.spawn_tunnel_frame_error(stream_id, tunnel_id, slug, error);
+                }
+                Ok(())
+            }
+            proto::TunnelFrameKind::WsFrame
+            | proto::TunnelFrameKind::WsClose
+            | proto::TunnelFrameKind::Cancel => {
+                let stream_id = frame.stream_id.trim().to_string();
+                let tunnel_id = frame.tunnel_id.clone();
+                let slug = frame.slug.clone();
+                let terminal_frame = matches!(
+                    frame.kind(),
+                    proto::TunnelFrameKind::WsClose | proto::TunnelFrameKind::Cancel
+                );
+                if matches!(frame.kind(), proto::TunnelFrameKind::Cancel) {
+                    self.remove_tunnel_http_stream(&stream_id);
+                }
+                let sender = self
+                    .tunnel_ws_streams
+                    .lock()
+                    .map_err(|_| "gateway tunnel websocket stream lock poisoned".to_string())?
+                    .get(&stream_id)
+                    .cloned();
+                if let Some(sender) = sender {
+                    match sender.try_send(frame) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            self.remove_tunnel_ws_stream(&stream_id);
+                            if !terminal_frame {
+                                self.spawn_tunnel_frame_error(
+                                    stream_id,
+                                    tunnel_id,
+                                    slug,
+                                    "local tunnel websocket queue is full".to_string(),
+                                );
+                            }
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {}
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn spawn_tunnel_frame_error(
+        self: &Arc<Self>,
+        stream_id: String,
+        tunnel_id: String,
+        slug: String,
+        error: String,
+    ) {
+        let controller = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            let _ = send_tunnel_frame(
+                &controller,
+                proto::TunnelFrame {
+                    stream_id,
+                    tunnel_id,
+                    slug,
+                    kind: proto::TunnelFrameKind::Error as i32,
+                    error,
+                    ..Default::default()
+                },
+            )
+            .await;
+        });
+    }
+
+    async fn start_tunnel_http_stream(
+        self: &Arc<Self>,
+        frame: proto::TunnelFrame,
+    ) -> Result<(), String> {
+        let record = self.find_local_tunnel(&frame.tunnel_id, &frame.slug)?;
+        let upstream_url = build_tunnel_upstream_url(&record.target.url, &frame.path)?;
+        let stream_id = frame.stream_id.trim().to_string();
+        let tunnel_id = record.summary.id.clone();
+        let slug = record.summary.slug.clone();
+        let method = frame.method.trim().to_string();
+        let headers = frame.headers.clone();
+        let (body_tx, body_rx) = mpsc::channel::<Result<Vec<u8>, io::Error>>(64);
+        self.tunnel_http_streams
+            .lock()
+            .map_err(|_| "gateway tunnel http stream lock poisoned".to_string())?
+            .insert(stream_id.clone(), body_tx);
+
+        let controller = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            run_tunnel_http_request(
+                controller,
+                stream_id,
+                tunnel_id,
+                slug,
+                method,
+                upstream_url,
+                headers,
+                body_rx,
+            )
+            .await;
+        });
+        Ok(())
+    }
+
+    async fn start_tunnel_ws_stream(
+        self: &Arc<Self>,
+        frame: proto::TunnelFrame,
+    ) -> Result<(), String> {
+        let record = self.find_local_tunnel(&frame.tunnel_id, &frame.slug)?;
+        let upstream_url = build_tunnel_upstream_ws_url(&record.target.url, &frame.path)?;
+        let stream_id = frame.stream_id.trim().to_string();
+        let tunnel_id = record.summary.id.clone();
+        let slug = record.summary.slug.clone();
+        let (gateway_tx, gateway_rx) = mpsc::channel::<proto::TunnelFrame>(128);
+        self.tunnel_ws_streams
+            .lock()
+            .map_err(|_| "gateway tunnel websocket stream lock poisoned".to_string())?
+            .insert(stream_id.clone(), gateway_tx);
+
+        let controller = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            run_tunnel_websocket(
+                controller,
+                stream_id,
+                tunnel_id,
+                slug,
+                upstream_url,
+                gateway_rx,
+            )
+            .await;
+        });
+        Ok(())
+    }
+
+    fn create_local_tunnel_from_control(
+        &self,
+        request: &proto::TunnelControlRequest,
+    ) -> Result<GatewayTunnelSummary, String> {
+        if request.tunnel_id.trim().is_empty() || request.slug.trim().is_empty() {
+            return Err("tunnel id and slug are required".to_string());
+        }
+        let target = validate_tunnel_target_url(&request.target_url)?;
+        let summary = GatewayTunnelSummary {
+            id: request.tunnel_id.trim().to_string(),
+            slug: request.slug.trim().to_string(),
+            name: request.name.trim().to_string(),
+            target_url: target.url.to_string(),
+            public_url: request.public_url.trim().to_string(),
+            created_at: now_unix_seconds(),
+            expires_at: request.expires_at,
+            active_connections: 0,
+            status: "active".to_string(),
+            project_path_key: request.project_path_key.trim().to_string(),
+        };
+        self.store_local_tunnel(summary.clone(), target)?;
+        Ok(summary)
+    }
+
+    fn resume_local_tunnel_from_control(
+        &self,
+        request: &proto::TunnelControlRequest,
+    ) -> Result<GatewayTunnelSummary, String> {
+        let identifier = if request.tunnel_id.trim().is_empty() {
+            request.slug.trim()
+        } else {
+            request.tunnel_id.trim()
+        };
+        let mut guard = self
+            .tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?;
+        let record = guard
+            .values_mut()
+            .find(|record| record.summary.id == identifier || record.summary.slug == identifier)
+            .ok_or_else(|| "tunnel not found".to_string())?;
+        if !request.target_url.trim().is_empty() {
+            let target = validate_tunnel_target_url(&request.target_url)?;
+            record.summary.target_url = target.url.to_string();
+            record.target = target;
+        }
+        if !request.public_url.trim().is_empty() {
+            record.summary.public_url = request.public_url.trim().to_string();
+        }
+        if request.expires_at > 0 {
+            record.summary.expires_at = request.expires_at;
+        }
+        if !request.project_path_key.trim().is_empty() {
+            record.summary.project_path_key = request.project_path_key.trim().to_string();
+        }
+        record.summary.status = "active".to_string();
+        Ok(record.summary.clone())
+    }
+
+    fn update_local_tunnel_from_control(
+        &self,
+        request: &proto::TunnelControlRequest,
+    ) -> Result<GatewayTunnelSummary, String> {
+        let identifier = if request.tunnel_id.trim().is_empty() {
+            request.slug.trim()
+        } else {
+            request.tunnel_id.trim()
+        };
+        if identifier.is_empty() {
+            return Err("tunnel id is required".to_string());
+        }
+        let target = validate_tunnel_target_url(&request.target_url)?;
+        let ttl_seconds = normalize_tunnel_ttl(request.ttl_seconds)?;
+        let expires_at = if request.expires_at > 0 {
+            request.expires_at
+        } else {
+            tunnel_expires_at(ttl_seconds)
+        };
+        let mut guard = self
+            .tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?;
+        let record = guard
+            .values_mut()
+            .find(|record| record.summary.id == identifier || record.summary.slug == identifier)
+            .ok_or_else(|| "tunnel not found".to_string())?;
+        record.summary.target_url = target.url.to_string();
+        record.target = target;
+        record.summary.name = request.name.trim().to_string();
+        record.summary.expires_at = expires_at;
+        if !request.public_url.trim().is_empty() {
+            record.summary.public_url = request.public_url.trim().to_string();
+        }
+        if !request.project_path_key.trim().is_empty() {
+            record.summary.project_path_key = request.project_path_key.trim().to_string();
+        }
+        record.summary.status = "active".to_string();
+        Ok(record.summary.clone())
+    }
+
+    fn store_local_tunnel(
+        &self,
+        summary: GatewayTunnelSummary,
+        target: TunnelTarget,
+    ) -> Result<(), String> {
+        if summary.id.trim().is_empty() {
+            return Err("tunnel id is required".to_string());
+        }
+        self.tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?
+            .insert(summary.id.clone(), LocalTunnelRecord { summary, target });
+        Ok(())
+    }
+
+    fn merge_tunnel_summaries(&self, summaries: &[GatewayTunnelSummary]) -> Result<(), String> {
+        let mut guard = self
+            .tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?;
+        for summary in summaries {
+            if let Some(record) = guard.get_mut(&summary.id) {
+                record.summary = summary.clone();
+            }
+        }
+        Ok(())
+    }
+
+    fn local_tunnel_summaries(
+        &self,
+        offline_status: &str,
+    ) -> Result<Vec<GatewayTunnelSummary>, String> {
+        let now = now_unix_seconds();
+        let mut summaries = self
+            .tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?
+            .values()
+            .map(|record| {
+                let mut summary = record.summary.clone();
+                if summary.expires_at > 0 && summary.expires_at <= now {
+                    summary.status = "expired".to_string();
+                } else if !offline_status.trim().is_empty() {
+                    summary.status = offline_status.trim().to_string();
+                }
+                summary
+            })
+            .collect::<Vec<_>>();
+        summaries.sort_by_key(|summary| summary.created_at);
+        Ok(summaries)
+    }
+
+    fn remove_local_tunnel(&self, identifier: &str) -> Result<LocalTunnelRecord, String> {
+        let identifier = identifier.trim();
+        if identifier.is_empty() {
+            return Err("tunnel id is required".to_string());
+        }
+        let mut guard = self
+            .tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?;
+        if let Some(record) = guard.remove(identifier) {
+            return Ok(record);
+        }
+        let matched_id = guard
+            .iter()
+            .find_map(|(id, record)| (record.summary.slug == identifier).then(|| id.clone()))
+            .ok_or_else(|| "tunnel not found".to_string())?;
+        guard
+            .remove(&matched_id)
+            .ok_or_else(|| "tunnel not found".to_string())
+    }
+
+    fn find_local_tunnel(&self, tunnel_id: &str, slug: &str) -> Result<LocalTunnelRecord, String> {
+        let tunnel_id = tunnel_id.trim();
+        let slug = slug.trim();
+        let now = now_unix_seconds();
+        let guard = self
+            .tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?;
+        let record = if !tunnel_id.is_empty() {
+            guard.get(tunnel_id)
+        } else {
+            guard.values().find(|record| record.summary.slug == slug)
+        }
+        .ok_or_else(|| "tunnel not found".to_string())?;
+        if record.summary.expires_at > 0 && record.summary.expires_at <= now {
+            return Err("tunnel expired".to_string());
+        }
+        Ok(record.clone())
+    }
+
+    fn remove_tunnel_http_stream(&self, stream_id: &str) {
+        if let Ok(mut streams) = self.tunnel_http_streams.lock() {
+            streams.remove(stream_id.trim());
+        }
+    }
+
+    fn remove_tunnel_ws_stream(&self, stream_id: &str) {
+        if let Ok(mut streams) = self.tunnel_ws_streams.lock() {
+            streams.remove(stream_id.trim());
+        }
+    }
+}
+
+fn normalize_tunnel_ttl(input: u32) -> Result<u32, String> {
+    match input {
+        0 | 900 | 3600 | 14400 => Ok(input),
+        _ => Err("ttlSeconds must be one of 0, 900, 3600, or 14400".to_string()),
+    }
+}
+
+fn tunnel_expires_at(ttl_seconds: u32) -> i64 {
+    if ttl_seconds == 0 {
+        return 0;
+    }
+    now_unix_seconds() + i64::from(ttl_seconds)
+}
+
+fn validate_tunnel_target_url(input: &str) -> Result<TunnelTarget, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("targetUrl is required".to_string());
+    }
+    let mut url = Url::parse(trimmed).map_err(|e| format!("invalid targetUrl: {e}"))?;
+    if url.scheme() != "http" {
+        return Err("targetUrl must use http".to_string());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("targetUrl must not include credentials".to_string());
+    }
+    if url.fragment().is_some() {
+        return Err("targetUrl must not include a fragment".to_string());
+    }
+    let host = url
+        .host_str()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .ok_or_else(|| "targetUrl host is required".to_string())?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+        return Err("targetUrl host must be localhost, 127.0.0.1, or ::1".to_string());
+    }
+    url.set_fragment(None);
+    Ok(TunnelTarget { url })
+}
+
+fn gateway_tunnel_summary_from_proto(summary: proto::TunnelSummary) -> GatewayTunnelSummary {
+    GatewayTunnelSummary {
+        id: summary.id,
+        slug: summary.slug,
+        name: summary.name,
+        target_url: summary.target_url,
+        public_url: summary.public_url,
+        created_at: summary.created_at,
+        expires_at: summary.expires_at,
+        active_connections: summary.active_connections,
+        status: summary.status,
+        project_path_key: summary.project_path_key,
+    }
+}
+
+fn proto_tunnel_summary_from_gateway(summary: GatewayTunnelSummary) -> proto::TunnelSummary {
+    proto::TunnelSummary {
+        id: summary.id,
+        slug: summary.slug,
+        name: summary.name,
+        target_url: summary.target_url,
+        public_url: summary.public_url,
+        created_at: summary.created_at,
+        expires_at: summary.expires_at,
+        active_connections: summary.active_connections,
+        status: summary.status,
+        project_path_key: summary.project_path_key,
+    }
+}
+
+fn tunnel_control_error_response(
+    action: String,
+    code: &str,
+    message: String,
+) -> proto::TunnelControlResponse {
+    proto::TunnelControlResponse {
+        action,
+        tunnels: Vec::new(),
+        tunnel: None,
+        error_code: code.to_string(),
+        error_message: message,
+    }
+}
+
+fn split_tunnel_path_and_query(input: &str) -> (&str, Option<&str>) {
+    let trimmed = input.trim();
+    match trimmed.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (trimmed, None),
+    }
+}
+
+fn normalize_tunnel_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return "/".to_string();
+    }
+    if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
+fn join_tunnel_paths(base_path: &str, rest_path: &str) -> String {
+    let base = normalize_tunnel_path(base_path);
+    let rest = normalize_tunnel_path(rest_path);
+    if base == "/" {
+        return rest;
+    }
+    if rest == "/" {
+        return format!("{}/", base.trim_end_matches('/'));
+    }
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        rest.trim_start_matches('/')
+    )
+}
+
+fn build_tunnel_upstream_url(base: &Url, public_path: &str) -> Result<Url, String> {
+    let (path, query) = split_tunnel_path_and_query(public_path);
+    let mut url = base.clone();
+    let joined_path = join_tunnel_paths(url.path(), path);
+    url.set_path(&joined_path);
+    url.set_query(query.filter(|value| !value.is_empty()));
+    url.set_fragment(None);
+    Ok(url)
+}
+
+fn build_tunnel_upstream_ws_url(base: &Url, public_path: &str) -> Result<Url, String> {
+    let mut url = build_tunnel_upstream_url(base, public_path)?;
+    url.set_scheme("ws")
+        .map_err(|_| "failed to build websocket tunnel target URL".to_string())?;
+    Ok(url)
+}
+
+fn should_drop_tunnel_header(name: &str, request: bool) -> bool {
+    match name.to_ascii_lowercase().as_str() {
+        "connection"
+        | "keep-alive"
+        | "proxy-authenticate"
+        | "proxy-authorization"
+        | "proxy-connection"
+        | "te"
+        | "trailer"
+        | "transfer-encoding"
+        | "upgrade" => true,
+        "host" => request,
+        _ => false,
+    }
+}
+
+fn apply_tunnel_request_headers(
+    mut builder: reqwest::RequestBuilder,
+    headers: &[proto::TunnelHeader],
+) -> reqwest::RequestBuilder {
+    for header in headers {
+        let name = header.name.trim();
+        if name.is_empty() || should_drop_tunnel_header(name, true) {
+            continue;
+        }
+        let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) else {
+            continue;
+        };
+        let Ok(header_value) = HeaderValue::from_str(&header.value) else {
+            continue;
+        };
+        builder = builder.header(header_name, header_value);
+    }
+    builder
+}
+
+fn tunnel_response_headers(headers: &reqwest::header::HeaderMap) -> Vec<proto::TunnelHeader> {
+    let mut out = Vec::new();
+    for (name, value) in headers.iter() {
+        let name_text = name.as_str();
+        if should_drop_tunnel_header(name_text, false) {
+            continue;
+        }
+        let Ok(value_text) = value.to_str() else {
+            continue;
+        };
+        out.push(proto::TunnelHeader {
+            name: name_text.to_string(),
+            value: value_text.to_string(),
+        });
+    }
+    out
+}
+
+async fn run_tunnel_http_request(
+    controller: Arc<GatewayController>,
+    stream_id: String,
+    tunnel_id: String,
+    slug: String,
+    method: String,
+    upstream_url: Url,
+    headers: Vec<proto::TunnelHeader>,
+    body_rx: mpsc::Receiver<Result<Vec<u8>, io::Error>>,
+) {
+    let result = async {
+        let method = reqwest::Method::from_bytes(method.trim().as_bytes())
+            .map_err(|e| format!("invalid tunnel request method: {e}"))?;
+        let body = reqwest::Body::wrap_stream(ReceiverStream::new(body_rx));
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| format!("failed to build local tunnel HTTP client: {e}"))?;
+        let request =
+            apply_tunnel_request_headers(client.request(method, upstream_url).body(body), &headers);
+        let response = request
+            .send()
+            .await
+            .map_err(|e| format!("local tunnel request failed: {e}"))?;
+        let status_code = u32::from(response.status().as_u16());
+        let response_headers = tunnel_response_headers(response.headers());
+        send_tunnel_frame(
+            &controller,
+            proto::TunnelFrame {
+                stream_id: stream_id.clone(),
+                tunnel_id: tunnel_id.clone(),
+                slug: slug.clone(),
+                kind: proto::TunnelFrameKind::HttpResponseStart as i32,
+                status_code,
+                headers: response_headers,
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("local tunnel response stream failed: {e}"))?;
+            if chunk.is_empty() {
+                continue;
+            }
+            for part in chunk.chunks(TUNNEL_BODY_CHUNK_SIZE) {
+                send_tunnel_frame(
+                    &controller,
+                    proto::TunnelFrame {
+                        stream_id: stream_id.clone(),
+                        tunnel_id: tunnel_id.clone(),
+                        slug: slug.clone(),
+                        kind: proto::TunnelFrameKind::HttpResponseBody as i32,
+                        body: part.to_vec(),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            }
+        }
+
+        send_tunnel_frame(
+            &controller,
+            proto::TunnelFrame {
+                stream_id: stream_id.clone(),
+                tunnel_id: tunnel_id.clone(),
+                slug: slug.clone(),
+                kind: proto::TunnelFrameKind::HttpResponseEnd as i32,
+                end_stream: true,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+    .await;
+
+    controller.remove_tunnel_http_stream(&stream_id);
+    if let Err(error) = result {
+        let _ = send_tunnel_frame(
+            &controller,
+            proto::TunnelFrame {
+                stream_id,
+                tunnel_id,
+                slug,
+                kind: proto::TunnelFrameKind::Error as i32,
+                error,
+                ..Default::default()
+            },
+        )
+        .await;
+    }
+}
+
+async fn run_tunnel_websocket(
+    controller: Arc<GatewayController>,
+    stream_id: String,
+    tunnel_id: String,
+    slug: String,
+    upstream_url: Url,
+    mut gateway_rx: mpsc::Receiver<proto::TunnelFrame>,
+) {
+    let result = async {
+        let (ws_stream, _) = connect_async(upstream_url.as_str())
+            .await
+            .map_err(|e| format!("local tunnel websocket failed: {e}"))?;
+        send_tunnel_frame(
+            &controller,
+            proto::TunnelFrame {
+                stream_id: stream_id.clone(),
+                tunnel_id: tunnel_id.clone(),
+                slug: slug.clone(),
+                kind: proto::TunnelFrameKind::WsOpen as i32,
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        let (mut local_write, mut local_read) = ws_stream.split();
+        loop {
+            tokio::select! {
+                incoming = gateway_rx.recv() => {
+                    let Some(frame) = incoming else {
+                        break;
+                    };
+                    match frame.kind() {
+                        proto::TunnelFrameKind::WsFrame => {
+                            if frame.ws_message_type.eq_ignore_ascii_case("text") {
+                                let text = String::from_utf8_lossy(&frame.body).to_string();
+                                local_write
+                                    .send(Message::Text(text.into()))
+                                    .await
+                                    .map_err(|e| format!("local websocket send failed: {e}"))?;
+                            } else {
+                                local_write
+                                    .send(Message::Binary(frame.body.into()))
+                                    .await
+                                    .map_err(|e| format!("local websocket send failed: {e}"))?;
+                            }
+                        }
+                        proto::TunnelFrameKind::WsClose | proto::TunnelFrameKind::Cancel => {
+                            let _ = local_write.send(Message::Close(None)).await;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                local = local_read.next() => {
+                    let Some(local) = local else {
+                        break;
+                    };
+                    let message = local.map_err(|e| format!("local websocket read failed: {e}"))?;
+                    match message {
+                        Message::Text(text) => {
+                            send_tunnel_frame(
+                                &controller,
+                                proto::TunnelFrame {
+                                    stream_id: stream_id.clone(),
+                                    tunnel_id: tunnel_id.clone(),
+                                    slug: slug.clone(),
+                                    kind: proto::TunnelFrameKind::WsFrame as i32,
+                                    ws_message_type: "text".to_string(),
+                                    body: text.to_string().into_bytes(),
+                                    ..Default::default()
+                                },
+                            )
+                            .await?;
+                        }
+                        Message::Binary(data) => {
+                            send_tunnel_frame(
+                                &controller,
+                                proto::TunnelFrame {
+                                    stream_id: stream_id.clone(),
+                                    tunnel_id: tunnel_id.clone(),
+                                    slug: slug.clone(),
+                                    kind: proto::TunnelFrameKind::WsFrame as i32,
+                                    ws_message_type: "binary".to_string(),
+                                    body: data.to_vec(),
+                                    ..Default::default()
+                                },
+                            )
+                            .await?;
+                        }
+                        Message::Ping(data) => {
+                            let _ = local_write.send(Message::Pong(data)).await;
+                        }
+                        Message::Close(_) => {
+                            break;
+                        }
+                        Message::Pong(_) | Message::Frame(_) => {}
+                    }
+                }
+            }
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+
+    controller.remove_tunnel_ws_stream(&stream_id);
+    let kind = if result.is_ok() {
+        proto::TunnelFrameKind::WsClose
+    } else {
+        proto::TunnelFrameKind::Error
+    };
+    let _ = send_tunnel_frame(
+        &controller,
+        proto::TunnelFrame {
+            stream_id,
+            tunnel_id,
+            slug,
+            kind: kind as i32,
+            error: result.err().unwrap_or_default(),
+            ..Default::default()
+        },
+    )
+    .await;
+}
+
+async fn send_tunnel_frame(
+    controller: &GatewayController,
+    frame: proto::TunnelFrame,
+) -> Result<(), String> {
+    controller
+        .send_agent_envelope(proto::AgentEnvelope {
+            request_id: format!("tunnel-frame-{}", frame.stream_id.trim()),
+            timestamp: now_unix_seconds(),
+            payload: Some(proto::agent_envelope::Payload::TunnelFrame(frame)),
+        })
+        .await
 }
 
 async fn await_abortable_on_reconfigure<T>(
@@ -1841,9 +3087,10 @@ fn serialize_settings_sync_payload(payload: &Value) -> Result<String, String> {
 mod tests {
     use super::{
         build_chat_event_envelope, build_endpoint, build_grpc_url,
-        build_local_settings_update_event_payload, history_share_resolve_error_code,
-        merge_settings_sync_snapshot, required_terminal_project_path_key, set_disconnected_status,
-        GatewayStatusSnapshot,
+        build_local_settings_update_event_payload, build_tunnel_upstream_url,
+        history_share_resolve_error_code, merge_settings_sync_snapshot, normalize_tunnel_ttl,
+        required_terminal_project_path_key, set_disconnected_status, tunnel_expires_at,
+        validate_tunnel_target_url, GatewayStatusSnapshot,
     };
     use crate::commands::settings::RemoteSettingsPayload;
     use serde_json::{json, Value};
@@ -1863,6 +3110,48 @@ mod tests {
             history_share_resolve_error_code("读取历史对话分享链接失败：db"),
             500
         );
+    }
+
+    #[test]
+    fn validate_tunnel_target_url_only_accepts_localhost_http() {
+        for value in [
+            "http://localhost:3000",
+            "http://127.0.0.1:8080/app",
+            "http://[::1]:5173",
+        ] {
+            assert!(validate_tunnel_target_url(value).is_ok(), "{value}");
+        }
+
+        for value in [
+            "https://localhost:3000",
+            "http://192.168.1.5:3000",
+            "http://example.com",
+            "http://user:pass@localhost:3000",
+            "http://localhost:3000/#fragment",
+        ] {
+            assert!(validate_tunnel_target_url(value).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn build_tunnel_upstream_url_preserves_base_path_and_query() {
+        let target = validate_tunnel_target_url("http://localhost:3000/app").unwrap();
+        let upstream = build_tunnel_upstream_url(&target.url, "/api/users?page=1").unwrap();
+        assert_eq!(
+            upstream.as_str(),
+            "http://localhost:3000/app/api/users?page=1"
+        );
+
+        let root_target = validate_tunnel_target_url("http://127.0.0.1:5173").unwrap();
+        let root_upstream = build_tunnel_upstream_url(&root_target.url, "/").unwrap();
+        assert_eq!(root_upstream.as_str(), "http://127.0.0.1:5173/");
+    }
+
+    #[test]
+    fn tunnel_ttl_allows_infinite_expiry() {
+        assert_eq!(normalize_tunnel_ttl(0).unwrap(), 0);
+        assert_eq!(tunnel_expires_at(0), 0);
+        assert!(normalize_tunnel_ttl(1).is_err());
     }
 
     #[test]
@@ -1989,6 +3278,7 @@ mod tests {
             heartbeat_interval: 30,
             enable_web_terminal: false,
             enable_web_git: false,
+            enable_web_tunnels: false,
         };
         let mut status = GatewayStatusSnapshot {
             online: true,
@@ -2037,6 +3327,7 @@ mod tests {
             heartbeat_interval: 30,
             enable_web_terminal: false,
             enable_web_git: false,
+            enable_web_tunnels: false,
         };
 
         let grpc_url = build_grpc_url(&config).expect("build explicit gRPC endpoint");
