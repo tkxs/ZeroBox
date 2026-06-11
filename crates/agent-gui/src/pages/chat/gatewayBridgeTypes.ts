@@ -36,6 +36,21 @@ export type GatewayChatRequestEvent = {
   uploadedFiles?: PendingUploadedFile[];
 };
 
+export type GatewayChatClaimedRequest = {
+  requestId: string;
+  clientRequestId: string;
+  conversationId: string;
+  state: string;
+  attempt: number;
+  leaseMs: number;
+  request: GatewayChatRequestEvent;
+};
+
+export type GatewayChatRequestReadyEvent = {
+  requestId?: string;
+  reason?: string;
+};
+
 export type EnsureGatewayBridgeConversationReadyOptions = {
   forceHydrate?: boolean;
   historyTruncationKey?: string;
@@ -56,6 +71,7 @@ export type ActiveGatewayBridgeRequest = {
   requestId: string;
   conversationId: string;
   clientRequestId?: string;
+  workerId?: string;
   startedAt: number;
   selectedModelOverride?: GatewaySelectedModelEvent;
   runtimeControlsOverride?: ChatRuntimeControls;

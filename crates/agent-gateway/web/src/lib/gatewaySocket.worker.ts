@@ -64,6 +64,10 @@ type WorkerClientRequest =
       stream_id: string;
     }
   | {
+      type: "wakeup";
+      connection_id: string;
+    }
+  | {
       type: "dispose";
       connection_id: string;
     };
@@ -94,6 +98,7 @@ type SharedWorkerScope = {
 const clients = new Map<string, ManagedClient>();
 const portStates = new Map<MessagePort, PortState>();
 const TERMINAL_DETACH_GRACE_MS = 250;
+const MANAGED_CLIENT_WARM_WINDOW_MS = 10 * 60_000;
 
 function asErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message.trim()) {
@@ -244,7 +249,7 @@ function scheduleManagedClientCleanup(client: ManagedClient) {
     client.terminalDetachTimers.clear();
     client.client.dispose();
     clients.delete(client.token);
-  }, 60_000);
+  }, MANAGED_CLIENT_WARM_WINDOW_MS);
 }
 
 function clearManagedClientCleanup(client: ManagedClient) {
@@ -364,6 +369,9 @@ async function resolveRequest(client: GatewayWebSocketClient, method: string, pa
   switch (method) {
     case "status.get":
       return client.getStatus();
+    case "chat.prepare":
+      client.noteForegroundWakeup();
+      return client.prepareChatRuntime("shared-worker");
     case "fs.roots":
       return client.listFsRoots();
     case "fs.list_dirs":
@@ -574,6 +582,71 @@ async function resolveRequest(client: GatewayWebSocketClient, method: string, pa
         String(body.project_path_key ?? ""),
       );
       return undefined;
+    case "tunnel.list":
+      return {
+        tunnels: await client.listTunnels(),
+      };
+    case "tunnel.create": {
+      const projectPathKey =
+        typeof body.projectPathKey === "string"
+          ? body.projectPathKey.trim()
+          : typeof body.project_path_key === "string"
+            ? body.project_path_key.trim()
+            : "";
+      return {
+        tunnel: await client.createTunnel({
+          targetUrl: String(body.targetUrl ?? body.target_url ?? ""),
+          ttlSeconds:
+            body.ttlSeconds === 0 ||
+            body.ttlSeconds === 900 ||
+            body.ttlSeconds === 3600 ||
+            body.ttlSeconds === 14400
+              ? body.ttlSeconds
+              : body.ttl_seconds === 0 ||
+                  body.ttl_seconds === 900 ||
+                  body.ttl_seconds === 3600 ||
+                  body.ttl_seconds === 14400
+                ? body.ttl_seconds
+                : 3600,
+          name: typeof body.name === "string" ? body.name : undefined,
+          ...(projectPathKey ? { projectPathKey } : {}),
+        }),
+      };
+    }
+    case "tunnel.update": {
+      const projectPathKey =
+        typeof body.projectPathKey === "string"
+          ? body.projectPathKey.trim()
+          : typeof body.project_path_key === "string"
+            ? body.project_path_key.trim()
+            : "";
+      return {
+        tunnel: await client.updateTunnel({
+          id: String(body.id ?? body.tunnelId ?? body.tunnel_id ?? body.slug ?? ""),
+          targetUrl: String(body.targetUrl ?? body.target_url ?? ""),
+          ttlSeconds:
+            body.ttlSeconds === 0 ||
+            body.ttlSeconds === 900 ||
+            body.ttlSeconds === 3600 ||
+            body.ttlSeconds === 14400
+              ? body.ttlSeconds
+              : body.ttl_seconds === 0 ||
+                  body.ttl_seconds === 900 ||
+                  body.ttl_seconds === 3600 ||
+                  body.ttl_seconds === 14400
+                ? body.ttl_seconds
+                : 3600,
+          name: typeof body.name === "string" ? body.name : undefined,
+          ...(projectPathKey ? { projectPathKey } : {}),
+        }),
+      };
+    }
+    case "tunnel.close":
+      return {
+        tunnel: await client.closeTunnel(
+          String(body.id ?? body.tunnelId ?? body.tunnel_id ?? body.slug ?? ""),
+        ),
+      };
     case "provider.models":
       return client.getProviderModels(
         String(body.type ?? ""),
@@ -872,6 +945,9 @@ function handlePortMessage(port: MessagePort, raw: unknown) {
       return;
     case "chat.detach":
       handleChatDetach(state, message);
+      return;
+    case "wakeup":
+      state.client.client.noteForegroundWakeup();
       return;
   }
 }

@@ -2,6 +2,7 @@ import {
   getDefaultSettings,
   normalizeProjectToolsFileTreeSettings,
   normalizeProjectToolsGitReviewSettings,
+  normalizeProjectToolsTunnelSettings,
   normalizeSettings,
   type AppSettings,
 } from "@/lib/settings";
@@ -40,6 +41,7 @@ function stripSessionOnlyProjectToolsState(settings: AppSettings): AppSettings {
       ...settings.customSettings,
       projectToolsFileTree: normalizeProjectToolsFileTreeSettings({}),
       projectToolsGitReview: normalizeProjectToolsGitReviewSettings({}),
+      projectToolsTunnel: normalizeProjectToolsTunnelSettings({}),
     },
   };
 }

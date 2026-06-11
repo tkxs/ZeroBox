@@ -10,13 +10,22 @@ import (
 
 var ErrAgentOffline = errors.New("agent offline")
 var ErrChatRunNotFound = errors.New("chat run not found")
+var ErrTunnelNotFound = errors.New("tunnel not found")
+var ErrTunnelExpired = errors.New("tunnel expired")
+var ErrTunnelOverLimit = errors.New("tunnel connection limit exceeded")
+var ErrTunnelLimitExceeded = errors.New("tunnel limit exceeded")
 
 const (
 	maxBufferedChatRunEvents = 50000
 	chatRunDoneRetention     = time.Hour
+	chatRunStartRetention    = 5 * time.Minute
 	chatRunStaleRetention    = 12 * time.Hour
 
 	agentDisconnectedChatRunMessage = "Desktop agent disconnected. Please retry."
+
+	chatRuntimeReadyTTL      = 15 * time.Second
+	agentSessionHeartbeatTTL = 90 * time.Second
+	defaultRuntimeReadyState = "ready"
 )
 
 type AuthSnapshot struct {
@@ -29,6 +38,7 @@ type Manager struct {
 	registry  *sessionRegistry
 	syncHub   *syncHub
 	chatStore *chatRunStore
+	tunnels   *tunnelStore
 }
 
 type AgentSession struct {
@@ -38,7 +48,7 @@ type AgentSession struct {
 	ConnectedAt  time.Time
 	LastPing     time.Time
 
-	toAgent chan *gatewayv1.GatewayEnvelope
+	toAgent chan *OutboundEnvelope
 	done    chan struct{}
 
 	closeOnce sync.Once
@@ -57,6 +67,7 @@ type agentStream struct {
 type ChatBroadcastEvent struct {
 	RequestID string
 	Event     *gatewayv1.ChatEvent
+	Control   *gatewayv1.ChatControlEvent
 	Seq       int64
 	Workdir   string
 }
@@ -68,6 +79,9 @@ type ChatRunSnapshot struct {
 	Workdir         string
 	FirstSeq        int64
 	LatestSeq       int64
+	RunEpoch        int64
+	State           string
+	ErrorCode       string
 	Done            bool
 }
 
@@ -77,14 +91,30 @@ type ActiveChatRunSummary struct {
 	UpdatedAt      int64
 }
 
+const (
+	ChatRunStateQueued    = "queued"
+	ChatRunStateDelivered = "delivered"
+	ChatRunStateClaimed   = "claimed"
+	ChatRunStateStarting  = "starting"
+	ChatRunStateRunning   = "running"
+	ChatRunStateCompleted = "completed"
+	ChatRunStateFailed    = "failed"
+	ChatRunStateCancelled = "cancelled"
+)
+
 type chatRun struct {
 	requestID       string
 	conversationID  string
 	clientRequestID string
 	workdir         string
 	sessionEpoch    uint64
+	runEpoch        int64
 	events          []*ChatBroadcastEvent
 	nextSeq         int64
+	state           string
+	errorCode       string
+	accepted        bool
+	started         bool
 	done            bool
 	updatedAt       time.Time
 	expiresAt       time.Time
@@ -104,12 +134,19 @@ type chatRunSubscriber struct {
 }
 
 type Status struct {
-	Online         bool   `json:"online"`
-	AgentID        string `json:"agent_id"`
-	AgentVersion   string `json:"agent_version"`
-	SessionID      string `json:"session_id,omitempty"`
-	ConnectedSince int64  `json:"connected_since"`
-	LastHeartbeat  int64  `json:"last_heartbeat"`
+	Online                bool   `json:"online"`
+	AgentReady            bool   `json:"agent_ready"`
+	ChatRuntimeReady      bool   `json:"chat_runtime_ready"`
+	AgentID               string `json:"agent_id"`
+	AgentVersion          string `json:"agent_version"`
+	SessionID             string `json:"session_id,omitempty"`
+	ConnectedSince        int64  `json:"connected_since"`
+	LastHeartbeat         int64  `json:"last_heartbeat"`
+	RuntimeState          string `json:"runtime_state,omitempty"`
+	RuntimeLastHeartbeat  int64  `json:"runtime_last_heartbeat,omitempty"`
+	RuntimeWorkerID       string `json:"runtime_worker_id,omitempty"`
+	RuntimeVisible        bool   `json:"runtime_visible,omitempty"`
+	RuntimeActiveRunCount uint32 `json:"runtime_active_run_count,omitempty"`
 }
 
 func NewManager() *Manager {
@@ -117,5 +154,6 @@ func NewManager() *Manager {
 		registry:  newSessionRegistry(),
 		syncHub:   newSyncHub(),
 		chatStore: newChatRunStore(),
+		tunnels:   newTunnelStore(),
 	}
 }

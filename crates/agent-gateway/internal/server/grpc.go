@@ -59,6 +59,13 @@ func (s *GRPCServer) AgentConnect(stream gatewayv1.AgentGateway_AgentConnectServ
 	defer cancel()
 
 	go s.heartbeatLoop(ctx, sess)
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-sess.Done():
+			cancel()
+		}
+	}()
 
 	sendErrCh := make(chan error, 1)
 	go func() {
@@ -71,12 +78,23 @@ func (s *GRPCServer) AgentConnect(stream gatewayv1.AgentGateway_AgentConnectServ
 				sendErrCh <- nil
 				cancel()
 				return
-			case env := <-toAgent:
-				if err := stream.Send(env); err != nil {
+			case outbound := <-toAgent:
+				if outbound == nil || outbound.GatewayEnvelope == nil {
+					continue
+				}
+				select {
+				case <-outbound.Context().Done():
+					outbound.Ack(outbound.Context().Err())
+					continue
+				default:
+				}
+				if err := stream.Send(outbound.GatewayEnvelope); err != nil {
+					outbound.Ack(err)
 					sendErrCh <- err
 					cancel()
 					return
 				}
+				outbound.Ack(nil)
 			}
 		}
 	}()
@@ -111,13 +129,15 @@ func (s *GRPCServer) AgentConnect(stream gatewayv1.AgentGateway_AgentConnectServ
 }
 
 func (s *GRPCServer) heartbeatLoop(ctx context.Context, sess *session.AgentSession) {
-	ticker := time.NewTicker(s.cfg.HeartbeatPeriod)
+	period := s.heartbeatPeriod()
+	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 
 	if !s.sendHeartbeat(sess) {
 		return
 	}
 
+	timeout := period * 3
 	for {
 		select {
 		case <-ctx.Done():
@@ -125,11 +145,21 @@ func (s *GRPCServer) heartbeatLoop(ctx context.Context, sess *session.AgentSessi
 		case <-sess.Done():
 			return
 		case <-ticker.C:
+			if s.sm.ClearSessionIfHeartbeatStale(sess, timeout) {
+				return
+			}
 			if !s.sendHeartbeat(sess) {
 				return
 			}
 		}
 	}
+}
+
+func (s *GRPCServer) heartbeatPeriod() time.Duration {
+	if s.cfg == nil || s.cfg.HeartbeatPeriod <= 0 {
+		return 30 * time.Second
+	}
+	return s.cfg.HeartbeatPeriod
 }
 
 func (s *GRPCServer) sendHeartbeat(sess *session.AgentSession) bool {

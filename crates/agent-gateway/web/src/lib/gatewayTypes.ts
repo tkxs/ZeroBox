@@ -8,11 +8,18 @@ import type {
 
 export type AgentStatus = {
   online: boolean;
+  agent_ready?: boolean;
+  chat_runtime_ready?: boolean;
   agent_id?: string;
   agent_version?: string;
   session_id?: string;
   connected_since?: number;
   last_heartbeat?: number;
+  runtime_state?: "ready" | "draining" | "busy" | "suspended" | string;
+  runtime_last_heartbeat?: number;
+  runtime_worker_id?: string;
+  runtime_visible?: boolean;
+  runtime_active_run_count?: number;
 };
 
 export type GatewaySelectedModel = {
@@ -49,6 +56,38 @@ export type ChatCheckpointPayload = {
     model?: string;
     promptVersion?: string;
   };
+};
+
+export type ChatRunControlState =
+  | "queued"
+  | "delivered"
+  | "claimed"
+  | "starting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type ChatControlEvent = {
+  type:
+    | "accepted"
+    | "delivered"
+    | "claimed"
+    | "starting"
+    | "started"
+    | "progress"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  request_id?: string;
+  client_request_id?: string;
+  conversation_id?: string;
+  run_epoch?: number;
+  state?: ChatRunControlState;
+  error_code?: string;
+  message?: string;
+  seq?: number;
+  workdir?: string;
 };
 
 export type ChatEvent = (
@@ -118,6 +157,7 @@ export type ChatEvent = (
       conversation_id?: string;
     }
   | { type: "error"; message: string; round?: number; conversation_id?: string }
+  | ChatControlEvent
 ) & { seq?: number; workdir?: string };
 
 export type CronManagePayload = {

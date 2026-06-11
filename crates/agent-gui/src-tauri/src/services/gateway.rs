@@ -1,15 +1,19 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::io;
 use std::sync::{Arc, Mutex, Once};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use futures_util::{SinkExt, StreamExt};
+use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::Url;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::Emitter;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tonic::metadata::MetadataValue;
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use uuid::Uuid;
@@ -42,6 +46,10 @@ const UI_ONLY_SETTINGS_SYNC_FIELDS: &[&str] = &[
 ];
 const GATEWAY_GRPC_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const GATEWAY_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+const GATEWAY_CHAT_LEASE_MS: u64 = 15_000;
+const GATEWAY_CHAT_RUNNING_LEASE_MS: u64 = 30 * 60_000;
+const GATEWAY_CHAT_LEASE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+const TUNNEL_BODY_CHUNK_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,47 +65,98 @@ pub struct GatewayStatusSnapshot {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct GatewaySelectedModelEvent {
-    custom_provider_id: String,
-    model: String,
-    provider_type: String,
+pub struct GatewayTunnelCreateInput {
+    pub target_url: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub ttl_seconds: u32,
+    #[serde(default)]
+    pub project_path_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayTunnelUpdateInput {
+    pub id: String,
+    pub target_url: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub ttl_seconds: u32,
+    #[serde(default)]
+    pub project_path_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct GatewayChatRuntimeControlsEvent {
-    thinking_enabled: bool,
-    native_web_search_enabled: bool,
-    reasoning: String,
+pub struct GatewayTunnelSummary {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub target_url: String,
+    pub public_url: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub active_connections: u32,
+    pub status: String,
+    pub project_path_key: String,
+}
+
+#[derive(Debug, Clone)]
+struct LocalTunnelRecord {
+    summary: GatewayTunnelSummary,
+    target: TunnelTarget,
+}
+
+#[derive(Debug, Clone)]
+struct TunnelTarget {
+    url: Url,
+}
+
+type TunnelHttpBodySender = mpsc::Sender<Result<Vec<u8>, io::Error>>;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewaySelectedModelEvent {
+    pub custom_provider_id: String,
+    pub model: String,
+    pub provider_type: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct GatewayUploadedFileEvent {
-    relative_path: String,
-    absolute_path: String,
-    file_name: String,
-    kind: String,
-    size_bytes: i64,
+pub struct GatewayChatRuntimeControlsEvent {
+    pub thinking_enabled: bool,
+    pub native_web_search_enabled: bool,
+    pub reasoning: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct GatewayChatRequestEvent {
-    request_id: String,
-    conversation_id: String,
-    client_request_id: String,
-    message: String,
-    force_hydrate: bool,
-    selected_model: Option<GatewaySelectedModelEvent>,
-    runtime_controls: Option<GatewayChatRuntimeControlsEvent>,
-    execution_mode: String,
-    workdir: String,
-    selected_system_tools: Vec<String>,
-    uploaded_files: Vec<GatewayUploadedFileEvent>,
-    history_truncation_key: Option<String>,
+pub struct GatewayUploadedFileEvent {
+    pub relative_path: String,
+    pub absolute_path: String,
+    pub file_name: String,
+    pub kind: String,
+    pub size_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayChatRequestEvent {
+    pub request_id: String,
+    pub conversation_id: String,
+    pub client_request_id: String,
+    pub message: String,
+    pub force_hydrate: bool,
+    pub selected_model: Option<GatewaySelectedModelEvent>,
+    pub runtime_controls: Option<GatewayChatRuntimeControlsEvent>,
+    pub execution_mode: String,
+    pub workdir: String,
+    pub selected_system_tools: Vec<String>,
+    pub uploaded_files: Vec<GatewayUploadedFileEvent>,
+    pub history_truncation_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +164,40 @@ struct GatewayChatRequestEvent {
 struct GatewayChatCancelEvent {
     request_id: String,
     conversation_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct RemoteChatInboxRecord {
+    request: GatewayChatRequestEvent,
+    state: String,
+    lease_owner: Option<String>,
+    lease_expires_at: Option<Instant>,
+    attempt: u32,
+    started: bool,
+    last_error: Option<String>,
+    created_at: Instant,
+    updated_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct RemoteChatEnqueueOutcome {
+    request_id: String,
+    conversation_id: String,
+    control_type: &'static str,
+    should_wake_runtime: bool,
+    inserted: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayChatClaimedRequest {
+    pub request_id: String,
+    pub client_request_id: String,
+    pub conversation_id: String,
+    pub state: String,
+    pub attempt: u32,
+    pub lease_ms: u64,
+    pub request: GatewayChatRequestEvent,
 }
 
 pub const CHAT_HISTORY_SYNC_EVENT: &str = "chat-history:changed";
@@ -155,7 +248,13 @@ pub struct GatewayController {
     outbound_tx: Mutex<Option<mpsc::Sender<proto::AgentEnvelope>>>,
     settings_snapshot: Mutex<Option<Value>>,
     pending_history_truncations: Mutex<HashMap<String, String>>,
+    remote_chat_inbox: Mutex<HashMap<String, RemoteChatInboxRecord>>,
+    tunnels: Mutex<HashMap<String, LocalTunnelRecord>>,
+    tunnel_http_streams: Mutex<HashMap<String, TunnelHttpBodySender>>,
+    tunnel_ws_streams: Mutex<HashMap<String, mpsc::Sender<proto::TunnelFrame>>>,
+    pending_tunnel_controls: Mutex<HashMap<String, oneshot::Sender<proto::TunnelControlResponse>>>,
     terminal_forwarder_once: Once,
+    remote_chat_inbox_sweeper_once: Once,
 }
 
 impl GatewayController {
@@ -188,12 +287,19 @@ impl GatewayController {
             outbound_tx: Mutex::new(None),
             settings_snapshot: Mutex::new(None),
             pending_history_truncations: Mutex::new(HashMap::new()),
+            remote_chat_inbox: Mutex::new(HashMap::new()),
+            tunnels: Mutex::new(HashMap::new()),
+            tunnel_http_streams: Mutex::new(HashMap::new()),
+            tunnel_ws_streams: Mutex::new(HashMap::new()),
+            pending_tunnel_controls: Mutex::new(HashMap::new()),
             terminal_forwarder_once: Once::new(),
+            remote_chat_inbox_sweeper_once: Once::new(),
         }
     }
 
     pub fn start(self: &Arc<Self>) -> Result<(), String> {
         self.start_terminal_forwarder();
+        self.start_remote_chat_inbox_sweeper();
         self.ensure_runner()
     }
 
@@ -210,6 +316,20 @@ impl GatewayController {
                     };
                     if let Err(error) = sender.blocking_send(envelope) {
                         eprintln!("send gateway terminal event failed: {error}");
+                    }
+                }
+            });
+        });
+    }
+
+    fn start_remote_chat_inbox_sweeper(self: &Arc<Self>) {
+        let controller = Arc::clone(self);
+        self.remote_chat_inbox_sweeper_once.call_once(move || {
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(GATEWAY_CHAT_LEASE_SWEEP_INTERVAL).await;
+                    if let Err(error) = controller.expire_remote_chat_leases().await {
+                        eprintln!("expire gateway remote chat leases failed: {error}");
                     }
                 }
             });
@@ -315,7 +435,15 @@ impl GatewayController {
             })
     }
 
-    pub async fn send_chat_event(&self, request_id: String, event: Value) -> Result<(), String> {
+    pub async fn send_chat_event(
+        &self,
+        request_id: String,
+        event: Value,
+        worker_id: Option<String>,
+    ) -> Result<(), String> {
+        if !self.renew_remote_chat_request_lease(&request_id, worker_id.as_deref(), true)? {
+            return Ok(());
+        }
         let envelope = build_chat_event_envelope(request_id, event)?;
         self.send_agent_envelope(envelope).await
     }
@@ -351,6 +479,132 @@ impl GatewayController {
 
         let envelope = build_settings_sync_envelope(snapshot)?;
         self.send_agent_envelope(envelope).await
+    }
+
+    pub async fn tunnel_list(&self) -> Result<Vec<GatewayTunnelSummary>, String> {
+        if !self.status().online {
+            return self.local_tunnel_summaries("offline");
+        }
+        let response = self
+            .send_tunnel_control_request(proto::TunnelControlRequest {
+                action: "list".to_string(),
+                ..Default::default()
+            })
+            .await?;
+        if !response.error_message.trim().is_empty() {
+            return Err(response.error_message);
+        }
+        let summaries = response
+            .tunnels
+            .into_iter()
+            .map(gateway_tunnel_summary_from_proto)
+            .collect::<Vec<_>>();
+        self.merge_tunnel_summaries(&summaries)?;
+        Ok(summaries)
+    }
+
+    pub async fn tunnel_create(
+        &self,
+        input: GatewayTunnelCreateInput,
+    ) -> Result<GatewayTunnelSummary, String> {
+        if !self.status().online {
+            return Err("gateway outbound stream is offline".to_string());
+        }
+        let target = validate_tunnel_target_url(&input.target_url)?;
+        let target_url = target.url.to_string();
+        let public_base_url = self.config_tx.borrow().gateway_url.clone();
+        let response = self
+            .send_tunnel_control_request(proto::TunnelControlRequest {
+                action: "create".to_string(),
+                target_url: target_url.clone(),
+                name: input.name.unwrap_or_default().trim().to_string(),
+                ttl_seconds: normalize_tunnel_ttl(input.ttl_seconds)?,
+                public_base_url,
+                project_path_key: input
+                    .project_path_key
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+                ..Default::default()
+            })
+            .await?;
+        if !response.error_message.trim().is_empty() {
+            return Err(response.error_message);
+        }
+        let summary = response
+            .tunnel
+            .map(gateway_tunnel_summary_from_proto)
+            .ok_or_else(|| "gateway tunnel create returned no tunnel".to_string())?;
+        self.store_local_tunnel(summary.clone(), target)?;
+        Ok(summary)
+    }
+
+    pub async fn tunnel_update(
+        &self,
+        input: GatewayTunnelUpdateInput,
+    ) -> Result<GatewayTunnelSummary, String> {
+        if !self.status().online {
+            return Err("gateway outbound stream is offline".to_string());
+        }
+        let tunnel_id = input.id.trim().to_string();
+        if tunnel_id.is_empty() {
+            return Err("tunnel id is required".to_string());
+        }
+        let target = validate_tunnel_target_url(&input.target_url)?;
+        let ttl_seconds = normalize_tunnel_ttl(input.ttl_seconds)?;
+        let expires_at = tunnel_expires_at(ttl_seconds);
+        let response = self
+            .send_tunnel_control_request(proto::TunnelControlRequest {
+                action: "update".to_string(),
+                tunnel_id,
+                target_url: target.url.to_string(),
+                name: input.name.unwrap_or_default().trim().to_string(),
+                ttl_seconds,
+                expires_at,
+                project_path_key: input
+                    .project_path_key
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+                ..Default::default()
+            })
+            .await?;
+        if !response.error_message.trim().is_empty() {
+            return Err(response.error_message);
+        }
+        let summary = response
+            .tunnel
+            .map(gateway_tunnel_summary_from_proto)
+            .ok_or_else(|| "gateway tunnel update returned no tunnel".to_string())?;
+        self.store_local_tunnel(summary.clone(), target)?;
+        Ok(summary)
+    }
+
+    pub async fn tunnel_close(&self, tunnel_id: String) -> Result<GatewayTunnelSummary, String> {
+        let tunnel_id = tunnel_id.trim().to_string();
+        if tunnel_id.is_empty() {
+            return Err("tunnel id is required".to_string());
+        }
+        if !self.status().online {
+            let local = self.remove_local_tunnel(&tunnel_id)?;
+            return Ok(local.summary);
+        }
+        let response = self
+            .send_tunnel_control_request(proto::TunnelControlRequest {
+                action: "close".to_string(),
+                tunnel_id: tunnel_id.clone(),
+                ..Default::default()
+            })
+            .await?;
+        if !response.error_message.trim().is_empty() {
+            return Err(response.error_message);
+        }
+        let local = self.remove_local_tunnel(&tunnel_id).ok();
+        Ok(response
+            .tunnel
+            .map(gateway_tunnel_summary_from_proto)
+            .or_else(|| local.map(|record| record.summary))
+            .ok_or_else(|| "gateway tunnel close returned no tunnel".to_string())?)
     }
 
     async fn run(self: Arc<Self>, mut config_rx: watch::Receiver<RemoteSettingsPayload>) {
@@ -410,7 +664,7 @@ impl GatewayController {
     }
 
     async fn connect_and_serve(
-        &self,
+        self: &Arc<Self>,
         config: RemoteSettingsPayload,
         config_rx: &mut watch::Receiver<RemoteSettingsPayload>,
     ) -> Result<(), String> {
@@ -488,6 +742,9 @@ impl GatewayController {
         if let Err(error) = self.publish_current_terminal_sessions().await {
             eprintln!("publish gateway terminal sessions failed: {error}");
         }
+        if let Err(error) = self.publish_current_tunnels().await {
+            eprintln!("publish gateway tunnels failed: {error}");
+        }
 
         let timeout_seconds = i64::try_from(config.heartbeat_interval.max(5)).unwrap_or(30) * 3;
 
@@ -521,7 +778,7 @@ impl GatewayController {
     }
 
     async fn handle_gateway_envelope(
-        &self,
+        self: &Arc<Self>,
         envelope: proto::GatewayEnvelope,
     ) -> Result<(), String> {
         let request_id = envelope.request_id.clone();
@@ -536,6 +793,16 @@ impl GatewayController {
                     })),
                 })
                 .await
+            }
+            Some(proto::gateway_envelope::Payload::TunnelControlResp(response)) => {
+                self.resolve_pending_tunnel_control(request_id, response)
+            }
+            Some(proto::gateway_envelope::Payload::TunnelControl(request)) => {
+                self.handle_tunnel_control_request(request_id, request)
+                    .await
+            }
+            Some(proto::gateway_envelope::Payload::TunnelFrame(frame)) => {
+                self.handle_tunnel_frame(frame).await
             }
             Some(proto::gateway_envelope::Payload::ChatRequest(request)) => {
                 let proto::ChatRequest {
@@ -570,45 +837,72 @@ impl GatewayController {
                         native_web_search_enabled: runtime_controls.native_web_search_enabled,
                         reasoning: runtime_controls.reasoning,
                     });
+                let event_payload = GatewayChatRequestEvent {
+                    request_id,
+                    conversation_id,
+                    client_request_id,
+                    message,
+                    force_hydrate,
+                    selected_model,
+                    runtime_controls,
+                    execution_mode,
+                    workdir,
+                    selected_system_tools,
+                    uploaded_files: uploaded_files
+                        .into_iter()
+                        .map(|file| GatewayUploadedFileEvent {
+                            relative_path: file.relative_path,
+                            absolute_path: file.absolute_path,
+                            file_name: file.file_name,
+                            kind: file.kind,
+                            size_bytes: file.size_bytes,
+                        })
+                        .collect(),
+                    history_truncation_key,
+                };
+                let enqueue_outcome = self.enqueue_remote_chat_request(event_payload.clone())?;
+                if let Err(error) = self
+                    .send_gateway_chat_control_event(
+                        enqueue_outcome.request_id.clone(),
+                        enqueue_outcome.conversation_id.clone(),
+                        enqueue_outcome.control_type,
+                    )
+                    .await
+                {
+                    if enqueue_outcome.inserted {
+                        self.remove_remote_chat_request(&enqueue_outcome.request_id)?;
+                    }
+                    return Err(error);
+                }
+                if enqueue_outcome.should_wake_runtime {
+                    self.app_handle
+                        .emit(
+                            "gateway:chat-request-ready",
+                            json!({ "requestId": enqueue_outcome.request_id }),
+                        )
+                        .map_err(|e| format!("emit gateway chat request ready failed: {e}"))?;
+                }
+                Ok(())
+            }
+            Some(proto::gateway_envelope::Payload::CancelChat(request)) => {
+                let conversation_id = request.conversation_id;
+                self.cancel_remote_chat_request(&request_id, &conversation_id)?;
+                self.send_gateway_chat_control_event(
+                    request_id.clone(),
+                    conversation_id.clone(),
+                    "cancelled",
+                )
+                .await?;
                 self.app_handle
                     .emit(
-                        "gateway:chat-request",
-                        GatewayChatRequestEvent {
+                        "gateway:chat-cancel",
+                        GatewayChatCancelEvent {
                             request_id,
                             conversation_id,
-                            client_request_id,
-                            message,
-                            force_hydrate,
-                            selected_model,
-                            runtime_controls,
-                            execution_mode,
-                            workdir,
-                            selected_system_tools,
-                            uploaded_files: uploaded_files
-                                .into_iter()
-                                .map(|file| GatewayUploadedFileEvent {
-                                    relative_path: file.relative_path,
-                                    absolute_path: file.absolute_path,
-                                    file_name: file.file_name,
-                                    kind: file.kind,
-                                    size_bytes: file.size_bytes,
-                                })
-                                .collect(),
-                            history_truncation_key,
                         },
                     )
-                    .map_err(|e| format!("emit gateway chat request failed: {e}"))
+                    .map_err(|e| format!("emit gateway chat cancel failed: {e}"))
             }
-            Some(proto::gateway_envelope::Payload::CancelChat(request)) => self
-                .app_handle
-                .emit(
-                    "gateway:chat-cancel",
-                    GatewayChatCancelEvent {
-                        request_id,
-                        conversation_id: request.conversation_id,
-                    },
-                )
-                .map_err(|e| format!("emit gateway chat cancel failed: {e}")),
             Some(proto::gateway_envelope::Payload::CronManage(request)) => {
                 let should_refresh_settings =
                     matches!(request.action.trim(), "create" | "update" | "delete");
@@ -1449,6 +1743,34 @@ impl GatewayController {
         Ok(())
     }
 
+    async fn publish_current_tunnels(&self) -> Result<(), String> {
+        let tunnels = self.local_tunnel_summaries("")?;
+        for tunnel in tunnels {
+            if tunnel.status == "expired" {
+                continue;
+            }
+            self.send_agent_envelope(proto::AgentEnvelope {
+                request_id: format!("tunnel-resume-{}", tunnel.id),
+                timestamp: now_unix_seconds(),
+                payload: Some(proto::agent_envelope::Payload::TunnelControl(
+                    proto::TunnelControlRequest {
+                        action: "resume".to_string(),
+                        tunnel_id: tunnel.id,
+                        slug: tunnel.slug,
+                        target_url: tunnel.target_url,
+                        public_url: tunnel.public_url,
+                        name: tunnel.name,
+                        expires_at: tunnel.expires_at,
+                        project_path_key: tunnel.project_path_key,
+                        ..Default::default()
+                    },
+                )),
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
     pub async fn refresh_settings_sync_from_db(&self) -> Result<Value, String> {
         let snapshot = self.current_settings_snapshot().await?;
         self.app_handle
@@ -1456,6 +1778,17 @@ impl GatewayController {
             .map_err(|e| format!("emit gateway settings sync failed: {e}"))?;
         self.publish_settings_sync(snapshot.clone()).await?;
         Ok(snapshot)
+    }
+
+    pub fn take_pending_chat_request(
+        &self,
+        _request_id: String,
+    ) -> Result<Option<GatewayChatRequestEvent>, String> {
+        Ok(None)
+    }
+
+    pub fn take_pending_chat_requests(&self) -> Result<Vec<GatewayChatRequestEvent>, String> {
+        Ok(Vec::new())
     }
 
     async fn current_settings_snapshot(&self) -> Result<Value, String> {
@@ -1486,6 +1819,1556 @@ impl GatewayController {
         *guard = Some(snapshot.clone());
         Ok(snapshot)
     }
+
+    fn enqueue_remote_chat_request(
+        &self,
+        request: GatewayChatRequestEvent,
+    ) -> Result<RemoteChatEnqueueOutcome, String> {
+        let request_id = request.request_id.trim();
+        if request_id.is_empty() {
+            return Ok(RemoteChatEnqueueOutcome {
+                request_id: String::new(),
+                conversation_id: String::new(),
+                control_type: "delivered",
+                should_wake_runtime: false,
+                inserted: false,
+            });
+        }
+        let request_id = request_id.to_string();
+        let client_request_id = request.client_request_id.trim().to_string();
+        let mut inbox = self
+            .remote_chat_inbox
+            .lock()
+            .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
+
+        let existing_request_id = if inbox.contains_key(&request_id) {
+            Some(request_id.clone())
+        } else if client_request_id.is_empty() {
+            None
+        } else {
+            inbox.iter().find_map(|(candidate_request_id, record)| {
+                if record.request.client_request_id.trim() == client_request_id {
+                    Some(candidate_request_id.clone())
+                } else {
+                    None
+                }
+            })
+        };
+
+        if let Some(existing_request_id) = existing_request_id {
+            let now = Instant::now();
+            let record = inbox
+                .get_mut(&existing_request_id)
+                .ok_or_else(|| "remote chat request disappeared while enqueueing".to_string())?;
+            Self::merge_duplicate_remote_chat_request(record, request, now);
+            return Ok(RemoteChatEnqueueOutcome {
+                request_id: existing_request_id,
+                conversation_id: record.request.conversation_id.clone(),
+                control_type: Self::remote_chat_record_control_type(record),
+                should_wake_runtime: Self::remote_chat_record_should_wake_runtime(record, now),
+                inserted: false,
+            });
+        }
+
+        let now = Instant::now();
+        inbox.insert(
+            request_id.clone(),
+            RemoteChatInboxRecord {
+                request,
+                state: "queued".to_string(),
+                lease_owner: None,
+                lease_expires_at: None,
+                attempt: 0,
+                started: false,
+                last_error: None,
+                created_at: now,
+                updated_at: now,
+            },
+        );
+        let conversation_id = inbox
+            .get(request_id.as_str())
+            .map(|record| record.request.conversation_id.clone())
+            .unwrap_or_default();
+        Ok(RemoteChatEnqueueOutcome {
+            request_id,
+            conversation_id,
+            control_type: "delivered",
+            should_wake_runtime: true,
+            inserted: true,
+        })
+    }
+
+    fn remove_remote_chat_request(&self, request_id: &str) -> Result<(), String> {
+        let request_id = request_id.trim();
+        if request_id.is_empty() {
+            return Ok(());
+        }
+        let mut inbox = self
+            .remote_chat_inbox
+            .lock()
+            .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
+        inbox.remove(request_id);
+        Ok(())
+    }
+
+    fn cancel_remote_chat_request(
+        &self,
+        request_id: &str,
+        conversation_id: &str,
+    ) -> Result<(), String> {
+        let request_id = request_id.trim();
+        let conversation_id = conversation_id.trim();
+        let mut inbox = self
+            .remote_chat_inbox
+            .lock()
+            .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
+        if !request_id.is_empty() {
+            inbox.remove(request_id);
+        }
+        if !conversation_id.is_empty() {
+            inbox.retain(|_, record| record.request.conversation_id.trim() != conversation_id);
+        }
+        Ok(())
+    }
+
+    fn merge_duplicate_remote_chat_request(
+        record: &mut RemoteChatInboxRecord,
+        request: GatewayChatRequestEvent,
+        now: Instant,
+    ) {
+        // A reconnect can replay the same gateway request while the JS runner is
+        // already processing it. Preserve local lease/owner/started state and
+        // only fill metadata that may have been absent in the original payload.
+        if !record.started && record.state.trim() == "queued" {
+            let canonical_request_id = record.request.request_id.clone();
+            record.request = request;
+            record.request.request_id = canonical_request_id;
+            record.updated_at = now;
+            return;
+        }
+        if record.request.client_request_id.trim().is_empty()
+            && !request.client_request_id.trim().is_empty()
+        {
+            record.request.client_request_id = request.client_request_id.clone();
+        }
+        if record.request.conversation_id.trim().is_empty()
+            && !request.conversation_id.trim().is_empty()
+        {
+            record.request.conversation_id = request.conversation_id.clone();
+        }
+        record.updated_at = now;
+    }
+
+    fn remote_chat_record_control_type(record: &RemoteChatInboxRecord) -> &'static str {
+        if record.started {
+            return "started";
+        }
+        match record.state.trim() {
+            "claimed" => "claimed",
+            "starting" => "starting",
+            "running" => "started",
+            "failed" => "failed",
+            "cancelled" => "cancelled",
+            "completed" => "completed",
+            _ => "delivered",
+        }
+    }
+
+    fn remote_chat_record_should_wake_runtime(
+        record: &RemoteChatInboxRecord,
+        now: Instant,
+    ) -> bool {
+        if record.started {
+            return false;
+        }
+        match record.state.trim() {
+            "queued" | "delivered" => true,
+            "claimed" | "starting" => record
+                .lease_expires_at
+                .map(|expires_at| now >= expires_at)
+                .unwrap_or(true),
+            _ => false,
+        }
+    }
+
+    fn remote_chat_record_has_current_lease(
+        record: &RemoteChatInboxRecord,
+        worker_id: &str,
+        now: Instant,
+    ) -> bool {
+        if worker_id.trim().is_empty() {
+            return false;
+        }
+        if record.lease_owner.as_deref() != Some(worker_id) {
+            return false;
+        }
+        record
+            .lease_expires_at
+            .map(|expires_at| now < expires_at)
+            .unwrap_or(false)
+    }
+
+    fn remote_chat_record_is_owned_by_worker(
+        record: &RemoteChatInboxRecord,
+        worker_id: &str,
+    ) -> bool {
+        !worker_id.trim().is_empty() && record.lease_owner.as_deref() == Some(worker_id)
+    }
+
+    fn remote_chat_record_lease_ms(record: &RemoteChatInboxRecord) -> u64 {
+        if record.started {
+            GATEWAY_CHAT_RUNNING_LEASE_MS
+        } else {
+            GATEWAY_CHAT_LEASE_MS
+        }
+    }
+
+    fn renew_remote_chat_request_lease(
+        &self,
+        request_id: &str,
+        worker_id: Option<&str>,
+        require_current: bool,
+    ) -> Result<bool, String> {
+        let request_id = request_id.trim();
+        if request_id.is_empty() {
+            return Ok(true);
+        }
+        let worker_id = worker_id.unwrap_or_default().trim();
+        let mut inbox = self
+            .remote_chat_inbox
+            .lock()
+            .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
+        let Some(record) = inbox.get(request_id) else {
+            return Ok(true);
+        };
+        let now = Instant::now();
+        if require_current && !Self::remote_chat_record_has_current_lease(record, worker_id, now) {
+            return Ok(false);
+        }
+        if !require_current && !Self::remote_chat_record_is_owned_by_worker(record, worker_id) {
+            return Ok(false);
+        }
+        let lease_ms = Self::remote_chat_record_lease_ms(record);
+        if let Some(record) = inbox.get_mut(request_id) {
+            record.lease_expires_at = Some(now + Duration::from_millis(lease_ms));
+            record.updated_at = now;
+        }
+        Ok(true)
+    }
+
+    pub async fn claim_next_chat_request(
+        &self,
+        worker_id: String,
+        lease_ms: Option<u64>,
+    ) -> Result<Option<GatewayChatClaimedRequest>, String> {
+        let worker_id = worker_id.trim().to_string();
+        if worker_id.is_empty() {
+            return Err("worker_id is required".to_string());
+        }
+        let lease_ms = lease_ms
+            .unwrap_or(GATEWAY_CHAT_LEASE_MS)
+            .clamp(1_000, 120_000);
+        let now = Instant::now();
+        let claimed = {
+            let mut inbox = self
+                .remote_chat_inbox
+                .lock()
+                .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
+            let mut selected_request_id: Option<String> = None;
+            let mut selected_created_at: Option<Instant> = None;
+            for (request_id, record) in inbox.iter() {
+                let state = record.state.trim();
+                let lease_expired = record
+                    .lease_expires_at
+                    .map(|expires_at| now >= expires_at)
+                    .unwrap_or(true);
+                if state == "queued"
+                    || ((state == "claimed" || state == "starting")
+                        && lease_expired
+                        && !record.started)
+                {
+                    if selected_created_at
+                        .map(|created_at| record.created_at < created_at)
+                        .unwrap_or(true)
+                    {
+                        selected_request_id = Some(request_id.clone());
+                        selected_created_at = Some(record.created_at);
+                    }
+                }
+            }
+            selected_request_id.and_then(|request_id| {
+                inbox.get_mut(&request_id).map(|record| {
+                    record.state = "claimed".to_string();
+                    record.lease_owner = Some(worker_id.clone());
+                    record.lease_expires_at = Some(now + Duration::from_millis(lease_ms));
+                    record.attempt = record.attempt.saturating_add(1);
+                    record.updated_at = now;
+                    GatewayChatClaimedRequest {
+                        request_id: record.request.request_id.clone(),
+                        client_request_id: record.request.client_request_id.clone(),
+                        conversation_id: record.request.conversation_id.clone(),
+                        state: record.state.clone(),
+                        attempt: record.attempt,
+                        lease_ms,
+                        request: record.request.clone(),
+                    }
+                })
+            })
+        };
+        if let Some(claimed) = claimed.as_ref() {
+            self.send_gateway_chat_control_event(
+                claimed.request_id.clone(),
+                claimed.conversation_id.clone(),
+                "claimed",
+            )
+            .await?;
+        }
+        Ok(claimed)
+    }
+
+    pub async fn mark_chat_request_started(
+        &self,
+        request_id: String,
+        conversation_id: String,
+        worker_id: String,
+    ) -> Result<(), String> {
+        let request_id = request_id.trim().to_string();
+        let conversation_id = conversation_id.trim().to_string();
+        let worker_id = worker_id.trim().to_string();
+        {
+            let mut inbox = self
+                .remote_chat_inbox
+                .lock()
+                .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
+            let now = Instant::now();
+            let record = inbox
+                .get_mut(&request_id)
+                .ok_or_else(|| "remote chat request lease is no longer active".to_string())?;
+            if !Self::remote_chat_record_has_current_lease(record, &worker_id, now) {
+                return Err("remote chat request lease is no longer active".to_string());
+            }
+            record.state = "running".to_string();
+            record.started = true;
+            if !conversation_id.is_empty() {
+                record.request.conversation_id = conversation_id.clone();
+            }
+            record.lease_expires_at =
+                Some(now + Duration::from_millis(GATEWAY_CHAT_RUNNING_LEASE_MS));
+            record.updated_at = now;
+        }
+        self.send_gateway_chat_control_event(request_id, conversation_id, "started")
+            .await
+    }
+
+    pub async fn complete_chat_request(
+        &self,
+        request_id: String,
+        conversation_id: String,
+        worker_id: String,
+    ) -> Result<(), String> {
+        let request_id = request_id.trim().to_string();
+        let conversation_id = conversation_id.trim().to_string();
+        let worker_id = worker_id.trim().to_string();
+        let should_send = {
+            let mut inbox = self
+                .remote_chat_inbox
+                .lock()
+                .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
+            let Some(record) = inbox.get(&request_id) else {
+                return Ok(());
+            };
+            if !Self::remote_chat_record_is_owned_by_worker(record, &worker_id) {
+                return Ok(());
+            }
+            inbox.remove(&request_id);
+            true
+        };
+        if !should_send {
+            return Ok(());
+        }
+        self.send_gateway_chat_control_event(request_id, conversation_id, "completed")
+            .await
+    }
+
+    pub async fn fail_chat_request(
+        &self,
+        request_id: String,
+        conversation_id: Option<String>,
+        error_code: String,
+        message: String,
+        terminal: bool,
+        worker_id: String,
+    ) -> Result<(), String> {
+        let request_id = request_id.trim().to_string();
+        let worker_id = worker_id.trim().to_string();
+        let conversation_id = conversation_id.unwrap_or_default();
+        let should_send = {
+            let mut inbox = self
+                .remote_chat_inbox
+                .lock()
+                .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
+            let Some(record) = inbox.get_mut(&request_id) else {
+                return Ok(());
+            };
+            if !Self::remote_chat_record_is_owned_by_worker(record, &worker_id) {
+                return Ok(());
+            }
+            record.state = if terminal { "failed" } else { "queued" }.to_string();
+            record.lease_owner = None;
+            record.lease_expires_at = None;
+            record.last_error = Some(message.clone());
+            record.updated_at = Instant::now();
+            if terminal {
+                inbox.remove(&request_id);
+            }
+            true
+        };
+        if !should_send {
+            return Ok(());
+        }
+        self.send_gateway_chat_control_event_with_details(
+            request_id,
+            conversation_id,
+            "failed",
+            error_code,
+            message,
+        )
+        .await
+    }
+
+    pub fn heartbeat_chat_request(
+        &self,
+        request_id: String,
+        worker_id: String,
+    ) -> Result<(), String> {
+        let request_id = request_id.trim();
+        let worker_id = worker_id.trim();
+        if request_id.is_empty() || worker_id.is_empty() {
+            return Ok(());
+        }
+        let mut inbox = self
+            .remote_chat_inbox
+            .lock()
+            .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
+        if let Some(record) = inbox.get_mut(request_id) {
+            if record.lease_owner.as_deref() == Some(worker_id) {
+                let lease_ms = Self::remote_chat_record_lease_ms(record);
+                record.lease_expires_at = Some(Instant::now() + Duration::from_millis(lease_ms));
+                record.updated_at = Instant::now();
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn publish_chat_runtime_status(
+        &self,
+        worker_id: String,
+        state: String,
+        visible: bool,
+        active_run_count: u32,
+    ) -> Result<(), String> {
+        let worker_id = worker_id.trim().to_string();
+        if worker_id.is_empty() {
+            return Ok(());
+        }
+        let state = match state.trim() {
+            "draining" => "draining",
+            "busy" => "busy",
+            "suspended" => "suspended",
+            _ => "ready",
+        }
+        .to_string();
+        let envelope =
+            build_gateway_runtime_status_envelope(worker_id, state, visible, active_run_count);
+        match self.send_agent_envelope(envelope).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.contains("outbound stream is offline") => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn release_chat_request_lease(
+        &self,
+        request_id: String,
+        worker_id: String,
+    ) -> Result<(), String> {
+        let request_id = request_id.trim();
+        let worker_id = worker_id.trim();
+        let mut inbox = self
+            .remote_chat_inbox
+            .lock()
+            .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
+        if let Some(record) = inbox.get_mut(request_id) {
+            if record.lease_owner.as_deref() == Some(worker_id) && !record.started {
+                record.state = "queued".to_string();
+                record.lease_owner = None;
+                record.lease_expires_at = None;
+                record.updated_at = Instant::now();
+            }
+        }
+        Ok(())
+    }
+
+    async fn expire_remote_chat_leases(&self) -> Result<(), String> {
+        let mut failed: Vec<(String, String)> = Vec::new();
+        let mut wake = false;
+        {
+            let mut inbox = self
+                .remote_chat_inbox
+                .lock()
+                .map_err(|_| "gateway remote chat inbox lock poisoned".to_string())?;
+            let now = Instant::now();
+            for record in inbox.values_mut() {
+                let Some(expires_at) = record.lease_expires_at else {
+                    continue;
+                };
+                if now < expires_at {
+                    continue;
+                }
+                if record.started {
+                    record.state = "failed".to_string();
+                    failed.push((
+                        record.request.request_id.clone(),
+                        record.request.conversation_id.clone(),
+                    ));
+                    continue;
+                }
+                record.state = "queued".to_string();
+                record.lease_owner = None;
+                record.lease_expires_at = None;
+                record.updated_at = now;
+                wake = true;
+            }
+            for (request_id, _) in &failed {
+                inbox.remove(request_id);
+            }
+        }
+        if wake {
+            let _ = self.app_handle.emit(
+                "gateway:chat-request-ready",
+                json!({ "reason": "lease_expired" }),
+            );
+        }
+        for (request_id, conversation_id) in failed {
+            self.send_gateway_chat_control_event_with_details(
+                request_id,
+                conversation_id,
+                "failed",
+                "desktop_runtime_lease_expired".to_string(),
+                "Desktop chat runtime stopped before completing the remote request.".to_string(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn send_gateway_chat_control_event(
+        &self,
+        request_id: String,
+        conversation_id: String,
+        event_type: &str,
+    ) -> Result<(), String> {
+        self.send_gateway_chat_control_event_with_details(
+            request_id,
+            conversation_id,
+            event_type,
+            String::new(),
+            String::new(),
+        )
+        .await
+    }
+
+    async fn send_gateway_chat_control_event_with_details(
+        &self,
+        request_id: String,
+        conversation_id: String,
+        event_type: &str,
+        error_code: String,
+        message: String,
+    ) -> Result<(), String> {
+        self.send_agent_envelope(build_gateway_chat_control_event_envelope(
+            request_id,
+            conversation_id,
+            event_type,
+            error_code,
+            message,
+        ))
+        .await
+    }
+
+    async fn send_tunnel_control_request(
+        &self,
+        request: proto::TunnelControlRequest,
+    ) -> Result<proto::TunnelControlResponse, String> {
+        let request_id = format!("tunnel-control-{}", Uuid::new_v4());
+        let (tx, rx) = oneshot::channel();
+        self.pending_tunnel_controls
+            .lock()
+            .map_err(|_| "gateway tunnel control lock poisoned".to_string())?
+            .insert(request_id.clone(), tx);
+
+        let send_result = self
+            .send_agent_envelope(proto::AgentEnvelope {
+                request_id: request_id.clone(),
+                timestamp: now_unix_seconds(),
+                payload: Some(proto::agent_envelope::Payload::TunnelControl(request)),
+            })
+            .await;
+        if let Err(error) = send_result {
+            let _ = self
+                .pending_tunnel_controls
+                .lock()
+                .map(|mut pending| pending.remove(&request_id));
+            return Err(error);
+        }
+
+        match tokio::time::timeout(Duration::from_secs(30), rx).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_)) => Err("gateway tunnel control response dropped".to_string()),
+            Err(_) => {
+                let _ = self
+                    .pending_tunnel_controls
+                    .lock()
+                    .map(|mut pending| pending.remove(&request_id));
+                Err("gateway tunnel control timed out".to_string())
+            }
+        }
+    }
+
+    fn resolve_pending_tunnel_control(
+        &self,
+        request_id: String,
+        response: proto::TunnelControlResponse,
+    ) -> Result<(), String> {
+        let sender = self
+            .pending_tunnel_controls
+            .lock()
+            .map_err(|_| "gateway tunnel control lock poisoned".to_string())?
+            .remove(request_id.trim());
+        if let Some(sender) = sender {
+            let _ = sender.send(response);
+        }
+        Ok(())
+    }
+
+    async fn handle_tunnel_control_request(
+        self: &Arc<Self>,
+        request_id: String,
+        request: proto::TunnelControlRequest,
+    ) -> Result<(), String> {
+        let response = self.handle_tunnel_control_request_inner(request);
+        self.send_agent_envelope(proto::AgentEnvelope {
+            request_id,
+            timestamp: now_unix_seconds(),
+            payload: Some(proto::agent_envelope::Payload::TunnelControlResp(response)),
+        })
+        .await
+    }
+
+    fn handle_tunnel_control_request_inner(
+        &self,
+        request: proto::TunnelControlRequest,
+    ) -> proto::TunnelControlResponse {
+        let action = request.action.trim().to_ascii_lowercase();
+        match action.as_str() {
+            "list" => proto::TunnelControlResponse {
+                action,
+                tunnels: self
+                    .local_tunnel_summaries("active")
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(proto_tunnel_summary_from_gateway)
+                    .collect(),
+                tunnel: None,
+                error_code: String::new(),
+                error_message: String::new(),
+            },
+            "create" => match self.create_local_tunnel_from_control(&request) {
+                Ok(summary) => proto::TunnelControlResponse {
+                    action,
+                    tunnels: self
+                        .local_tunnel_summaries("active")
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(proto_tunnel_summary_from_gateway)
+                        .collect(),
+                    tunnel: Some(proto_tunnel_summary_from_gateway(summary)),
+                    error_code: String::new(),
+                    error_message: String::new(),
+                },
+                Err(error) => tunnel_control_error_response(action, "invalid_target", error),
+            },
+            "update" => match self.update_local_tunnel_from_control(&request) {
+                Ok(summary) => proto::TunnelControlResponse {
+                    action,
+                    tunnels: self
+                        .local_tunnel_summaries("active")
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(proto_tunnel_summary_from_gateway)
+                        .collect(),
+                    tunnel: Some(proto_tunnel_summary_from_gateway(summary)),
+                    error_code: String::new(),
+                    error_message: String::new(),
+                },
+                Err(error) => tunnel_control_error_response(action, "not_found", error),
+            },
+            "close" => {
+                let identifier = if request.tunnel_id.trim().is_empty() {
+                    request.slug.trim().to_string()
+                } else {
+                    request.tunnel_id.trim().to_string()
+                };
+                match self.remove_local_tunnel(&identifier) {
+                    Ok(record) => proto::TunnelControlResponse {
+                        action,
+                        tunnels: self
+                            .local_tunnel_summaries("active")
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(proto_tunnel_summary_from_gateway)
+                            .collect(),
+                        tunnel: Some(proto_tunnel_summary_from_gateway(record.summary)),
+                        error_code: String::new(),
+                        error_message: String::new(),
+                    },
+                    Err(error) => tunnel_control_error_response(action, "not_found", error),
+                }
+            }
+            "resume" => match self.resume_local_tunnel_from_control(&request) {
+                Ok(summary) => proto::TunnelControlResponse {
+                    action,
+                    tunnels: self
+                        .local_tunnel_summaries("active")
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(proto_tunnel_summary_from_gateway)
+                        .collect(),
+                    tunnel: Some(proto_tunnel_summary_from_gateway(summary)),
+                    error_code: String::new(),
+                    error_message: String::new(),
+                },
+                Err(error) => tunnel_control_error_response(action, "not_found", error),
+            },
+            _ => tunnel_control_error_response(
+                action,
+                "invalid_action",
+                "unsupported tunnel action".to_string(),
+            ),
+        }
+    }
+
+    async fn handle_tunnel_frame(
+        self: &Arc<Self>,
+        frame: proto::TunnelFrame,
+    ) -> Result<(), String> {
+        match frame.kind() {
+            proto::TunnelFrameKind::HttpRequestStart => {
+                let stream_id = frame.stream_id.trim().to_string();
+                let tunnel_id = frame.tunnel_id.clone();
+                let slug = frame.slug.clone();
+                if let Err(error) = self.start_tunnel_http_stream(frame).await {
+                    self.spawn_tunnel_frame_error(stream_id, tunnel_id, slug, error);
+                }
+                Ok(())
+            }
+            proto::TunnelFrameKind::HttpRequestBody => {
+                let stream_id = frame.stream_id.trim().to_string();
+                let tunnel_id = frame.tunnel_id.clone();
+                let slug = frame.slug.clone();
+                let sender = self
+                    .tunnel_http_streams
+                    .lock()
+                    .map_err(|_| "gateway tunnel http stream lock poisoned".to_string())?
+                    .get(&stream_id)
+                    .cloned();
+                if let Some(sender) = sender {
+                    match sender.try_send(Ok(frame.body)) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            self.remove_tunnel_http_stream(&stream_id);
+                            self.spawn_tunnel_frame_error(
+                                stream_id,
+                                tunnel_id,
+                                slug,
+                                "local tunnel request body queue is full".to_string(),
+                            );
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {}
+                    }
+                }
+                Ok(())
+            }
+            proto::TunnelFrameKind::HttpRequestEnd => {
+                self.remove_tunnel_http_stream(&frame.stream_id);
+                Ok(())
+            }
+            proto::TunnelFrameKind::WsOpen => {
+                let stream_id = frame.stream_id.trim().to_string();
+                let tunnel_id = frame.tunnel_id.clone();
+                let slug = frame.slug.clone();
+                if let Err(error) = self.start_tunnel_ws_stream(frame).await {
+                    self.spawn_tunnel_frame_error(stream_id, tunnel_id, slug, error);
+                }
+                Ok(())
+            }
+            proto::TunnelFrameKind::WsFrame
+            | proto::TunnelFrameKind::WsClose
+            | proto::TunnelFrameKind::Cancel => {
+                let stream_id = frame.stream_id.trim().to_string();
+                let tunnel_id = frame.tunnel_id.clone();
+                let slug = frame.slug.clone();
+                let terminal_frame = matches!(
+                    frame.kind(),
+                    proto::TunnelFrameKind::WsClose | proto::TunnelFrameKind::Cancel
+                );
+                if matches!(frame.kind(), proto::TunnelFrameKind::Cancel) {
+                    self.remove_tunnel_http_stream(&stream_id);
+                }
+                let sender = self
+                    .tunnel_ws_streams
+                    .lock()
+                    .map_err(|_| "gateway tunnel websocket stream lock poisoned".to_string())?
+                    .get(&stream_id)
+                    .cloned();
+                if let Some(sender) = sender {
+                    match sender.try_send(frame) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            self.remove_tunnel_ws_stream(&stream_id);
+                            if !terminal_frame {
+                                self.spawn_tunnel_frame_error(
+                                    stream_id,
+                                    tunnel_id,
+                                    slug,
+                                    "local tunnel websocket queue is full".to_string(),
+                                );
+                            }
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {}
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn spawn_tunnel_frame_error(
+        self: &Arc<Self>,
+        stream_id: String,
+        tunnel_id: String,
+        slug: String,
+        error: String,
+    ) {
+        let controller = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            let _ = send_tunnel_frame(
+                &controller,
+                proto::TunnelFrame {
+                    stream_id,
+                    tunnel_id,
+                    slug,
+                    kind: proto::TunnelFrameKind::Error as i32,
+                    error,
+                    ..Default::default()
+                },
+            )
+            .await;
+        });
+    }
+
+    async fn start_tunnel_http_stream(
+        self: &Arc<Self>,
+        frame: proto::TunnelFrame,
+    ) -> Result<(), String> {
+        let record = self.find_local_tunnel(&frame.tunnel_id, &frame.slug)?;
+        let upstream_url = build_tunnel_upstream_url(&record.target.url, &frame.path)?;
+        let stream_id = frame.stream_id.trim().to_string();
+        let tunnel_id = record.summary.id.clone();
+        let slug = record.summary.slug.clone();
+        let method = frame.method.trim().to_string();
+        let headers = frame.headers.clone();
+        let (body_tx, body_rx) = mpsc::channel::<Result<Vec<u8>, io::Error>>(64);
+        self.tunnel_http_streams
+            .lock()
+            .map_err(|_| "gateway tunnel http stream lock poisoned".to_string())?
+            .insert(stream_id.clone(), body_tx);
+
+        let controller = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            run_tunnel_http_request(
+                controller,
+                stream_id,
+                tunnel_id,
+                slug,
+                method,
+                upstream_url,
+                headers,
+                body_rx,
+            )
+            .await;
+        });
+        Ok(())
+    }
+
+    async fn start_tunnel_ws_stream(
+        self: &Arc<Self>,
+        frame: proto::TunnelFrame,
+    ) -> Result<(), String> {
+        let record = self.find_local_tunnel(&frame.tunnel_id, &frame.slug)?;
+        let upstream_url = build_tunnel_upstream_ws_url(&record.target.url, &frame.path)?;
+        let stream_id = frame.stream_id.trim().to_string();
+        let tunnel_id = record.summary.id.clone();
+        let slug = record.summary.slug.clone();
+        let (gateway_tx, gateway_rx) = mpsc::channel::<proto::TunnelFrame>(128);
+        self.tunnel_ws_streams
+            .lock()
+            .map_err(|_| "gateway tunnel websocket stream lock poisoned".to_string())?
+            .insert(stream_id.clone(), gateway_tx);
+
+        let controller = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            run_tunnel_websocket(
+                controller,
+                stream_id,
+                tunnel_id,
+                slug,
+                upstream_url,
+                gateway_rx,
+            )
+            .await;
+        });
+        Ok(())
+    }
+
+    fn create_local_tunnel_from_control(
+        &self,
+        request: &proto::TunnelControlRequest,
+    ) -> Result<GatewayTunnelSummary, String> {
+        if request.tunnel_id.trim().is_empty() || request.slug.trim().is_empty() {
+            return Err("tunnel id and slug are required".to_string());
+        }
+        let target = validate_tunnel_target_url(&request.target_url)?;
+        let summary = GatewayTunnelSummary {
+            id: request.tunnel_id.trim().to_string(),
+            slug: request.slug.trim().to_string(),
+            name: request.name.trim().to_string(),
+            target_url: target.url.to_string(),
+            public_url: request.public_url.trim().to_string(),
+            created_at: now_unix_seconds(),
+            expires_at: request.expires_at,
+            active_connections: 0,
+            status: "active".to_string(),
+            project_path_key: request.project_path_key.trim().to_string(),
+        };
+        self.store_local_tunnel(summary.clone(), target)?;
+        Ok(summary)
+    }
+
+    fn resume_local_tunnel_from_control(
+        &self,
+        request: &proto::TunnelControlRequest,
+    ) -> Result<GatewayTunnelSummary, String> {
+        let identifier = if request.tunnel_id.trim().is_empty() {
+            request.slug.trim()
+        } else {
+            request.tunnel_id.trim()
+        };
+        let mut guard = self
+            .tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?;
+        let record = guard
+            .values_mut()
+            .find(|record| record.summary.id == identifier || record.summary.slug == identifier)
+            .ok_or_else(|| "tunnel not found".to_string())?;
+        if !request.target_url.trim().is_empty() {
+            let target = validate_tunnel_target_url(&request.target_url)?;
+            record.summary.target_url = target.url.to_string();
+            record.target = target;
+        }
+        if !request.public_url.trim().is_empty() {
+            record.summary.public_url = request.public_url.trim().to_string();
+        }
+        if request.expires_at > 0 {
+            record.summary.expires_at = request.expires_at;
+        }
+        if !request.project_path_key.trim().is_empty() {
+            record.summary.project_path_key = request.project_path_key.trim().to_string();
+        }
+        record.summary.status = "active".to_string();
+        Ok(record.summary.clone())
+    }
+
+    fn update_local_tunnel_from_control(
+        &self,
+        request: &proto::TunnelControlRequest,
+    ) -> Result<GatewayTunnelSummary, String> {
+        let identifier = if request.tunnel_id.trim().is_empty() {
+            request.slug.trim()
+        } else {
+            request.tunnel_id.trim()
+        };
+        if identifier.is_empty() {
+            return Err("tunnel id is required".to_string());
+        }
+        let target = validate_tunnel_target_url(&request.target_url)?;
+        let ttl_seconds = normalize_tunnel_ttl(request.ttl_seconds)?;
+        let expires_at = if request.expires_at > 0 {
+            request.expires_at
+        } else {
+            tunnel_expires_at(ttl_seconds)
+        };
+        let mut guard = self
+            .tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?;
+        let record = guard
+            .values_mut()
+            .find(|record| record.summary.id == identifier || record.summary.slug == identifier)
+            .ok_or_else(|| "tunnel not found".to_string())?;
+        record.summary.target_url = target.url.to_string();
+        record.target = target;
+        record.summary.name = request.name.trim().to_string();
+        record.summary.expires_at = expires_at;
+        if !request.public_url.trim().is_empty() {
+            record.summary.public_url = request.public_url.trim().to_string();
+        }
+        if !request.project_path_key.trim().is_empty() {
+            record.summary.project_path_key = request.project_path_key.trim().to_string();
+        }
+        record.summary.status = "active".to_string();
+        Ok(record.summary.clone())
+    }
+
+    fn store_local_tunnel(
+        &self,
+        summary: GatewayTunnelSummary,
+        target: TunnelTarget,
+    ) -> Result<(), String> {
+        if summary.id.trim().is_empty() {
+            return Err("tunnel id is required".to_string());
+        }
+        self.tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?
+            .insert(summary.id.clone(), LocalTunnelRecord { summary, target });
+        Ok(())
+    }
+
+    fn merge_tunnel_summaries(&self, summaries: &[GatewayTunnelSummary]) -> Result<(), String> {
+        let mut guard = self
+            .tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?;
+        for summary in summaries {
+            if let Some(record) = guard.get_mut(&summary.id) {
+                record.summary = summary.clone();
+            }
+        }
+        Ok(())
+    }
+
+    fn local_tunnel_summaries(
+        &self,
+        offline_status: &str,
+    ) -> Result<Vec<GatewayTunnelSummary>, String> {
+        let now = now_unix_seconds();
+        let mut summaries = self
+            .tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?
+            .values()
+            .map(|record| {
+                let mut summary = record.summary.clone();
+                if summary.expires_at > 0 && summary.expires_at <= now {
+                    summary.status = "expired".to_string();
+                } else if !offline_status.trim().is_empty() {
+                    summary.status = offline_status.trim().to_string();
+                }
+                summary
+            })
+            .collect::<Vec<_>>();
+        summaries.sort_by_key(|summary| summary.created_at);
+        Ok(summaries)
+    }
+
+    fn remove_local_tunnel(&self, identifier: &str) -> Result<LocalTunnelRecord, String> {
+        let identifier = identifier.trim();
+        if identifier.is_empty() {
+            return Err("tunnel id is required".to_string());
+        }
+        let mut guard = self
+            .tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?;
+        if let Some(record) = guard.remove(identifier) {
+            return Ok(record);
+        }
+        let matched_id = guard
+            .iter()
+            .find_map(|(id, record)| (record.summary.slug == identifier).then(|| id.clone()))
+            .ok_or_else(|| "tunnel not found".to_string())?;
+        guard
+            .remove(&matched_id)
+            .ok_or_else(|| "tunnel not found".to_string())
+    }
+
+    fn find_local_tunnel(&self, tunnel_id: &str, slug: &str) -> Result<LocalTunnelRecord, String> {
+        let tunnel_id = tunnel_id.trim();
+        let slug = slug.trim();
+        let now = now_unix_seconds();
+        let guard = self
+            .tunnels
+            .lock()
+            .map_err(|_| "gateway tunnel registry lock poisoned".to_string())?;
+        let record = if !tunnel_id.is_empty() {
+            guard.get(tunnel_id)
+        } else {
+            guard.values().find(|record| record.summary.slug == slug)
+        }
+        .ok_or_else(|| "tunnel not found".to_string())?;
+        if record.summary.expires_at > 0 && record.summary.expires_at <= now {
+            return Err("tunnel expired".to_string());
+        }
+        Ok(record.clone())
+    }
+
+    fn remove_tunnel_http_stream(&self, stream_id: &str) {
+        if let Ok(mut streams) = self.tunnel_http_streams.lock() {
+            streams.remove(stream_id.trim());
+        }
+    }
+
+    fn remove_tunnel_ws_stream(&self, stream_id: &str) {
+        if let Ok(mut streams) = self.tunnel_ws_streams.lock() {
+            streams.remove(stream_id.trim());
+        }
+    }
+}
+
+fn normalize_tunnel_ttl(input: u32) -> Result<u32, String> {
+    match input {
+        0 | 900 | 3600 | 14400 => Ok(input),
+        _ => Err("ttlSeconds must be one of 0, 900, 3600, or 14400".to_string()),
+    }
+}
+
+fn tunnel_expires_at(ttl_seconds: u32) -> i64 {
+    if ttl_seconds == 0 {
+        return 0;
+    }
+    now_unix_seconds() + i64::from(ttl_seconds)
+}
+
+fn validate_tunnel_target_url(input: &str) -> Result<TunnelTarget, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("targetUrl is required".to_string());
+    }
+    let mut url = Url::parse(trimmed).map_err(|e| format!("invalid targetUrl: {e}"))?;
+    if url.scheme() != "http" {
+        return Err("targetUrl must use http".to_string());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("targetUrl must not include credentials".to_string());
+    }
+    if url.fragment().is_some() {
+        return Err("targetUrl must not include a fragment".to_string());
+    }
+    let host = url
+        .host_str()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .ok_or_else(|| "targetUrl host is required".to_string())?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+        return Err("targetUrl host must be localhost, 127.0.0.1, or ::1".to_string());
+    }
+    url.set_fragment(None);
+    Ok(TunnelTarget { url })
+}
+
+fn gateway_tunnel_summary_from_proto(summary: proto::TunnelSummary) -> GatewayTunnelSummary {
+    GatewayTunnelSummary {
+        id: summary.id,
+        slug: summary.slug,
+        name: summary.name,
+        target_url: summary.target_url,
+        public_url: summary.public_url,
+        created_at: summary.created_at,
+        expires_at: summary.expires_at,
+        active_connections: summary.active_connections,
+        status: summary.status,
+        project_path_key: summary.project_path_key,
+    }
+}
+
+fn proto_tunnel_summary_from_gateway(summary: GatewayTunnelSummary) -> proto::TunnelSummary {
+    proto::TunnelSummary {
+        id: summary.id,
+        slug: summary.slug,
+        name: summary.name,
+        target_url: summary.target_url,
+        public_url: summary.public_url,
+        created_at: summary.created_at,
+        expires_at: summary.expires_at,
+        active_connections: summary.active_connections,
+        status: summary.status,
+        project_path_key: summary.project_path_key,
+    }
+}
+
+fn tunnel_control_error_response(
+    action: String,
+    code: &str,
+    message: String,
+) -> proto::TunnelControlResponse {
+    proto::TunnelControlResponse {
+        action,
+        tunnels: Vec::new(),
+        tunnel: None,
+        error_code: code.to_string(),
+        error_message: message,
+    }
+}
+
+fn split_tunnel_path_and_query(input: &str) -> (&str, Option<&str>) {
+    let trimmed = input.trim();
+    match trimmed.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (trimmed, None),
+    }
+}
+
+fn normalize_tunnel_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return "/".to_string();
+    }
+    if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
+fn join_tunnel_paths(base_path: &str, rest_path: &str) -> String {
+    let base = normalize_tunnel_path(base_path);
+    let rest = normalize_tunnel_path(rest_path);
+    if base == "/" {
+        return rest;
+    }
+    if rest == "/" {
+        return format!("{}/", base.trim_end_matches('/'));
+    }
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        rest.trim_start_matches('/')
+    )
+}
+
+fn build_tunnel_upstream_url(base: &Url, public_path: &str) -> Result<Url, String> {
+    let (path, query) = split_tunnel_path_and_query(public_path);
+    let mut url = base.clone();
+    let joined_path = join_tunnel_paths(url.path(), path);
+    url.set_path(&joined_path);
+    url.set_query(query.filter(|value| !value.is_empty()));
+    url.set_fragment(None);
+    Ok(url)
+}
+
+fn build_tunnel_upstream_ws_url(base: &Url, public_path: &str) -> Result<Url, String> {
+    let mut url = build_tunnel_upstream_url(base, public_path)?;
+    url.set_scheme("ws")
+        .map_err(|_| "failed to build websocket tunnel target URL".to_string())?;
+    Ok(url)
+}
+
+fn should_drop_tunnel_header(name: &str, request: bool) -> bool {
+    match name.to_ascii_lowercase().as_str() {
+        "connection"
+        | "keep-alive"
+        | "proxy-authenticate"
+        | "proxy-authorization"
+        | "proxy-connection"
+        | "te"
+        | "trailer"
+        | "transfer-encoding"
+        | "upgrade" => true,
+        "host" => request,
+        _ => false,
+    }
+}
+
+fn apply_tunnel_request_headers(
+    mut builder: reqwest::RequestBuilder,
+    headers: &[proto::TunnelHeader],
+) -> reqwest::RequestBuilder {
+    for header in headers {
+        let name = header.name.trim();
+        if name.is_empty() || should_drop_tunnel_header(name, true) {
+            continue;
+        }
+        let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) else {
+            continue;
+        };
+        let Ok(header_value) = HeaderValue::from_str(&header.value) else {
+            continue;
+        };
+        builder = builder.header(header_name, header_value);
+    }
+    builder
+}
+
+fn tunnel_response_headers(headers: &reqwest::header::HeaderMap) -> Vec<proto::TunnelHeader> {
+    let mut out = Vec::new();
+    for (name, value) in headers.iter() {
+        let name_text = name.as_str();
+        if should_drop_tunnel_header(name_text, false) {
+            continue;
+        }
+        let Ok(value_text) = value.to_str() else {
+            continue;
+        };
+        out.push(proto::TunnelHeader {
+            name: name_text.to_string(),
+            value: value_text.to_string(),
+        });
+    }
+    out
+}
+
+async fn run_tunnel_http_request(
+    controller: Arc<GatewayController>,
+    stream_id: String,
+    tunnel_id: String,
+    slug: String,
+    method: String,
+    upstream_url: Url,
+    headers: Vec<proto::TunnelHeader>,
+    body_rx: mpsc::Receiver<Result<Vec<u8>, io::Error>>,
+) {
+    let result = async {
+        let method = reqwest::Method::from_bytes(method.trim().as_bytes())
+            .map_err(|e| format!("invalid tunnel request method: {e}"))?;
+        let body = reqwest::Body::wrap_stream(ReceiverStream::new(body_rx));
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| format!("failed to build local tunnel HTTP client: {e}"))?;
+        let request =
+            apply_tunnel_request_headers(client.request(method, upstream_url).body(body), &headers);
+        let response = request
+            .send()
+            .await
+            .map_err(|e| format!("local tunnel request failed: {e}"))?;
+        let status_code = u32::from(response.status().as_u16());
+        let response_headers = tunnel_response_headers(response.headers());
+        send_tunnel_frame(
+            &controller,
+            proto::TunnelFrame {
+                stream_id: stream_id.clone(),
+                tunnel_id: tunnel_id.clone(),
+                slug: slug.clone(),
+                kind: proto::TunnelFrameKind::HttpResponseStart as i32,
+                status_code,
+                headers: response_headers,
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("local tunnel response stream failed: {e}"))?;
+            if chunk.is_empty() {
+                continue;
+            }
+            for part in chunk.chunks(TUNNEL_BODY_CHUNK_SIZE) {
+                send_tunnel_frame(
+                    &controller,
+                    proto::TunnelFrame {
+                        stream_id: stream_id.clone(),
+                        tunnel_id: tunnel_id.clone(),
+                        slug: slug.clone(),
+                        kind: proto::TunnelFrameKind::HttpResponseBody as i32,
+                        body: part.to_vec(),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            }
+        }
+
+        send_tunnel_frame(
+            &controller,
+            proto::TunnelFrame {
+                stream_id: stream_id.clone(),
+                tunnel_id: tunnel_id.clone(),
+                slug: slug.clone(),
+                kind: proto::TunnelFrameKind::HttpResponseEnd as i32,
+                end_stream: true,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+    .await;
+
+    controller.remove_tunnel_http_stream(&stream_id);
+    if let Err(error) = result {
+        let _ = send_tunnel_frame(
+            &controller,
+            proto::TunnelFrame {
+                stream_id,
+                tunnel_id,
+                slug,
+                kind: proto::TunnelFrameKind::Error as i32,
+                error,
+                ..Default::default()
+            },
+        )
+        .await;
+    }
+}
+
+async fn run_tunnel_websocket(
+    controller: Arc<GatewayController>,
+    stream_id: String,
+    tunnel_id: String,
+    slug: String,
+    upstream_url: Url,
+    mut gateway_rx: mpsc::Receiver<proto::TunnelFrame>,
+) {
+    let result = async {
+        let (ws_stream, _) = connect_async(upstream_url.as_str())
+            .await
+            .map_err(|e| format!("local tunnel websocket failed: {e}"))?;
+        send_tunnel_frame(
+            &controller,
+            proto::TunnelFrame {
+                stream_id: stream_id.clone(),
+                tunnel_id: tunnel_id.clone(),
+                slug: slug.clone(),
+                kind: proto::TunnelFrameKind::WsOpen as i32,
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        let (mut local_write, mut local_read) = ws_stream.split();
+        loop {
+            tokio::select! {
+                incoming = gateway_rx.recv() => {
+                    let Some(frame) = incoming else {
+                        break;
+                    };
+                    match frame.kind() {
+                        proto::TunnelFrameKind::WsFrame => {
+                            if frame.ws_message_type.eq_ignore_ascii_case("text") {
+                                let text = String::from_utf8_lossy(&frame.body).to_string();
+                                local_write
+                                    .send(Message::Text(text.into()))
+                                    .await
+                                    .map_err(|e| format!("local websocket send failed: {e}"))?;
+                            } else {
+                                local_write
+                                    .send(Message::Binary(frame.body.into()))
+                                    .await
+                                    .map_err(|e| format!("local websocket send failed: {e}"))?;
+                            }
+                        }
+                        proto::TunnelFrameKind::WsClose | proto::TunnelFrameKind::Cancel => {
+                            let _ = local_write.send(Message::Close(None)).await;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                local = local_read.next() => {
+                    let Some(local) = local else {
+                        break;
+                    };
+                    let message = local.map_err(|e| format!("local websocket read failed: {e}"))?;
+                    match message {
+                        Message::Text(text) => {
+                            send_tunnel_frame(
+                                &controller,
+                                proto::TunnelFrame {
+                                    stream_id: stream_id.clone(),
+                                    tunnel_id: tunnel_id.clone(),
+                                    slug: slug.clone(),
+                                    kind: proto::TunnelFrameKind::WsFrame as i32,
+                                    ws_message_type: "text".to_string(),
+                                    body: text.to_string().into_bytes(),
+                                    ..Default::default()
+                                },
+                            )
+                            .await?;
+                        }
+                        Message::Binary(data) => {
+                            send_tunnel_frame(
+                                &controller,
+                                proto::TunnelFrame {
+                                    stream_id: stream_id.clone(),
+                                    tunnel_id: tunnel_id.clone(),
+                                    slug: slug.clone(),
+                                    kind: proto::TunnelFrameKind::WsFrame as i32,
+                                    ws_message_type: "binary".to_string(),
+                                    body: data.to_vec(),
+                                    ..Default::default()
+                                },
+                            )
+                            .await?;
+                        }
+                        Message::Ping(data) => {
+                            let _ = local_write.send(Message::Pong(data)).await;
+                        }
+                        Message::Close(_) => {
+                            break;
+                        }
+                        Message::Pong(_) | Message::Frame(_) => {}
+                    }
+                }
+            }
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+
+    controller.remove_tunnel_ws_stream(&stream_id);
+    let kind = if result.is_ok() {
+        proto::TunnelFrameKind::WsClose
+    } else {
+        proto::TunnelFrameKind::Error
+    };
+    let _ = send_tunnel_frame(
+        &controller,
+        proto::TunnelFrame {
+            stream_id,
+            tunnel_id,
+            slug,
+            kind: kind as i32,
+            error: result.err().unwrap_or_default(),
+            ..Default::default()
+        },
+    )
+    .await;
+}
+
+async fn send_tunnel_frame(
+    controller: &GatewayController,
+    frame: proto::TunnelFrame,
+) -> Result<(), String> {
+    controller
+        .send_agent_envelope(proto::AgentEnvelope {
+            request_id: format!("tunnel-frame-{}", frame.stream_id.trim()),
+            timestamp: now_unix_seconds(),
+            payload: Some(proto::agent_envelope::Payload::TunnelFrame(frame)),
+        })
+        .await
 }
 
 async fn await_abortable_on_reconfigure<T>(
@@ -1841,12 +3724,150 @@ fn serialize_settings_sync_payload(payload: &Value) -> Result<String, String> {
 mod tests {
     use super::{
         build_chat_event_envelope, build_endpoint, build_grpc_url,
-        build_local_settings_update_event_payload, history_share_resolve_error_code,
-        merge_settings_sync_snapshot, required_terminal_project_path_key, set_disconnected_status,
-        GatewayStatusSnapshot,
+        build_local_settings_update_event_payload, build_tunnel_upstream_url,
+        history_share_resolve_error_code, merge_settings_sync_snapshot, normalize_tunnel_ttl,
+        required_terminal_project_path_key, set_disconnected_status, tunnel_expires_at,
+        validate_tunnel_target_url, GatewayChatRequestEvent, GatewayController,
+        GatewayStatusSnapshot, RemoteChatInboxRecord, GATEWAY_CHAT_LEASE_MS,
+        GATEWAY_CHAT_RUNNING_LEASE_MS,
     };
     use crate::commands::settings::RemoteSettingsPayload;
     use serde_json::{json, Value};
+    use std::time::{Duration, Instant};
+
+    fn gateway_chat_request(
+        request_id: &str,
+        client_request_id: &str,
+        conversation_id: &str,
+        message: &str,
+    ) -> GatewayChatRequestEvent {
+        GatewayChatRequestEvent {
+            request_id: request_id.to_string(),
+            conversation_id: conversation_id.to_string(),
+            client_request_id: client_request_id.to_string(),
+            message: message.to_string(),
+            force_hydrate: false,
+            selected_model: None,
+            runtime_controls: None,
+            execution_mode: String::new(),
+            workdir: String::new(),
+            selected_system_tools: Vec::new(),
+            uploaded_files: Vec::new(),
+            history_truncation_key: None,
+        }
+    }
+
+    fn remote_chat_record(
+        request: GatewayChatRequestEvent,
+        state: &str,
+        started: bool,
+        now: Instant,
+    ) -> RemoteChatInboxRecord {
+        RemoteChatInboxRecord {
+            request,
+            state: state.to_string(),
+            lease_owner: Some("worker-1".to_string()),
+            lease_expires_at: Some(now + Duration::from_secs(30)),
+            attempt: 1,
+            started,
+            last_error: None,
+            created_at: now - Duration::from_secs(10),
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn remote_chat_started_records_use_running_lease() {
+        let now = Instant::now();
+        let queued = remote_chat_record(
+            gateway_chat_request("request-1", "client-1", "conversation-1", "hello"),
+            "queued",
+            false,
+            now,
+        );
+        let running = remote_chat_record(
+            gateway_chat_request("request-2", "client-2", "conversation-2", "hello"),
+            "running",
+            true,
+            now,
+        );
+
+        assert_eq!(
+            GatewayController::remote_chat_record_lease_ms(&queued),
+            GATEWAY_CHAT_LEASE_MS
+        );
+        assert_eq!(
+            GatewayController::remote_chat_record_lease_ms(&running),
+            GATEWAY_CHAT_RUNNING_LEASE_MS
+        );
+        assert!(GATEWAY_CHAT_RUNNING_LEASE_MS > GATEWAY_CHAT_LEASE_MS);
+    }
+
+    #[test]
+    fn duplicate_remote_chat_request_preserves_running_record() {
+        let now = Instant::now();
+        let mut record = remote_chat_record(
+            gateway_chat_request("request-1", "client-1", "conversation-1", "first"),
+            "running",
+            true,
+            now,
+        );
+        let original_lease_owner = record.lease_owner.clone();
+        let original_lease_expires_at = record.lease_expires_at;
+
+        GatewayController::merge_duplicate_remote_chat_request(
+            &mut record,
+            gateway_chat_request("request-2", "client-1", "conversation-2", "replayed"),
+            now + Duration::from_secs(1),
+        );
+
+        assert_eq!(record.request.request_id, "request-1");
+        assert_eq!(record.request.client_request_id, "client-1");
+        assert_eq!(record.request.conversation_id, "conversation-1");
+        assert_eq!(record.request.message, "first");
+        assert_eq!(record.state, "running");
+        assert!(record.started);
+        assert_eq!(record.lease_owner, original_lease_owner);
+        assert_eq!(record.lease_expires_at, original_lease_expires_at);
+        assert_eq!(
+            GatewayController::remote_chat_record_control_type(&record),
+            "started"
+        );
+        assert!(!GatewayController::remote_chat_record_should_wake_runtime(
+            &record,
+            now + Duration::from_secs(1),
+        ));
+    }
+
+    #[test]
+    fn duplicate_queued_remote_chat_request_keeps_canonical_request_id() {
+        let now = Instant::now();
+        let mut record = remote_chat_record(
+            gateway_chat_request("request-1", "client-1", "conversation-1", "first"),
+            "queued",
+            false,
+            now,
+        );
+        record.lease_owner = None;
+        record.lease_expires_at = None;
+
+        GatewayController::merge_duplicate_remote_chat_request(
+            &mut record,
+            gateway_chat_request("request-2", "client-1", "conversation-2", "replayed"),
+            now + Duration::from_secs(1),
+        );
+
+        assert_eq!(record.request.request_id, "request-1");
+        assert_eq!(record.request.client_request_id, "client-1");
+        assert_eq!(record.request.conversation_id, "conversation-2");
+        assert_eq!(record.request.message, "replayed");
+        assert_eq!(record.state, "queued");
+        assert!(!record.started);
+        assert!(GatewayController::remote_chat_record_should_wake_runtime(
+            &record,
+            now + Duration::from_secs(1),
+        ));
+    }
 
     #[test]
     fn history_share_resolve_error_code_maps_public_share_failures() {
@@ -1863,6 +3884,48 @@ mod tests {
             history_share_resolve_error_code("读取历史对话分享链接失败：db"),
             500
         );
+    }
+
+    #[test]
+    fn validate_tunnel_target_url_only_accepts_localhost_http() {
+        for value in [
+            "http://localhost:3000",
+            "http://127.0.0.1:8080/app",
+            "http://[::1]:5173",
+        ] {
+            assert!(validate_tunnel_target_url(value).is_ok(), "{value}");
+        }
+
+        for value in [
+            "https://localhost:3000",
+            "http://192.168.1.5:3000",
+            "http://example.com",
+            "http://user:pass@localhost:3000",
+            "http://localhost:3000/#fragment",
+        ] {
+            assert!(validate_tunnel_target_url(value).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn build_tunnel_upstream_url_preserves_base_path_and_query() {
+        let target = validate_tunnel_target_url("http://localhost:3000/app").unwrap();
+        let upstream = build_tunnel_upstream_url(&target.url, "/api/users?page=1").unwrap();
+        assert_eq!(
+            upstream.as_str(),
+            "http://localhost:3000/app/api/users?page=1"
+        );
+
+        let root_target = validate_tunnel_target_url("http://127.0.0.1:5173").unwrap();
+        let root_upstream = build_tunnel_upstream_url(&root_target.url, "/").unwrap();
+        assert_eq!(root_upstream.as_str(), "http://127.0.0.1:5173/");
+    }
+
+    #[test]
+    fn tunnel_ttl_allows_infinite_expiry() {
+        assert_eq!(normalize_tunnel_ttl(0).unwrap(), 0);
+        assert_eq!(tunnel_expires_at(0), 0);
+        assert!(normalize_tunnel_ttl(1).is_err());
     }
 
     #[test]
@@ -1989,6 +4052,7 @@ mod tests {
             heartbeat_interval: 30,
             enable_web_terminal: false,
             enable_web_git: false,
+            enable_web_tunnels: false,
         };
         let mut status = GatewayStatusSnapshot {
             online: true,
@@ -2037,6 +4101,7 @@ mod tests {
             heartbeat_interval: 30,
             enable_web_terminal: false,
             enable_web_git: false,
+            enable_web_tunnels: false,
         };
 
         let grpc_url = build_grpc_url(&config).expect("build explicit gRPC endpoint");
@@ -2078,6 +4143,56 @@ mod tests {
         let data: Value = serde_json::from_str(&chat_event.data).expect("chat event data");
         assert_eq!(data["arguments"]["command"], "printf live");
         assert_eq!(data["arguments"]["root"], "workspace");
+    }
+
+    #[test]
+    fn build_chat_event_envelope_accepts_started_control_event() {
+        let envelope = build_chat_event_envelope(
+            "request-1".to_string(),
+            json!({
+                "type": "started",
+                "conversation_id": "conversation-1"
+            }),
+        )
+        .expect("build chat started event envelope");
+
+        let chat_event = match envelope.payload.expect("payload") {
+            super::proto::agent_envelope::Payload::ChatEvent(event) => event,
+            _ => panic!("expected chat event payload"),
+        };
+        assert_eq!(chat_event.conversation_id, "conversation-1");
+        assert_eq!(
+            chat_event.r#type,
+            super::proto::chat_event::ChatEventType::Token as i32
+        );
+
+        let data: Value = serde_json::from_str(&chat_event.data).expect("chat event data");
+        assert_eq!(data["type"], "started");
+    }
+
+    #[test]
+    fn build_chat_event_envelope_accepts_backend_accepted_control_event() {
+        let envelope = build_chat_event_envelope(
+            "request-1".to_string(),
+            json!({
+                "type": "accepted",
+                "conversation_id": "conversation-1"
+            }),
+        )
+        .expect("build chat accepted event envelope");
+
+        let chat_event = match envelope.payload.expect("payload") {
+            super::proto::agent_envelope::Payload::ChatEvent(event) => event,
+            _ => panic!("expected chat event payload"),
+        };
+        assert_eq!(chat_event.conversation_id, "conversation-1");
+        assert_eq!(
+            chat_event.r#type,
+            super::proto::chat_event::ChatEventType::Token as i32
+        );
+
+        let data: Value = serde_json::from_str(&chat_event.data).expect("chat event data");
+        assert_eq!(data["type"], "accepted");
     }
 
     #[test]
@@ -2167,6 +4282,18 @@ fn build_chat_event_envelope(
         .unwrap_or_default();
 
     let (event_kind, data) = match event_type.as_str() {
+        "accepted" => (
+            proto::chat_event::ChatEventType::Token as i32,
+            json!({
+                "type": "accepted",
+            }),
+        ),
+        "started" => (
+            proto::chat_event::ChatEventType::Token as i32,
+            json!({
+                "type": "started",
+            }),
+        ),
         "token" => (
             proto::chat_event::ChatEventType::Token as i32,
             json!({
@@ -2259,6 +4386,63 @@ fn build_chat_event_envelope(
             },
         )),
     })
+}
+
+fn build_gateway_chat_control_event_envelope(
+    request_id: String,
+    conversation_id: String,
+    event_type: &str,
+    error_code: String,
+    message: String,
+) -> proto::AgentEnvelope {
+    let state = match event_type.trim() {
+        "accepted" => "queued",
+        "delivered" => "delivered",
+        "claimed" => "claimed",
+        "starting" => "starting",
+        "started" => "running",
+        "completed" => "completed",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        _ => "",
+    }
+    .to_string();
+    proto::AgentEnvelope {
+        request_id: request_id.clone(),
+        timestamp: now_unix_seconds(),
+        payload: Some(proto::agent_envelope::Payload::ChatControl(
+            proto::ChatControlEvent {
+                request_id,
+                conversation_id,
+                r#type: event_type.trim().to_string(),
+                state,
+                error_code,
+                message,
+                ..Default::default()
+            },
+        )),
+    }
+}
+
+fn build_gateway_runtime_status_envelope(
+    worker_id: String,
+    state: String,
+    visible: bool,
+    active_run_count: u32,
+) -> proto::AgentEnvelope {
+    proto::AgentEnvelope {
+        request_id: format!("runtime-status-{}", worker_id.trim()),
+        timestamp: now_unix_seconds(),
+        payload: Some(proto::agent_envelope::Payload::RuntimeStatus(
+            proto::RuntimeStatusEvent {
+                worker_id,
+                state,
+                visible,
+                active_run_count,
+                timestamp: now_unix_seconds(),
+            },
+        )),
+    }
 }
 
 fn build_history_sync_envelope(

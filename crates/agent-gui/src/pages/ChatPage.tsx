@@ -27,6 +27,12 @@ import { type NotifyItem, NotifyToast } from "../components/chat/NotifyToast";
 import { SharedHistoryManagerModal } from "../components/chat/SharedHistoryManagerModal";
 import { Ban, PanelRightClose, PanelRightOpen, Terminal, Upload } from "../components/icons";
 import { ProjectToolsPanel } from "../components/project-tools/ProjectToolsPanel";
+import type {
+  LocalTunnelClient,
+  TunnelCreateInput,
+  TunnelSummary,
+  TunnelUpdateInput,
+} from "../components/project-tools/LocalTunnelPanel";
 import type { WorkspaceCodeEditorOpenRequest } from "../components/workspace-editor/WorkspaceCodeEditorOverlay";
 import type { WorkspaceImagePreviewOpenRequest } from "../components/workspace-editor/WorkspaceImagePreviewOverlay";
 import { isWorkspaceImagePath } from "../components/workspace-editor/workspaceImagePreview";
@@ -107,13 +113,14 @@ import {
   findProviderModelConfig,
   getChatRuntimeReasoningLevelsForProvider,
   getProjectToolsFileTreeProjectState,
+  getProjectToolsPanelActiveTab,
   getProjectToolsPanelTabOrder,
   isAgentDevMode,
   isAgentExecutionMode,
   isProjectToolsFileTreeOpen,
   isProjectToolsGitReviewOpen,
+  isProjectToolsTunnelOpen,
   normalizeChatRuntimeControlsForProvider,
-  type ProviderId,
   type SelectedModel,
   type SystemToolId,
   type WorkspaceProject,
@@ -125,6 +132,8 @@ import {
   updateProjectToolsFileTreeProjectState,
   updateProjectToolsFileTreeOpen,
   updateProjectToolsGitReviewOpen,
+  updateProjectToolsTunnelOpen,
+  updateProjectToolsPanelActiveTab,
   updateProjectToolsPanelTabOrder,
   updateChatRuntimeControlsForProvider,
   updateMcp,
@@ -173,10 +182,12 @@ import { startConversationTitleJob } from "./chat/conversationTitleJob";
 import {
   type ActiveGatewayBridgeRequest,
   type EnsureGatewayBridgeConversationReadyOptions,
-  type GatewaySelectedModelEvent,
-  normalizeGatewayProviderType,
   type SendChatAction,
 } from "./chat/gatewayBridgeTypes";
+import {
+  type EffectiveChatModelSelection,
+  resolveEffectiveChatModelSelection,
+} from "./chat/modelSelection";
 import { runAgentConversationTurn } from "./chat/runAgentConversationTurn";
 import { runTextConversationTurn } from "./chat/runTextConversationTurn";
 import { clearSilentMemoryExtractionState } from "./chat/silentMemoryExtraction";
@@ -245,16 +256,6 @@ function buildFallbackGatewayStatus(remote: AppSettings["remote"]): GatewayRunti
     lastError: null,
   };
 }
-
-type EffectiveChatModelSelection = {
-  selectedModel: {
-    customProviderId: string;
-    model: string;
-  };
-  provider: AppSettings["customProviders"][number];
-  providerId: ProviderId;
-  model: string;
-};
 
 type SyncedRunningConversationRuntime = {
   workdir?: string;
@@ -423,58 +424,6 @@ async function importPastedTextsAsFiles(workdir: string, pastes: MentionComposer
   return {
     files,
     fileByPasteId,
-  };
-}
-
-function resolveEffectiveChatModelSelection(
-  settings: AppSettings,
-  gatewaySelectedModel?: GatewaySelectedModelEvent,
-): EffectiveChatModelSelection {
-  const resolveLocalSelection = (): EffectiveChatModelSelection => {
-    if (!settings.selectedModel) {
-      throw new Error("请先在左上角选择一个模型（或先去设置添加模型）。");
-    }
-
-    const { customProviderId, model } = settings.selectedModel;
-    const provider = settings.customProviders.find((item) => item.id === customProviderId);
-    if (!provider) {
-      throw new Error("所选供应商不存在，请重新选择模型。");
-    }
-
-    return {
-      selectedModel: settings.selectedModel,
-      provider,
-      providerId: provider.type,
-      model,
-    };
-  };
-
-  if (!gatewaySelectedModel) {
-    return resolveLocalSelection();
-  }
-
-  const customProviderId = gatewaySelectedModel.customProviderId.trim();
-  const model = gatewaySelectedModel.model.trim();
-  const providerType = normalizeGatewayProviderType(gatewaySelectedModel.providerType);
-  if (!customProviderId || !model || !providerType) {
-    throw new Error("远程请求携带的模型配置无效，请在 WebUI 重新选择模型后重试。");
-  }
-
-  const exactProvider = settings.customProviders.find((item) => item.id === customProviderId);
-  const provider =
-    exactProvider ?? settings.customProviders.find((item) => item.type === providerType);
-  if (!provider) {
-    throw new Error("远程请求所选模型对应的供应商不存在，请先在桌面端配置该类型供应商。");
-  }
-
-  return {
-    selectedModel: {
-      customProviderId: provider.id,
-      model,
-    },
-    provider,
-    providerId: provider.type,
-    model,
   };
 }
 
@@ -700,6 +649,7 @@ export function ChatPage(props: ChatPageProps) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeView, setActiveView] = useState<"chat" | "skills-hub" | "mcp-hub">("chat");
   const [projectToolsPanelOpen, setProjectToolsPanelOpen] = useState(false);
+  const [tunnelRefreshToken, setTunnelRefreshToken] = useState(0);
   const previousProjectToolsFileTreeOpenRef = useRef(false);
   const [workspaceEditorMounted, setWorkspaceEditorMounted] = useState(false);
   const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
@@ -716,6 +666,17 @@ export function ChatPage(props: ChatPageProps) {
   const [projectTerminalSessions, setProjectTerminalSessions] = useState<TerminalSession[]>([]);
   const [remoteRuntimeStatus, setRemoteRuntimeStatus] = useState<GatewayRuntimeStatus>(() =>
     buildFallbackGatewayStatus(settings.remote),
+  );
+  const tauriTunnelClient = useMemo<LocalTunnelClient>(
+    () => ({
+      listTunnels: () => invoke<TunnelSummary[]>("gateway_tunnel_list"),
+      createTunnel: (input: TunnelCreateInput) =>
+        invoke<TunnelSummary>("gateway_tunnel_create", { input }),
+      updateTunnel: (input: TunnelUpdateInput) =>
+        invoke<TunnelSummary>("gateway_tunnel_update", { input }),
+      closeTunnel: (id: string) => invoke<TunnelSummary>("gateway_tunnel_close", { tunnel_id: id }),
+    }),
+    [],
   );
 
   const {
@@ -1074,12 +1035,7 @@ export function ChatPage(props: ChatPageProps) {
       activateWorkspaceProject(project);
       setSettings((prev) =>
         updateProjectToolsFileTreeOpen(
-          updateCustomSettings(prev, {
-            projectToolsPanel: {
-              ...prev.customSettings.projectToolsPanel,
-              activeTab: "fileTree",
-            },
-          }),
+          updateProjectToolsPanelActiveTab(prev, pathKey, "fileTree"),
           pathKey,
           true,
         ),
@@ -1087,6 +1043,21 @@ export function ChatPage(props: ChatPageProps) {
     },
     [activateWorkspaceProject, checkWorkspaceProjectDirectory, setSettings],
   );
+
+  const openTunnelToolPanel = useCallback((projectPathKey?: string) => {
+    const targetProjectPathKey =
+      workspaceProjectPathKey(projectPathKey) || workspaceProjectPathKey(activeWorkspaceProjectPath);
+    if (!targetProjectPathKey) return;
+    setActiveView("chat");
+    setProjectToolsPanelOpen(true);
+    setSettings((prev) =>
+      updateProjectToolsTunnelOpen(
+        updateProjectToolsPanelActiveTab(prev, targetProjectPathKey, "tunnel"),
+        targetProjectPathKey,
+        true,
+      ),
+    );
+  }, [activeWorkspaceProjectPath, setSettings]);
 
   const handleBrowseWorkspaceProjectInSystemFileManager = useCallback(
     async (project: WorkspaceProject) => {
@@ -1478,10 +1449,20 @@ export function ChatPage(props: ChatPageProps) {
     settings.customSettings,
     terminalProjectPathKey,
   );
+  const projectToolsTunnelOpen = isProjectToolsTunnelOpen(
+    settings.customSettings,
+    terminalProjectPathKey,
+  );
   const terminalDisabledMessage = !isAgentMode
     ? "Project tools require Agent project mode."
     : !terminalProjectPath
       ? "Select a project to use project tools."
+      : undefined;
+  const tunnelEnabled = settings.remote.enableWebTunnels === true && remoteRuntimeStatus.online;
+  const tunnelDisabledMessage = !settings.remote.enableWebTunnels
+    ? t("projectTools.tunnelWebDisabled")
+    : !remoteRuntimeStatus.online
+      ? t("projectTools.tunnelRemoteOffline")
       : undefined;
   const handleOpenWorkspaceFile = useCallback(
     (path: string) => {
@@ -2625,6 +2606,7 @@ export function ChatPage(props: ChatPageProps) {
     const gatewayBridgeEvents = createGatewayBridgeEventController({
       conversationId,
       requestId: gatewayBridgeRequest?.requestId ?? `conversation-live-${conversationId}`,
+      workerId: gatewayBridgeRequest?.workerId,
       enabled: Boolean(gatewayBridgeRequest) || hasRemoteGatewayTarget,
       sendEvent: queueGatewayBridgeEventForRequest,
       resolveErrorConversationId: () =>
@@ -2649,7 +2631,14 @@ export function ChatPage(props: ChatPageProps) {
       gatewayBridgeEvents.emitError(message, conversationId);
       throw new Error(message);
     }
-    if (runtimeEntry.isSending) return;
+    if (runtimeEntry.isSending) {
+      if (gatewayBridgeRequest) {
+        const message = "Conversation is already sending.";
+        gatewayBridgeEvents.emitError(message, conversationId);
+        gatewayBridgeEvents.close();
+      }
+      return;
+    }
     if (isImportingPastedTextRef.current && typeof overrides?.textOverride !== "string") {
       return;
     }
@@ -2767,7 +2756,14 @@ export function ChatPage(props: ChatPageProps) {
     }
 
     const userMessage = createUserMessageWithUploads(text, uploadedFiles, Date.now());
-    if (!userMessage) return;
+    if (!userMessage) {
+      if (gatewayBridgeRequest) {
+        const message = "Message is required.";
+        gatewayBridgeEvents.emitError(message, conversationId);
+        gatewayBridgeEvents.close();
+      }
+      return;
+    }
     const pendingUserMessage = userMessage;
     const content =
       typeof pendingUserMessage.content === "string" ? pendingUserMessage.content : "";
@@ -2877,12 +2873,22 @@ export function ChatPage(props: ChatPageProps) {
       pendingUserMessage,
     ]);
     let conversationRunStarted = false;
+    let gatewayRunStarted = false;
     let gatewayActivityPublishChain: Promise<void> = Promise.resolve();
     function queueGatewayConversationActivity(running: boolean) {
       gatewayActivityPublishChain = gatewayActivityPublishChain.then(() =>
         publishGatewayConversationActivity(conversationId, running, conversationCwd),
       );
       void gatewayActivityPublishChain;
+    }
+    function acknowledgeGatewayRunStarted() {
+      if (gatewayRunStarted) {
+        return;
+      }
+      gatewayRunStarted = true;
+      gatewayBridgeEvents.queueStarted();
+      gatewayBridgeEvents.queueToken("", { round: 0 });
+      queueGatewayConversationActivity(true);
     }
     function markConversationRunStarted() {
       if (conversationRunStarted) {
@@ -2893,8 +2899,6 @@ export function ChatPage(props: ChatPageProps) {
       resetLiveTranscript(transcriptStore);
       setConversationAbortController(conversationId, requestController);
       setConversationSendingState(conversationId, true);
-      gatewayBridgeEvents.queueToken("", { round: 0 });
-      queueGatewayConversationActivity(true);
       if (isConversationVisible()) {
         stickToBottom();
       }
@@ -2905,7 +2909,9 @@ export function ChatPage(props: ChatPageProps) {
       }
       setConversationAbortController(conversationId, null);
       setConversationSendingState(conversationId, false);
-      queueGatewayConversationActivity(false);
+      if (gatewayRunStarted) {
+        queueGatewayConversationActivity(false);
+      }
     }
 
     const shouldSynchronizeInitialPersistBeforeGatewayStream =
@@ -2945,11 +2951,22 @@ export function ChatPage(props: ChatPageProps) {
         markConversationRunStopped();
         return;
       }
+      acknowledgeGatewayRunStarted();
     } else {
       if (shouldSynchronizeInitialPersistBeforeGatewayStream) {
-        await initialPersist;
+        const persisted = await initialPersist;
+        if (!persisted) {
+          const message = "历史记录保存失败，已取消本次远程对话。";
+          setConversationErrorState(message);
+          gatewayBridgeEvents.emitError(message, conversationId);
+          gatewayBridgeEvents.close();
+          markConversationRunStopped();
+          return;
+        }
+        acknowledgeGatewayRunStarted();
       } else {
         void initialPersist;
+        acknowledgeGatewayRunStarted();
       }
     }
     let activeCompactionRollback: {
@@ -3546,6 +3563,14 @@ export function ChatPage(props: ChatPageProps) {
           },
           enabledMcpServerIds,
           selectableMcpServers,
+          remoteWebTunnelsEnabled: settings.remote.enableWebTunnels,
+          remoteGatewayOnline: canShareHistory,
+          onTunnelsChanged: (change) => {
+            setTunnelRefreshToken((current) => current + 1);
+            if (change.action === "create") {
+              openTunnelToolPanel(change.tunnel.projectPathKey);
+            }
+          },
           sessionId,
           conversationId,
           conversationCwd,
@@ -4582,7 +4607,10 @@ export function ChatPage(props: ChatPageProps) {
         width={settings.customSettings.projectToolsPanel.width}
         theme={settings.theme}
         disabledMessage={terminalDisabledMessage}
-        activeTab={settings.customSettings.projectToolsPanel.activeTab}
+        activeTab={getProjectToolsPanelActiveTab(
+          settings.customSettings,
+          terminalProjectPathKey,
+        )}
         tabOrder={getProjectToolsPanelTabOrder(settings.customSettings, terminalProjectPathKey)}
         fileTreeOpen={projectToolsFileTreeOpen}
         fileTreeState={getProjectToolsFileTreeProjectState(
@@ -4590,9 +4618,14 @@ export function ChatPage(props: ChatPageProps) {
           terminalProjectPathKey,
         )}
         gitReviewOpen={isProjectToolsGitReviewOpen(settings.customSettings, terminalProjectPathKey)}
+        tunnelOpen={projectToolsTunnelOpen}
         client={tauriTerminalClient}
         gitClient={tauriGitClient}
         gitWriteEnabled
+        tunnelClient={isAgentMode ? tauriTunnelClient : null}
+        tunnelEnabled={tunnelEnabled}
+        tunnelDisabledMessage={tunnelDisabledMessage}
+        tunnelRefreshToken={tunnelRefreshToken}
         onWidthChange={(nextWidth) =>
           setSettings((prev) =>
             updateCustomSettings(prev, {
@@ -4605,12 +4638,7 @@ export function ChatPage(props: ChatPageProps) {
         }
         onActiveTabChange={(activeTab) =>
           setSettings((prev) =>
-            updateCustomSettings(prev, {
-              projectToolsPanel: {
-                ...prev.customSettings.projectToolsPanel,
-                activeTab,
-              },
-            }),
+            updateProjectToolsPanelActiveTab(prev, terminalProjectPathKey, activeTab),
           )
         }
         onTabOrderChange={(tabOrder) =>
@@ -4628,6 +4656,9 @@ export function ChatPage(props: ChatPageProps) {
         }
         onGitReviewOpenChange={(open) =>
           setSettings((prev) => updateProjectToolsGitReviewOpen(prev, terminalProjectPathKey, open))
+        }
+        onTunnelOpenChange={(open) =>
+          setSettings((prev) => updateProjectToolsTunnelOpen(prev, terminalProjectPathKey, open))
         }
         onSessionsChange={setProjectTerminalSessions}
         onInsertFileMention={(path, kind) => {

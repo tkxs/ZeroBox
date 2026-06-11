@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"time"
 
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
@@ -13,13 +14,37 @@ func NewAgentSession(auth AuthSnapshot) *AgentSession {
 		SessionID:    auth.SessionID,
 		ConnectedAt:  time.Now(),
 		LastPing:     time.Now(),
-		toAgent:      make(chan *gatewayv1.GatewayEnvelope, 64),
+		toAgent:      make(chan *OutboundEnvelope, 64),
 		done:         make(chan struct{}),
 		streams:      make(map[string]*agentStream),
 	}
 }
 
-func (s *AgentSession) Outbound() <-chan *gatewayv1.GatewayEnvelope {
+type OutboundEnvelope struct {
+	*gatewayv1.GatewayEnvelope
+
+	ctx    context.Context
+	result chan error
+}
+
+func (e *OutboundEnvelope) Context() context.Context {
+	if e == nil || e.ctx == nil {
+		return context.Background()
+	}
+	return e.ctx
+}
+
+func (e *OutboundEnvelope) Ack(err error) {
+	if e == nil || e.result == nil {
+		return
+	}
+	select {
+	case e.result <- err:
+	default:
+	}
+}
+
+func (s *AgentSession) Outbound() <-chan *OutboundEnvelope {
 	return s.toAgent
 }
 
@@ -41,6 +66,34 @@ func (s *AgentSession) Close() {
 }
 
 func (s *AgentSession) SendToAgent(env *gatewayv1.GatewayEnvelope) error {
+	return s.enqueueToAgent(context.Background(), env, nil)
+}
+
+func (s *AgentSession) SendToAgentContext(ctx context.Context, env *gatewayv1.GatewayEnvelope) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result := make(chan error, 1)
+	if err := s.enqueueToAgent(ctx, env, result); err != nil {
+		return err
+	}
+
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		s.Close()
+		return ctx.Err()
+	case <-s.done:
+		return ErrAgentOffline
+	}
+}
+
+func (s *AgentSession) enqueueToAgent(
+	ctx context.Context,
+	env *gatewayv1.GatewayEnvelope,
+	result chan error,
+) error {
 	s.streamsMu.Lock()
 	closed := s.closed
 	s.streamsMu.Unlock()
@@ -49,9 +102,15 @@ func (s *AgentSession) SendToAgent(env *gatewayv1.GatewayEnvelope) error {
 	}
 
 	select {
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-s.done:
 		return ErrAgentOffline
-	case s.toAgent <- env:
+	case s.toAgent <- &OutboundEnvelope{
+		GatewayEnvelope: env,
+		ctx:             ctx,
+		result:          result,
+	}:
 		return nil
 	}
 }
@@ -73,7 +132,7 @@ func (s *AgentSession) TrySendToAgent(env *gatewayv1.GatewayEnvelope) (bool, err
 	select {
 	case <-s.done:
 		return false, ErrAgentOffline
-	case s.toAgent <- env:
+	case s.toAgent <- &OutboundEnvelope{GatewayEnvelope: env}:
 		return true, nil
 	default:
 		return false, nil

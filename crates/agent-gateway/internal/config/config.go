@@ -17,6 +17,8 @@ type Config struct {
 	TLSCert                  string
 	TLSKey                   string
 	RequestTimeout           time.Duration
+	ChatStartTimeout         time.Duration
+	ChatRenderStartTimeout   time.Duration
 	HeartbeatPeriod          time.Duration
 	WebSocketHeartbeatPeriod time.Duration
 	WebSocketWriteTimeout    time.Duration
@@ -32,6 +34,8 @@ func Load() *Config {
 	flag.StringVar(&cfg.TLSCert, "tls-cert", getenv("LIVEAGENT_GATEWAY_TLS_CERT", ""), "TLS certificate path")
 	flag.StringVar(&cfg.TLSKey, "tls-key", getenv("LIVEAGENT_GATEWAY_TLS_KEY", ""), "TLS private key path")
 	flag.DurationVar(&cfg.RequestTimeout, "request-timeout", getenvDuration("LIVEAGENT_GATEWAY_REQUEST_TIMEOUT", 2*time.Minute), "request timeout for non-streaming API calls")
+	flag.DurationVar(&cfg.ChatStartTimeout, "chat-start-timeout", getenvDuration("LIVEAGENT_GATEWAY_CHAT_START_TIMEOUT", 15*time.Second), "timeout waiting for the desktop backend to accept a remote chat request")
+	flag.DurationVar(&cfg.ChatRenderStartTimeout, "chat-render-start-timeout", getenvDuration("LIVEAGENT_GATEWAY_CHAT_RENDER_START_TIMEOUT", 45*time.Second), "timeout waiting for the desktop app to start an accepted remote chat request")
 	flag.DurationVar(&cfg.HeartbeatPeriod, "heartbeat-period", getenvDuration("LIVEAGENT_GATEWAY_HEARTBEAT_PERIOD", 30*time.Second), "ping interval for agent connection")
 	flag.DurationVar(&cfg.WebSocketHeartbeatPeriod, "websocket-heartbeat-period", getenvDuration("LIVEAGENT_GATEWAY_WS_HEARTBEAT_PERIOD", 15*time.Second), "ping interval for browser WebSocket connections")
 	flag.DurationVar(&cfg.WebSocketWriteTimeout, "websocket-write-timeout", getenvDuration("LIVEAGENT_GATEWAY_WS_WRITE_TIMEOUT", 10*time.Second), "write timeout for browser WebSocket connections")
@@ -48,6 +52,12 @@ func Load() *Config {
 	}
 	if cfg.GRPCMaxMessageBytes <= 0 {
 		cfg.GRPCMaxMessageBytes = DefaultGRPCMaxMessageBytes
+	}
+	if cfg.ChatStartTimeout <= 0 {
+		cfg.ChatStartTimeout = 15 * time.Second
+	}
+	if cfg.ChatRenderStartTimeout <= 0 {
+		cfg.ChatRenderStartTimeout = 45 * time.Second
 	}
 	if cfg.WebSocketHeartbeatPeriod <= 0 {
 		cfg.WebSocketHeartbeatPeriod = 15 * time.Second

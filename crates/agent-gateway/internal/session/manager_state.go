@@ -2,6 +2,7 @@ package session
 
 import (
 	"sync"
+	"time"
 
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
 )
@@ -12,6 +13,12 @@ type sessionRegistry struct {
 	sessionEpoch uint64
 	lastAuth     AuthSnapshot
 	authValid    bool
+
+	runtimeState          string
+	runtimeWorkerID       string
+	runtimeLastHeartbeat  time.Time
+	runtimeVisible        bool
+	runtimeActiveRunCount uint32
 }
 
 func newSessionRegistry() *sessionRegistry {
@@ -49,6 +56,7 @@ type chatRunStore struct {
 	nextChatSubID          int
 	chatSubscribers        map[int]chan *ChatBroadcastEvent
 	nextChatRunSubID       int
+	nextChatRunEpoch       int64
 	chatRuns               map[string]*chatRun
 	chatRunByConversation  map[string]string
 	chatRunByClientRequest map[string]string

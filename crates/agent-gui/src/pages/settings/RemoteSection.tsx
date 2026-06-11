@@ -518,6 +518,24 @@ export function RemoteSection(props: SettingsSectionProps) {
               }
             />
           </div>
+
+          <div className="flex items-center justify-between gap-4 rounded-lg bg-muted/30 px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">{t("settings.remoteWebTunnels")}</div>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {t("settings.remoteWebTunnelsHint")}
+              </p>
+            </div>
+            <AgentActivationSwitch
+              checked={settings.remote.enableWebTunnels}
+              title={t("settings.remoteWebTunnels")}
+              onToggle={() =>
+                updateRemoteSettings(setSettings, {
+                  enableWebTunnels: !settings.remote.enableWebTunnels,
+                })
+              }
+            />
+          </div>
         </div>
       </div>
 

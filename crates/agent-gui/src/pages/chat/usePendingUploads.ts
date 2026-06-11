@@ -63,6 +63,11 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
   const activeUploadTasksRef = useRef(0);
   const uploadContextRef = useRef<{ isAgentMode: boolean; workdir: string } | null>(null);
   const pendingUploadsByConversationRef = useRef(new Map<string, PendingUploadedFile[]>());
+  const pendingUploadedFilesRef = useRef(pendingUploadedFiles);
+
+  useEffect(() => {
+    pendingUploadedFilesRef.current = pendingUploadedFiles;
+  }, [pendingUploadedFiles]);
 
   const beginUploadTask = useCallback(() => {
     activeUploadTasksRef.current += 1;
@@ -81,35 +86,117 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
     if (!previous) return;
     if (previous.isAgentMode === isAgentMode && previous.workdir === workdir) return;
     pendingUploadsByConversationRef.current.clear();
+    pendingUploadedFilesRef.current = [];
     setPendingUploadedFiles([]);
   }, [isAgentMode, workdir]);
 
+  const getPendingUploadsForConversation = useCallback(
+    (conversationId: string) => {
+      const targetConversationId = conversationId.trim();
+      if (
+        !targetConversationId ||
+        currentConversationIdRef.current.trim() === targetConversationId
+      ) {
+        return pendingUploadedFilesRef.current;
+      }
+      return pendingUploadsByConversationRef.current.get(targetConversationId) ?? [];
+    },
+    [currentConversationIdRef],
+  );
+
+  const setPendingUploadsForConversation = useCallback(
+    (conversationId: string, nextFiles: PendingUploadedFile[]) => {
+      const targetConversationId = conversationId.trim();
+      const normalizedFiles = nextFiles.slice();
+      if (targetConversationId) {
+        if (normalizedFiles.length > 0) {
+          pendingUploadsByConversationRef.current.set(targetConversationId, normalizedFiles);
+        } else {
+          pendingUploadsByConversationRef.current.delete(targetConversationId);
+        }
+      }
+      if (
+        !targetConversationId ||
+        currentConversationIdRef.current.trim() === targetConversationId
+      ) {
+        pendingUploadedFilesRef.current = normalizedFiles;
+        setPendingUploadedFiles(normalizedFiles);
+      }
+    },
+    [currentConversationIdRef],
+  );
+
+  const captureUploadTarget = useCallback(() => {
+    const targetConversationId = currentConversationIdRef.current.trim();
+    if (!targetConversationId) {
+      setErrorMessage("请先选择或创建会话后再上传文件。");
+      return null;
+    }
+
+    const currentTargetUploads = getPendingUploadsForConversation(targetConversationId);
+    setPendingUploadsForConversation(targetConversationId, currentTargetUploads);
+    const remainingFileSlots = Math.max(0, MAX_UPLOAD_FILES - currentTargetUploads.length);
+    if (remainingFileSlots === 0) {
+      addNotify("warning", `最多上传 ${MAX_UPLOAD_FILES} 个文件，已忽略多余文件`);
+      return null;
+    }
+
+    return {
+      targetConversationId,
+      targetWorkdir: workdir,
+      remainingFileSlots,
+    };
+  }, [
+    addNotify,
+    currentConversationIdRef,
+    getPendingUploadsForConversation,
+    setErrorMessage,
+    setPendingUploadsForConversation,
+    workdir,
+  ]);
+
   const appendImportedFiles = useCallback(
-    (result: SystemPickReadableFilesResponse, emptySelectionMessage: string) => {
+    (
+      conversationId: string,
+      result: SystemPickReadableFilesResponse,
+      emptySelectionMessage: string,
+    ) => {
+      const targetConversationId = conversationId.trim();
       if (result.files.length === 0 && result.skipped.length === 0) {
         return;
       }
       if (result.files.length > 0) {
-        setPendingUploadedFiles((prev) => {
-          const merged = mergePendingUploadedFiles(prev, result.files);
-          if (merged.length > MAX_UPLOAD_FILES) {
-            addNotify("warning", `最多上传 ${MAX_UPLOAD_FILES} 个文件，已忽略多余文件`);
-          }
-          const next = merged.slice(0, MAX_UPLOAD_FILES);
-          pendingUploadsByConversationRef.current.set(currentConversationIdRef.current, next);
-          return next;
-        });
-        composerRef.current?.focus();
+        const previous = getPendingUploadsForConversation(targetConversationId);
+        const merged = mergePendingUploadedFiles(previous, result.files);
+        if (merged.length > MAX_UPLOAD_FILES) {
+          addNotify("warning", `最多上传 ${MAX_UPLOAD_FILES} 个文件，已忽略多余文件`);
+        }
+        const next = merged.slice(0, MAX_UPLOAD_FILES);
+        setPendingUploadsForConversation(targetConversationId, next);
+        if (currentConversationIdRef.current.trim() === targetConversationId) {
+          composerRef.current?.focus();
+        }
       }
       if (result.files.length === 0 && result.skipped.length > 0) {
-        setErrorMessage(`${emptySelectionMessage}：\n${result.skipped.join("\n")}`);
+        if (currentConversationIdRef.current.trim() === targetConversationId) {
+          setErrorMessage(`${emptySelectionMessage}：\n${result.skipped.join("\n")}`);
+        } else {
+          addNotify("warning", `${emptySelectionMessage}：\n${result.skipped.join("\n")}`);
+        }
         return;
       }
       if (result.skipped.length > 0) {
         addNotify("warning", `以下文件已跳过：\n${result.skipped.join("\n")}`);
       }
     },
-    [addNotify, composerRef, currentConversationIdRef, setErrorMessage],
+    [
+      addNotify,
+      composerRef,
+      currentConversationIdRef,
+      getPendingUploadsForConversation,
+      setErrorMessage,
+      setPendingUploadsForConversation,
+    ],
   );
 
   const pickReadableFiles = useCallback(async () => {
@@ -126,22 +213,26 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
       return;
     }
 
-    const remainingFileSlots = Math.max(0, MAX_UPLOAD_FILES - pendingUploadedFiles.length);
-    if (remainingFileSlots === 0) {
-      addNotify("warning", `最多上传 ${MAX_UPLOAD_FILES} 个文件，已忽略多余文件`);
+    const uploadTarget = captureUploadTarget();
+    if (!uploadTarget) {
       return;
     }
+    const { targetConversationId, targetWorkdir, remainingFileSlots } = uploadTarget;
 
     const finishUploadTask = beginUploadTask();
     try {
       const result = await invoke<SystemPickReadableFilesResponse>("system_pick_readable_files", {
-        workdir,
+        workdir: targetWorkdir,
         maxFiles: remainingFileSlots,
       });
-      appendImportedFiles(result, "所选文件均不受当前 Read 支持");
+      appendImportedFiles(targetConversationId, result, "所选文件均不受当前 Read 支持");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setErrorMessage(message || "导入文件失败");
+      if (currentConversationIdRef.current.trim() === targetConversationId) {
+        setErrorMessage(message || "导入文件失败");
+      } else {
+        addNotify("warning", message || "导入文件失败");
+      }
     } finally {
       finishUploadTask();
     }
@@ -149,8 +240,9 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
     addNotify,
     appendImportedFiles,
     beginUploadTask,
+    captureUploadTarget,
+    currentConversationIdRef,
     isAgentMode,
-    pendingUploadedFiles.length,
     setErrorMessage,
     workdir,
   ]);
@@ -171,22 +263,26 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
         return;
       }
 
-      const remainingFileSlots = Math.max(0, MAX_UPLOAD_FILES - pendingUploadedFiles.length);
-      if (remainingFileSlots === 0) {
-        addNotify("warning", `最多上传 ${MAX_UPLOAD_FILES} 个文件，已忽略多余文件`);
+      const uploadTarget = captureUploadTarget();
+      if (!uploadTarget) {
         return;
       }
+      const { targetConversationId, targetWorkdir, remainingFileSlots } = uploadTarget;
 
       const finishUploadTask = beginUploadTask();
       try {
         const result = await invoke<SystemPickReadableFilesResponse>(
           "system_import_readable_file_paths",
-          { workdir, paths, maxFiles: remainingFileSlots },
+          { workdir: targetWorkdir, paths, maxFiles: remainingFileSlots },
         );
-        appendImportedFiles(result, "拖入文件均不受当前 Read 支持");
+        appendImportedFiles(targetConversationId, result, "拖入文件均不受当前 Read 支持");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setErrorMessage(message || "导入文件失败");
+        if (currentConversationIdRef.current.trim() === targetConversationId) {
+          setErrorMessage(message || "导入文件失败");
+        } else {
+          addNotify("warning", message || "导入文件失败");
+        }
       } finally {
         finishUploadTask();
       }
@@ -195,8 +291,9 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
       addNotify,
       appendImportedFiles,
       beginUploadTask,
+      captureUploadTarget,
+      currentConversationIdRef,
       isAgentMode,
-      pendingUploadedFiles.length,
       setErrorMessage,
       workdir,
     ],
@@ -218,11 +315,11 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
         return;
       }
 
-      const remainingFileSlots = Math.max(0, MAX_UPLOAD_FILES - pendingUploadedFiles.length);
-      if (remainingFileSlots === 0) {
-        addNotify("warning", `最多上传 ${MAX_UPLOAD_FILES} 个文件，已忽略多余文件`);
+      const uploadTarget = captureUploadTarget();
+      if (!uploadTarget) {
         return;
       }
+      const { targetConversationId, targetWorkdir, remainingFileSlots } = uploadTarget;
 
       const importBatch = files.slice(0, remainingFileSlots);
       const ignoredForLimit = files.length - importBatch.length;
@@ -231,9 +328,9 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
         const uploadFiles = await Promise.all(importBatch.map(fileToUploadInput));
         const result = await invoke<SystemPickReadableFilesResponse>(
           "system_import_uploaded_readable_files",
-          { workdir, files: uploadFiles, maxFiles: remainingFileSlots },
+          { workdir: targetWorkdir, files: uploadFiles, maxFiles: remainingFileSlots },
         );
-        appendImportedFiles(result, "剪贴板文件均不受当前 Read 支持");
+        appendImportedFiles(targetConversationId, result, "剪贴板文件均不受当前 Read 支持");
         if (ignoredForLimit > 0) {
           addNotify(
             "warning",
@@ -242,7 +339,11 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setErrorMessage(message || "导入剪贴板文件失败");
+        if (currentConversationIdRef.current.trim() === targetConversationId) {
+          setErrorMessage(message || "导入剪贴板文件失败");
+        } else {
+          addNotify("warning", message || "导入剪贴板文件失败");
+        }
       } finally {
         finishUploadTask();
       }
@@ -251,8 +352,9 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
       addNotify,
       appendImportedFiles,
       beginUploadTask,
+      captureUploadTarget,
+      currentConversationIdRef,
       isAgentMode,
-      pendingUploadedFiles.length,
       setErrorMessage,
       workdir,
     ],
@@ -260,17 +362,13 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
 
   const removePendingUpload = useCallback(
     (relativePath: string) => {
-      setPendingUploadedFiles((prev) => {
-        const next = prev.filter((file) => file.relativePath !== relativePath);
-        if (next.length > 0) {
-          pendingUploadsByConversationRef.current.set(currentConversationIdRef.current, next);
-        } else {
-          pendingUploadsByConversationRef.current.delete(currentConversationIdRef.current);
-        }
-        return next;
-      });
+      const targetConversationId = currentConversationIdRef.current.trim();
+      const next = getPendingUploadsForConversation(targetConversationId).filter(
+        (file) => file.relativePath !== relativePath,
+      );
+      setPendingUploadsForConversation(targetConversationId, next);
     },
-    [currentConversationIdRef],
+    [currentConversationIdRef, getPendingUploadsForConversation, setPendingUploadsForConversation],
   );
 
   return {

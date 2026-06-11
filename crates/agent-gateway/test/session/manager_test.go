@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -73,6 +74,122 @@ func TestClearSessionDoesNotCloseReplacement(t *testing.T) {
 	}
 	if err := sm.SendToAgent(env); !errors.Is(err, session.ErrAgentOffline) {
 		t.Fatalf("SendToAgent after clearing current session = %v, want ErrAgentOffline", err)
+	}
+}
+
+func TestClearSessionIfHeartbeatStaleClosesOnlyCurrentSession(t *testing.T) {
+	t.Parallel()
+
+	sm := newTestSessionManager()
+	first := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(first)
+	second := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(second)
+
+	time.Sleep(time.Millisecond)
+	if sm.ClearSessionIfHeartbeatStale(first, time.Nanosecond) {
+		t.Fatalf("stale first session should not close replacement session")
+	}
+	assertDoneOpen(t, second.Done())
+	if status := sm.Status(); !status.Online {
+		t.Fatalf("status online = false after stale old-session heartbeat timeout")
+	}
+
+	time.Sleep(time.Millisecond)
+	if !sm.ClearSessionIfHeartbeatStale(second, time.Nanosecond) {
+		t.Fatalf("current stale session was not cleared")
+	}
+	assertDoneClosed(t, second.Done())
+	if status := sm.Status(); status.Online {
+		t.Fatalf("status online = true after current session heartbeat timeout")
+	}
+	if err := sm.SendToAgent(&gatewayv1.GatewayEnvelope{RequestId: "after-timeout"}); !errors.Is(err, session.ErrAgentOffline) {
+		t.Fatalf("SendToAgent after heartbeat timeout = %v, want ErrAgentOffline", err)
+	}
+}
+
+func TestChatRuntimeReadyRequiresFreshRuntimeHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	sm := newTestSessionManager()
+	sess := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(sess)
+
+	if status := sm.Status(); !status.Online || status.ChatRuntimeReady {
+		t.Fatalf("initial status = %#v, want online without chat runtime readiness", status)
+	}
+
+	sm.UpdateRuntimeStatus(sess, &gatewayv1.RuntimeStatusEvent{
+		WorkerId:       "runtime-1",
+		State:          "ready",
+		Visible:        true,
+		ActiveRunCount: 0,
+		Timestamp:      time.Now().Unix(),
+	})
+	if status := sm.Status(); !status.ChatRuntimeReady ||
+		status.RuntimeState != "ready" ||
+		status.RuntimeWorkerID != "runtime-1" ||
+		status.RuntimeLastHeartbeat == 0 {
+		t.Fatalf("ready runtime status = %#v", status)
+	}
+
+	sm.UpdateRuntimeStatus(sess, &gatewayv1.RuntimeStatusEvent{
+		WorkerId:  "runtime-1",
+		State:     "suspended",
+		Timestamp: time.Now().Unix(),
+	})
+	if status := sm.Status(); status.ChatRuntimeReady || status.RuntimeState != "suspended" {
+		t.Fatalf("suspended runtime status = %#v, want not ready", status)
+	}
+
+	sm.UpdateRuntimeStatus(sess, &gatewayv1.RuntimeStatusEvent{
+		WorkerId:  "runtime-1",
+		State:     "busy",
+		Timestamp: time.Now().Unix(),
+	})
+	if !sm.ChatRuntimeReady() {
+		t.Fatalf("busy runtime should be ready to manage chat runs")
+	}
+
+	sm.ClearSession(sess)
+	if status := sm.Status(); status.ChatRuntimeReady || status.RuntimeState != "" {
+		t.Fatalf("cleared session status = %#v, want runtime readiness reset", status)
+	}
+}
+
+func TestClearSessionIfHeartbeatStaleFailsOpenChatRuns(t *testing.T) {
+	t.Parallel()
+
+	sm := newTestSessionManager()
+	sess := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(sess)
+	if _, _, err := sm.StartPendingChatRunWithClientRequest(
+		"request-1",
+		"conversation-1",
+		"client-submit-1",
+	); err != nil {
+		t.Fatalf("StartPendingChatRunWithClientRequest: %v", err)
+	}
+	ch, _, cleanup, _, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
+	if err != nil {
+		t.Fatalf("SubscribeChatRun: %v", err)
+	}
+	defer cleanup()
+
+	time.Sleep(time.Millisecond)
+	if !sm.ClearSessionIfHeartbeatStale(sess, time.Nanosecond) {
+		t.Fatalf("current stale session was not cleared")
+	}
+	select {
+	case event := <-ch:
+		if event.Event.GetType() != gatewayv1.ChatEvent_ERROR {
+			t.Fatalf("event type = %v, want ERROR", event.Event.GetType())
+		}
+		if !strings.Contains(event.Event.GetData(), "Desktop agent disconnected") {
+			t.Fatalf("event data = %q", event.Event.GetData())
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for heartbeat timeout chat error")
 	}
 }
 
@@ -155,6 +272,31 @@ func TestSendToAgentUnblocksWhenSessionCloses(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("SendToAgent did not unblock after session close")
+	}
+}
+
+func TestSendToAgentContextReturnsWhenOutboundQueueIsFull(t *testing.T) {
+	t.Parallel()
+
+	sm := newTestSessionManager()
+	sess := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(sess)
+
+	for i := 0; i < 64; i += 1 {
+		if err := sm.SendToAgent(&gatewayv1.GatewayEnvelope{RequestId: fmt.Sprintf("queued-%d", i)}); err != nil {
+			t.Fatalf("prime outbound queue: %v", err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := sm.SendToAgentContext(ctx, &gatewayv1.GatewayEnvelope{RequestId: "blocked"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("SendToAgentContext with full queue = %v, want context deadline exceeded", err)
+	}
+	if status := sm.Status(); status.Online {
+		t.Fatalf("status online = true after SendToAgentContext timeout")
 	}
 }
 
@@ -249,6 +391,251 @@ func TestStartChatRunWithClientRequestReusesExistingRun(t *testing.T) {
 	}
 	if restarted.RequestID != "request-3" {
 		t.Fatalf("restarted request id = %q, want request-3", restarted.RequestID)
+	}
+}
+
+func TestPendingChatRunBecomesActiveOnlyAfterStartedEvent(t *testing.T) {
+	t.Parallel()
+
+	sm := newTestSessionManager()
+	sm.SetSession(session.NewAgentSession(sm.LatestAuthSnapshot()))
+	snapshot, created, err := sm.StartPendingChatRunWithClientRequest(
+		"request-1",
+		"conversation-1",
+		"client-submit-1",
+		"/workspace",
+	)
+	if err != nil {
+		t.Fatalf("StartPendingChatRunWithClientRequest: %v", err)
+	}
+	if !created || snapshot.RequestID != "request-1" {
+		t.Fatalf("pending run = %#v created=%v", snapshot, created)
+	}
+	if got := sm.ActiveChatRunConversationIDs(); len(got) != 0 {
+		t.Fatalf("pending active chat runs = %#v, want empty", got)
+	}
+
+	ch, _, cleanup, _, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
+	if err != nil {
+		t.Fatalf("SubscribeChatRun: %v", err)
+	}
+	defer cleanup()
+
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: "request-1",
+		Payload: &gatewayv1.AgentEnvelope_ChatEvent{
+			ChatEvent: &gatewayv1.ChatEvent{
+				Type:           gatewayv1.ChatEvent_TOKEN,
+				ConversationId: "conversation-1",
+				Data:           `{"type":"accepted"}`,
+			},
+		},
+	})
+	if got := sm.ActiveChatRunConversationIDs(); len(got) != 0 {
+		t.Fatalf("accepted active chat runs = %#v, want empty", got)
+	}
+	if sm.FailStartingChatRun("request-1", "desktop did not accept") {
+		t.Fatalf("accepted pending run should not fail the accept watchdog")
+	}
+
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: "request-1",
+		Payload: &gatewayv1.AgentEnvelope_ChatEvent{
+			ChatEvent: &gatewayv1.ChatEvent{
+				Type:           gatewayv1.ChatEvent_TOKEN,
+				ConversationId: "conversation-1",
+				Data:           `{"type":"started"}`,
+			},
+		},
+	})
+
+	got := sm.ActiveChatRunConversationIDs()
+	want := []string{"conversation-1"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("active chat runs after started = %#v, want %#v", got, want)
+	}
+	select {
+	case event := <-ch:
+		t.Fatalf("started control event leaked to subscriber: %#v", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestFailStartingChatRunBroadcastsErrorAndClearsActiveSummary(t *testing.T) {
+	t.Parallel()
+
+	sm := newTestSessionManager()
+	sm.SetSession(session.NewAgentSession(sm.LatestAuthSnapshot()))
+	if _, _, err := sm.StartPendingChatRunWithClientRequest(
+		"request-1",
+		"conversation-1",
+		"client-submit-1",
+	); err != nil {
+		t.Fatalf("StartPendingChatRunWithClientRequest: %v", err)
+	}
+	ch, _, cleanup, _, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
+	if err != nil {
+		t.Fatalf("SubscribeChatRun: %v", err)
+	}
+	defer cleanup()
+
+	if !sm.FailStartingChatRun("request-1", "desktop did not accept") {
+		t.Fatalf("FailStartingChatRun returned false")
+	}
+
+	select {
+	case event := <-ch:
+		if event.Event.GetType() != gatewayv1.ChatEvent_ERROR {
+			t.Fatalf("event type = %v, want ERROR", event.Event.GetType())
+		}
+		if !strings.Contains(event.Event.GetData(), "desktop did not accept") {
+			t.Fatalf("event data = %q", event.Event.GetData())
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for starting run failure event")
+	}
+	if got := sm.ActiveChatRunConversationIDs(); len(got) != 0 {
+		t.Fatalf("active chat runs after failed start = %#v, want empty", got)
+	}
+	if status := sm.Status(); status.Online {
+		t.Fatalf("status online = true after chat run failed before desktop accept")
+	}
+}
+
+func TestFailUnstartedChatRunBroadcastsErrorUnlessStarted(t *testing.T) {
+	t.Parallel()
+
+	sm := newTestSessionManager()
+	sm.SetSession(session.NewAgentSession(sm.LatestAuthSnapshot()))
+	if _, _, err := sm.StartPendingChatRunWithClientRequest(
+		"request-1",
+		"conversation-1",
+		"client-submit-1",
+	); err != nil {
+		t.Fatalf("StartPendingChatRunWithClientRequest request-1: %v", err)
+	}
+	ch, _, cleanup, _, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
+	if err != nil {
+		t.Fatalf("SubscribeChatRun: %v", err)
+	}
+	defer cleanup()
+	if sm.FailUnstartedChatRun("request-1", "desktop app did not start") {
+		t.Fatalf("unaccepted pending run should not fail the render-start watchdog")
+	}
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: "request-1",
+		Payload: &gatewayv1.AgentEnvelope_ChatEvent{
+			ChatEvent: &gatewayv1.ChatEvent{
+				Type:           gatewayv1.ChatEvent_TOKEN,
+				ConversationId: "conversation-1",
+				Data:           `{"type":"accepted"}`,
+			},
+		},
+	})
+
+	if !sm.FailUnstartedChatRun("request-1", "desktop app did not start") {
+		t.Fatalf("FailUnstartedChatRun returned false for accepted pending run")
+	}
+	select {
+	case event := <-ch:
+		if event.Event.GetType() != gatewayv1.ChatEvent_ERROR {
+			t.Fatalf("event type = %v, want ERROR", event.Event.GetType())
+		}
+		if !strings.Contains(event.Event.GetData(), "desktop app did not start") {
+			t.Fatalf("event data = %q", event.Event.GetData())
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for unstarted run failure event")
+	}
+
+	if _, _, err := sm.StartPendingChatRunWithClientRequest(
+		"request-2",
+		"conversation-2",
+		"client-submit-2",
+	); err != nil {
+		t.Fatalf("StartPendingChatRunWithClientRequest request-2: %v", err)
+	}
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: "request-2",
+		Payload: &gatewayv1.AgentEnvelope_ChatEvent{
+			ChatEvent: &gatewayv1.ChatEvent{
+				Type:           gatewayv1.ChatEvent_TOKEN,
+				ConversationId: "conversation-2",
+				Data:           `{"type":"started"}`,
+			},
+		},
+	})
+	if sm.FailUnstartedChatRun("request-2", "desktop app did not start") {
+		t.Fatalf("started run should not fail the render-start watchdog")
+	}
+}
+
+func TestTerminalChatRunStateIsImmutable(t *testing.T) {
+	t.Parallel()
+
+	sm := newTestSessionManager()
+	sm.SetSession(session.NewAgentSession(sm.LatestAuthSnapshot()))
+	if _, _, err := sm.StartPendingChatRunWithClientRequest(
+		"request-1",
+		"conversation-1",
+		"client-submit-1",
+	); err != nil {
+		t.Fatalf("StartPendingChatRunWithClientRequest: %v", err)
+	}
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: "request-1",
+		Payload: &gatewayv1.AgentEnvelope_ChatEvent{
+			ChatEvent: &gatewayv1.ChatEvent{
+				Type:           gatewayv1.ChatEvent_ERROR,
+				ConversationId: "conversation-1",
+				Data:           `{"message":"startup failed"}`,
+			},
+		},
+	})
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: "request-1",
+		Payload: &gatewayv1.AgentEnvelope_ChatControl{
+			ChatControl: &gatewayv1.ChatControlEvent{
+				Type:           "completed",
+				State:          session.ChatRunStateCompleted,
+				RequestId:      "request-1",
+				ConversationId: "conversation-1",
+			},
+		},
+	})
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: "request-1",
+		Payload: &gatewayv1.AgentEnvelope_ChatEvent{
+			ChatEvent: &gatewayv1.ChatEvent{
+				Type:           gatewayv1.ChatEvent_TOKEN,
+				ConversationId: "conversation-1",
+				Data:           `{"text":"late token"}`,
+			},
+		},
+	})
+
+	ch, done, cleanup, snapshot, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
+	if err != nil {
+		t.Fatalf("SubscribeChatRun: %v", err)
+	}
+	defer cleanup()
+	assertDoneOpen(t, done)
+	if snapshot.State != session.ChatRunStateFailed {
+		t.Fatalf("terminal state = %q, want %q", snapshot.State, session.ChatRunStateFailed)
+	}
+
+	select {
+	case event := <-ch:
+		if event.Event == nil || event.Event.GetType() != gatewayv1.ChatEvent_ERROR {
+			t.Fatalf("replayed event = %#v, want ERROR", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for replayed error event")
+	}
+	select {
+	case event := <-ch:
+		t.Fatalf("terminal completion control should be ignored after failure: %#v", event)
+	default:
 	}
 }
 

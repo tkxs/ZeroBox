@@ -6,7 +6,16 @@ import {
   type MutableRefObject,
   type ReactNode,
 } from "react";
-import { Brain, Globe2, Lightbulb, Loader2, Paperclip, Send, Square, X } from "../../components/icons";
+import {
+  Brain,
+  Globe2,
+  Lightbulb,
+  Loader2,
+  Paperclip,
+  Send,
+  Square,
+  X,
+} from "../../components/icons";
 
 import {
   MentionComposer,
@@ -75,6 +84,7 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
   onGitChanged?: (workdir: string) => void;
   onSend: () => void;
   onStop: () => void;
+  onPrepareChatRuntime?: () => void;
   onComposerBusyChange: (isBusy: boolean) => void;
   onChatRuntimeControlsChange: (patch: Partial<ChatRuntimeControls>) => void;
   onPickReadableFiles: () => void;
@@ -99,6 +109,7 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
     onGitChanged,
     onSend,
     onStop,
+    onPrepareChatRuntime,
     onComposerBusyChange,
     onChatRuntimeControlsChange,
     onPickReadableFiles,
@@ -232,7 +243,7 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
             className="pointer-events-none absolute inset-0 rounded-[24px] bg-gradient-to-b from-white/30 to-transparent opacity-60 dark:from-white/[0.04] dark:opacity-100"
           />
 
-          <div className="relative px-4 pt-3.5">
+          <div className="relative px-4 pt-3.5" onFocusCapture={onPrepareChatRuntime}>
             <MentionComposer
               ref={composerRef}
               onSend={onSend}

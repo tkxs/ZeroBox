@@ -7,13 +7,19 @@ type QueueEventOptions = {
 type GatewayBridgeEventControllerParams = {
   conversationId: string;
   requestId: string;
+  workerId?: string;
   enabled: boolean;
-  sendEvent: (requestId: string, event: Record<string, unknown>) => void;
+  sendEvent: (
+    requestId: string,
+    event: Record<string, unknown>,
+    options?: { workerId?: string },
+  ) => void;
   resolveErrorConversationId?: () => string;
 };
 
 export type GatewayBridgeEventController = {
   queueEvent: (event: Record<string, unknown>, options?: QueueEventOptions) => void;
+  queueStarted: () => void;
   queueToken: (delta: string, extra?: Record<string, unknown>) => void;
   queueTitle: (nextTitle: string, allowAfterClose?: boolean) => void;
   queueToolStatus: (status: string | null, isCompaction?: boolean) => void;
@@ -34,7 +40,7 @@ export function createGatewayBridgeEventController(
   const queueEvent = (event: Record<string, unknown>, options?: QueueEventOptions) => {
     if (!params.enabled) return;
     if (streamClosed && !options?.allowAfterClose) return;
-    params.sendEvent(params.requestId, event);
+    params.sendEvent(params.requestId, event, { workerId: params.workerId });
   };
 
   const queueToolStatus = (status: string | null, isCompaction = false) => {
@@ -52,6 +58,12 @@ export function createGatewayBridgeEventController(
 
   return {
     queueEvent,
+    queueStarted() {
+      queueEvent({
+        type: "started",
+        conversation_id: params.conversationId,
+      });
+    },
     queueToken(delta: string, extra?: Record<string, unknown>) {
       if (delta.length === 0 && !extra) return;
       if (delta.length > 0) {

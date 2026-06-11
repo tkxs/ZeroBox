@@ -63,6 +63,9 @@ message GatewayEnvelope {
     GitRequest git_request = 61;
     FsReadEditableTextRequest fs_read_editable_text = 62;
     FsReadWorkspaceImageRequest fs_read_workspace_image = 63;
+    TunnelControlRequest tunnel_control = 67;
+    TunnelControlResponse tunnel_control_resp = 68;
+    TunnelFrame tunnel_frame = 69;
   }
 }
 
@@ -110,6 +113,11 @@ message AgentEnvelope {
     GitResponse git_response = 64;
     FsReadEditableTextResponse fs_read_editable_text_resp = 65;
     FsReadWorkspaceImageResponse fs_read_workspace_image_resp = 66;
+    TunnelControlRequest tunnel_control = 67;
+    TunnelControlResponse tunnel_control_resp = 68;
+    TunnelFrame tunnel_frame = 69;
+    ChatControlEvent chat_control = 70;
+    RuntimeStatusEvent runtime_status = 71;
     ErrorResponse error = 99;
   }
 }
@@ -158,6 +166,75 @@ message UploadedImagePreviewRequest {
 message UploadedImagePreviewResponse {
   string mime_type = 1;
   string data = 2;
+}
+
+message TunnelControlRequest {
+  string action = 1;
+  string tunnel_id = 2;
+  string slug = 3;
+  string target_url = 4;
+  string name = 5;
+  uint32 ttl_seconds = 6;
+  int64 expires_at = 7;
+  string public_url = 8;
+  string public_base_url = 9;
+  string project_path_key = 10;
+}
+
+message TunnelControlResponse {
+  string action = 1;
+  repeated TunnelSummary tunnels = 2;
+  TunnelSummary tunnel = 3;
+  string error_code = 4;
+  string error_message = 5;
+}
+
+message TunnelSummary {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string target_url = 4;
+  string public_url = 5;
+  int64 created_at = 6;
+  int64 expires_at = 7;
+  uint32 active_connections = 8;
+  string status = 9;
+  string project_path_key = 10;
+}
+
+message TunnelHeader {
+  string name = 1;
+  string value = 2;
+}
+
+enum TunnelFrameKind {
+  TUNNEL_FRAME_KIND_UNSPECIFIED = 0;
+  TUNNEL_FRAME_KIND_HTTP_REQUEST_START = 1;
+  TUNNEL_FRAME_KIND_HTTP_REQUEST_BODY = 2;
+  TUNNEL_FRAME_KIND_HTTP_REQUEST_END = 3;
+  TUNNEL_FRAME_KIND_HTTP_RESPONSE_START = 4;
+  TUNNEL_FRAME_KIND_HTTP_RESPONSE_BODY = 5;
+  TUNNEL_FRAME_KIND_HTTP_RESPONSE_END = 6;
+  TUNNEL_FRAME_KIND_WS_OPEN = 7;
+  TUNNEL_FRAME_KIND_WS_FRAME = 8;
+  TUNNEL_FRAME_KIND_WS_CLOSE = 9;
+  TUNNEL_FRAME_KIND_ERROR = 10;
+  TUNNEL_FRAME_KIND_CANCEL = 11;
+}
+
+message TunnelFrame {
+  string stream_id = 1;
+  string tunnel_id = 2;
+  string slug = 3;
+  TunnelFrameKind kind = 4;
+  string method = 5;
+  string path = 6;
+  repeated TunnelHeader headers = 7;
+  uint32 status_code = 8;
+  bytes body = 9;
+  bool end_stream = 10;
+  string error = 11;
+  string ws_message_type = 12;
 }
 
 message MemoryManageRequest {
@@ -268,6 +345,26 @@ message ChatEvent {
     TOOL_STATUS = 6;
     HOSTED_SEARCH = 7;
   }
+}
+
+message ChatControlEvent {
+  string request_id = 1;
+  string client_request_id = 2;
+  string conversation_id = 3;
+  int64 run_epoch = 4;
+  string type = 5;
+  string state = 6;
+  string error_code = 7;
+  string message = 8;
+  int64 seq = 9;
+}
+
+message RuntimeStatusEvent {
+  string worker_id = 1;
+  string state = 2;
+  bool visible = 3;
+  uint32 active_run_count = 4;
+  int64 timestamp = 5;
 }
 
 message CronManageRequest {

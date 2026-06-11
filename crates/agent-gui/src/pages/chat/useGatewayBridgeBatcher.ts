@@ -10,9 +10,14 @@ type BatchableGatewayBridgeEvent = {
 
 type PendingGatewayBridgeEventBatch = BatchableGatewayBridgeEvent & {
   requestId: string;
+  workerId?: string;
   rafId: number | null;
   timeoutId: number | null;
   microtaskQueued: boolean;
+};
+
+type GatewayBridgeSendOptions = {
+  workerId?: string;
 };
 
 const GATEWAY_BRIDGE_BATCH_MAX_DELAY_MS = 32;
@@ -61,13 +66,15 @@ export function useGatewayBridgeBatcher() {
   );
 
   const sendGatewayBridgeEventForRequest = useCallback(
-    (requestId: string, event: Record<string, unknown>) => {
+    (requestId: string, event: Record<string, unknown>, options?: GatewayBridgeSendOptions) => {
+      const workerId = options?.workerId?.trim() || undefined;
       gatewayEventChainRef.current = gatewayEventChainRef.current
         .catch(() => undefined)
         .then(() =>
           invoke("gateway_send_chat_event", {
             request_id: requestId,
             event,
+            worker_id: workerId,
           } as any),
         )
         .then(() => undefined)
@@ -102,6 +109,8 @@ export function useGatewayBridgeBatcher() {
         text: pending.text,
         conversation_id: pending.conversationId,
         ...(pending.round !== null ? { round: pending.round } : {}),
+      }, {
+        workerId: pending.workerId,
       });
     },
     [sendGatewayBridgeEventForRequest],
@@ -157,20 +166,22 @@ export function useGatewayBridgeBatcher() {
   );
 
   const queueGatewayBridgeEventForRequest = useCallback(
-    (requestId: string, event: Record<string, unknown>) => {
+    (requestId: string, event: Record<string, unknown>, options?: GatewayBridgeSendOptions) => {
       const batchable = toBatchableGatewayBridgeEvent(event);
       if (!batchable) {
         flushGatewayBridgeEventBatchForRequest(requestId);
-        sendGatewayBridgeEventForRequest(requestId, event);
+        sendGatewayBridgeEventForRequest(requestId, event, options);
         return;
       }
 
+      const workerId = options?.workerId?.trim() || undefined;
       const existing = pendingGatewayBridgeEventBatchesRef.current.get(requestId);
       if (
         existing &&
         existing.type === batchable.type &&
         existing.conversationId === batchable.conversationId &&
-        existing.round === batchable.round
+        existing.round === batchable.round &&
+        existing.workerId === workerId
       ) {
         existing.text += batchable.text;
         if (existing.text.length >= GATEWAY_BRIDGE_BATCH_MAX_TEXT_LENGTH) {
@@ -184,6 +195,7 @@ export function useGatewayBridgeBatcher() {
       flushGatewayBridgeEventBatchForRequest(requestId);
       pendingGatewayBridgeEventBatchesRef.current.set(requestId, {
         requestId,
+        workerId,
         ...batchable,
         rafId: null,
         timeoutId: null,

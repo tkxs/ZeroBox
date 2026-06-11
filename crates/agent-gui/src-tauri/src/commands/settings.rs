@@ -144,6 +144,8 @@ pub struct RemoteSettingsPayload {
     pub enable_web_terminal: bool,
     #[serde(default)]
     pub enable_web_git: bool,
+    #[serde(default)]
+    pub enable_web_tunnels: bool,
 }
 
 fn default_remote_grpc_port() -> u16 {
@@ -171,6 +173,7 @@ impl Default for RemoteSettingsPayload {
             heartbeat_interval: default_remote_heartbeat_interval(),
             enable_web_terminal: false,
             enable_web_git: false,
+            enable_web_tunnels: false,
         }
     }
 }
@@ -193,6 +196,7 @@ pub(crate) fn normalize_remote_settings_payload(
         heartbeat_interval: payload.heartbeat_interval.max(1),
         enable_web_terminal: payload.enable_web_terminal,
         enable_web_git: payload.enable_web_git,
+        enable_web_tunnels: payload.enable_web_tunnels,
     }
 }
 
@@ -1316,6 +1320,7 @@ pub(crate) fn load_gateway_settings_sync_snapshot(conn: &Connection) -> Result<V
         json!({
             "enableWebTerminal": remote.enable_web_terminal,
             "enableWebGit": remote.enable_web_git,
+            "enableWebTunnels": remote.enable_web_tunnels,
         }),
     );
     snapshot.insert("customSettings".to_string(), Value::Object(Map::new()));
@@ -1367,9 +1372,15 @@ fn redact_remote_settings(remote: Value) -> Result<Value, String> {
         .or_else(|| remote.get("enable_web_git"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let enable_web_tunnels = remote
+        .get("enableWebTunnels")
+        .or_else(|| remote.get("enable_web_tunnels"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Ok(json!({
         "enableWebTerminal": enable_web_terminal,
         "enableWebGit": enable_web_git,
+        "enableWebTunnels": enable_web_tunnels,
     }))
 }
 
@@ -2067,6 +2078,7 @@ mod tests {
             heartbeat_interval: 30,
             enable_web_terminal: false,
             enable_web_git: false,
+            enable_web_tunnels: false,
         });
 
         assert_eq!(normalized.gateway_url, "https://agent.cnweb.org");

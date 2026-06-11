@@ -269,9 +269,19 @@ func (c *websocketConnection) startChatEventForwarder() {
 				if c.hasActiveChatRequest(event.RequestID) {
 					continue
 				}
-				if err := c.writeConversationEvent(websocketChatEventPayload(event.Event, event.Seq, event.Workdir)); err != nil {
-					c.close()
-					return
+				if event.Control != nil {
+					if err := c.writeEnvelope(websocketEnvelope{
+						Type:    "conversation.control",
+						Payload: websocketChatControlPayload(event.Control, event.Seq, event.Workdir),
+					}); err != nil {
+						c.close()
+						return
+					}
+				} else if event.Event != nil {
+					if err := c.writeConversationEvent(websocketChatEventPayload(event.Event, event.Seq, event.Workdir)); err != nil {
+						c.close()
+						return
+					}
 				}
 			}
 		}
@@ -431,6 +441,41 @@ func (c *websocketConnection) awaitAgentResponse(
 	return awaitAgentUnaryResponse(ctx, c.sm, requestID, envelope)
 }
 
+func (c *websocketConnection) sendToAgent(envelope *gatewayv1.GatewayEnvelope) error {
+	timeout := c.cfg.WebSocketWriteTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-c.done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	return c.sm.SendToAgentContext(ctx, envelope)
+}
+
+func (c *websocketConnection) chatStartTimeout() time.Duration {
+	timeout := c.cfg.ChatStartTimeout
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	return timeout
+}
+
+func (c *websocketConnection) chatRenderStartTimeout() time.Duration {
+	timeout := c.cfg.ChatRenderStartTimeout
+	if timeout <= 0 {
+		timeout = 45 * time.Second
+	}
+	return timeout
+}
+
 func (c *websocketConnection) writeResponse(requestID string, payload any) error {
 	return c.writeEnvelope(websocketEnvelope{
 		ID:      requestID,
@@ -451,6 +496,14 @@ func (c *websocketConnection) writeChatEvent(requestID string, payload any) erro
 	return c.writeEnvelope(websocketEnvelope{
 		ID:      requestID,
 		Type:    "chat.event",
+		Payload: payload,
+	})
+}
+
+func (c *websocketConnection) writeChatControl(requestID string, payload any) error {
+	return c.writeEnvelope(websocketEnvelope{
+		ID:      requestID,
+		Type:    "chat.control",
 		Payload: payload,
 	})
 }

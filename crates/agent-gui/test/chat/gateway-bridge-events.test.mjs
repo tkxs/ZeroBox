@@ -12,9 +12,14 @@ function createController(options = {}) {
   const controller = createGatewayBridgeEventController({
     conversationId: options.conversationId ?? "conversation-1",
     requestId: options.requestId ?? "request-1",
+    workerId: options.workerId,
     enabled: options.enabled ?? true,
-    sendEvent: (requestId, event) => {
-      sent.push({ requestId, event });
+    sendEvent: (requestId, event, sendOptions) => {
+      const item = { requestId, event };
+      if (sendOptions?.workerId) {
+        item.options = sendOptions;
+      }
+      sent.push(item);
     },
     resolveErrorConversationId: options.resolveErrorConversationId,
   });
@@ -67,6 +72,42 @@ test("gateway bridge token forwarding tracks non-empty text only", () => {
       round: 1,
     },
   });
+});
+
+test("gateway bridge started event is explicit and does not mark text forwarded", () => {
+  const { controller, sent } = createController();
+
+  controller.queueStarted();
+
+  assert.equal(controller.hasForwardedText(), false);
+  assert.deepEqual(sent, [
+    {
+      requestId: "request-1",
+      event: {
+        type: "started",
+        conversation_id: "conversation-1",
+      },
+    },
+  ]);
+});
+
+test("gateway bridge events carry the remote worker lease owner", () => {
+  const { controller, sent } = createController({ workerId: "worker-1" });
+
+  controller.queueStarted();
+
+  assert.deepEqual(sent, [
+    {
+      requestId: "request-1",
+      event: {
+        type: "started",
+        conversation_id: "conversation-1",
+      },
+      options: {
+        workerId: "worker-1",
+      },
+    },
+  ]);
 });
 
 test("gateway bridge tool status is normalized and de-duplicated", () => {

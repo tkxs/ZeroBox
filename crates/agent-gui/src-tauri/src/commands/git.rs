@@ -1610,7 +1610,11 @@ pub(crate) fn git_log_sync(
     };
     let history_base_ref = resolve_history_base_ref(&state, &review_ref);
     args.push("--pretty=format:%x1e%H%x1f%h%x1f%P%x1f%D%x1f%an%x1f%ae%x1f%aI%x1f%s".to_string());
-    args.extend(resolve_history_log_refs(&state, &review_ref, &history_base_ref));
+    args.extend(resolve_history_log_refs(
+        &state,
+        &review_ref,
+        &history_base_ref,
+    ));
     let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let output = git_success(&state.repo_root, &arg_refs)?;
     let mut commits = parse_git_log(&output.stdout);
@@ -3539,12 +3543,7 @@ mod tests {
         run_temp_git(repo.path(), &["branch", "origin/features", "HEAD"]);
         run_temp_git(
             repo.path(),
-            &[
-                "branch",
-                "--set-upstream-to",
-                "origin/features",
-                "features",
-            ],
+            &["branch", "--set-upstream-to", "origin/features", "features"],
         );
 
         fs::write(repo.path().join("feature-2.txt"), "feature 2\n").expect("write feature 2");

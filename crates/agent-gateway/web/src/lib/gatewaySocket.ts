@@ -1,6 +1,7 @@
 import type { GatewaySettingsSyncPayload } from "@/lib/settings/sync";
 import type { HistoryMessageRef } from "@/lib/chat/conversationState";
 import type { PendingUploadedFile } from "@/lib/chat/uploadedFiles";
+
 import type {
   TerminalEvent,
   TerminalSession,
@@ -10,6 +11,7 @@ import type {
 
 import type {
   AgentStatus,
+  ChatControlEvent,
   ChatEvent,
   ConversationSummary,
   GatewayHistoryEvent,
@@ -53,6 +55,7 @@ type ChatStreamState = {
   lastSeq: number;
   resuming: boolean;
   attachedSocket: WebSocket | null;
+  startWatchdogId?: number;
   abortHandler?: () => void;
 };
 
@@ -152,6 +155,58 @@ type FsDeleteResponse = {
 export type UploadedImagePreviewResponse = {
   mimeType: string;
   data: string;
+};
+
+export type TunnelCreateInput = {
+  targetUrl: string;
+  name?: string;
+  ttlSeconds: 0 | 900 | 3600 | 14400;
+  projectPathKey?: string;
+};
+
+export type TunnelUpdateInput = {
+  id: string;
+  targetUrl: string;
+  name?: string;
+  ttlSeconds: 0 | 900 | 3600 | 14400;
+  projectPathKey?: string;
+};
+
+export type TunnelSummary = {
+  id: string;
+  slug: string;
+  name: string;
+  targetUrl: string;
+  publicUrl: string;
+  createdAt: number;
+  expiresAt: number;
+  activeConnections: number;
+  status: "active" | "expired" | "offline";
+  projectPathKey: string;
+};
+
+type RawTunnelSummary = {
+  id?: string;
+  slug?: string;
+  name?: string;
+  targetUrl?: string;
+  target_url?: string;
+  publicUrl?: string;
+  public_url?: string;
+  createdAt?: number;
+  created_at?: number;
+  expiresAt?: number;
+  expires_at?: number;
+  activeConnections?: number;
+  active_connections?: number;
+  status?: string;
+  projectPathKey?: string;
+  project_path_key?: string;
+};
+
+type RawTunnelResponse = {
+  tunnel?: RawTunnelSummary;
+  tunnels?: RawTunnelSummary[];
 };
 
 type HistoryGetOptions = {
@@ -323,6 +378,9 @@ const RECONNECT_INITIAL_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 15_000;
 const RECONNECT_NOTICE_DELAY_MS = 10_000;
 const SOCKET_INBOUND_STALL_MS = 25_000;
+const FOREGROUND_SOCKET_RECYCLE_IDLE_MS = 10_000;
+const FOREGROUND_WAKEUP_RECENCY_MS = 15_000;
+const CHAT_STREAM_TRANSPORT_STALL_MS = 8_000;
 
 type RuntimeHost = {
   location?: {
@@ -359,9 +417,53 @@ function getRuntimeOrigin() {
   return "";
 }
 
+function isForegroundWakeupEvent(event?: Event) {
+  const type = event?.type ?? "";
+  if (type === "pagehide" || type === "freeze") {
+    return false;
+  }
+  if (typeof document !== "undefined" && type === "visibilitychange") {
+    return document.visibilityState === "visible";
+  }
+  if (
+    typeof document !== "undefined" &&
+    document.visibilityState === "hidden" &&
+    type !== "online"
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function readChatEventSeq(event: ChatEvent) {
   const seq = event.seq;
   return typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? Math.floor(seq) : 0;
+}
+
+function isChatControlEvent(
+  event: ChatEvent | null | undefined,
+): event is ChatControlEvent {
+  switch (event?.type) {
+    case "accepted":
+    case "delivered":
+    case "claimed":
+    case "starting":
+    case "started":
+    case "progress":
+    case "completed":
+    case "failed":
+    case "cancelled":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function isTerminalChatControlEvent(event: ChatEvent | null | undefined) {
+  if (!isChatControlEvent(event)) {
+    return false;
+  }
+  return event?.state === "completed" || event?.state === "failed" || event?.state === "cancelled";
 }
 
 function normalizeAfterSeq(value: unknown) {
@@ -443,6 +545,42 @@ function normalizeTerminalEvent(input: RawTerminalEvent): TerminalEvent | null {
   };
 }
 
+function normalizeTunnelStatus(input: unknown): TunnelSummary["status"] {
+  return input === "expired" || input === "offline" ? input : "active";
+}
+
+function fallbackTunnelPublicUrl(slug: string) {
+  const origin = getRuntimeOrigin().replace(/\/$/, "");
+  return origin && slug ? `${origin}/t/${slug}/` : "";
+}
+
+function normalizeTunnelSummary(input: RawTunnelSummary): TunnelSummary {
+  const slug = input.slug?.trim() ?? "";
+  return {
+    id: input.id?.trim() ?? "",
+    slug,
+    name: input.name?.trim() ?? "",
+    targetUrl: input.targetUrl ?? input.target_url ?? "",
+    publicUrl: input.publicUrl ?? input.public_url ?? fallbackTunnelPublicUrl(slug),
+    createdAt: Number(input.createdAt ?? input.created_at ?? 0),
+    expiresAt: Number(input.expiresAt ?? input.expires_at ?? 0),
+    activeConnections: Number(input.activeConnections ?? input.active_connections ?? 0),
+    status: normalizeTunnelStatus(input.status),
+    projectPathKey: (input.projectPathKey ?? input.project_path_key ?? "").trim(),
+  };
+}
+
+function normalizeTunnelListResponse(input: RawTunnelResponse): TunnelSummary[] {
+  return (input.tunnels ?? []).map(normalizeTunnelSummary);
+}
+
+function normalizeTunnelResponse(input: RawTunnelResponse): TunnelSummary {
+  if (!input.tunnel) {
+    throw new Error("Tunnel response did not include a tunnel");
+  }
+  return normalizeTunnelSummary(input.tunnel);
+}
+
 function normalizeOptionalOffset(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
@@ -512,12 +650,31 @@ export class GatewayWebSocketClient {
   private reconnectNoticeTimer: number | null = null;
   private reconnectAttempt = 0;
   private reconnecting = false;
-  private readonly reconnectWakeup = () => {
-    this.scheduleReconnect(0);
+  private lastForegroundWakeupAt = 0;
+  private prepareRuntimePromise: Promise<AgentStatus> | null = null;
+  private readonly reconnectWakeup = (event?: Event) => {
+    this.noteForegroundWakeup(event);
   };
 
   constructor(private readonly token: string) {
     this.installReconnectWakeups();
+  }
+
+  noteForegroundWakeup(event?: Event) {
+    if (this.disposed || !isForegroundWakeupEvent(event)) {
+      return;
+    }
+    const now = Date.now();
+    this.lastForegroundWakeupAt = now;
+    if (
+      this.socket?.readyState === WebSocket.OPEN &&
+      this.authenticated &&
+      this.shouldRecycleAuthenticatedSocket(now)
+    ) {
+      this.handleDisconnect(this.buildTransportStallError("after page restore"));
+      return;
+    }
+    this.scheduleReconnect(0);
   }
 
   async getStatus(): Promise<AgentStatus> {
@@ -525,6 +682,22 @@ export class GatewayWebSocketClient {
     this.lastStatus = status;
     this.lastStatusError = null;
     return status;
+  }
+
+  async prepareChatRuntime(_reason?: string): Promise<AgentStatus> {
+    if (this.prepareRuntimePromise) {
+      return this.prepareRuntimePromise;
+    }
+    this.noteForegroundWakeup();
+    this.prepareRuntimePromise = (async () => {
+      await this.ensureConnected({ resumeStreams: true });
+      const status = await this.getStatus();
+      this.emitStatus(status, null);
+      return status;
+    })().finally(() => {
+      this.prepareRuntimePromise = null;
+    });
+    return this.prepareRuntimePromise;
   }
 
   subscribeStatus(listener: StatusListener): () => void {
@@ -607,6 +780,7 @@ export class GatewayWebSocketClient {
         if (active?.conversationId) {
           void this.cancelChat(active.conversationId).catch(() => undefined);
         }
+        this.clearChatStreamStartWatchdog(streamState);
         this.chatStreams.delete(requestId);
         queue.close();
       };
@@ -619,6 +793,7 @@ export class GatewayWebSocketClient {
     }
 
     try {
+      const requestStartedAt = Date.now();
       this.sendEnvelope({
         id: requestId,
         type: "chat.start",
@@ -655,6 +830,12 @@ export class GatewayWebSocketClient {
         },
       });
       streamState.attachedSocket = this.socket;
+      this.armChatStreamStartWatchdog(
+        requestId,
+        streamState,
+        requestStartedAt,
+        "chat.start",
+      );
 
       for await (const event of queue) {
         yield event;
@@ -662,6 +843,9 @@ export class GatewayWebSocketClient {
     } finally {
       const active = this.chatStreams.get(requestId);
       active?.abortHandler?.();
+      if (active) {
+        this.clearChatStreamStartWatchdog(active);
+      }
       this.chatStreams.delete(requestId);
     }
   }
@@ -698,6 +882,7 @@ export class GatewayWebSocketClient {
 
     if (signal) {
       const handleAbort = () => {
+        this.clearChatStreamStartWatchdog(streamState);
         void this.detachChatStream(requestId).catch(() => undefined);
         this.chatStreams.delete(requestId);
         queue.close();
@@ -711,6 +896,7 @@ export class GatewayWebSocketClient {
     }
 
     try {
+      const requestStartedAt = Date.now();
       this.sendEnvelope({
         id: requestId,
         type: "chat.attach",
@@ -720,6 +906,12 @@ export class GatewayWebSocketClient {
         },
       });
       streamState.attachedSocket = this.socket;
+      this.armChatStreamStartWatchdog(
+        requestId,
+        streamState,
+        requestStartedAt,
+        "chat.attach",
+      );
 
       for await (const event of queue) {
         yield event;
@@ -727,6 +919,9 @@ export class GatewayWebSocketClient {
     } finally {
       const active = this.chatStreams.get(requestId);
       active?.abortHandler?.();
+      if (active) {
+        this.clearChatStreamStartWatchdog(active);
+      }
       if (active) {
         await this.detachChatStream(requestId).catch(() => undefined);
         this.chatStreams.delete(requestId);
@@ -881,6 +1076,49 @@ export class GatewayWebSocketClient {
       session_id: sessionId,
       project_path_key: projectPathKey,
     });
+  }
+
+  async listTunnels(): Promise<TunnelSummary[]> {
+    return normalizeTunnelListResponse(
+      await this.requestWithRecovery<RawTunnelResponse>("tunnel.list", {}),
+    );
+  }
+
+  async createTunnel(input: TunnelCreateInput): Promise<TunnelSummary> {
+    const payload: Record<string, unknown> = {
+      targetUrl: input.targetUrl,
+      ttlSeconds: input.ttlSeconds,
+      name: input.name,
+    };
+    if (input.projectPathKey?.trim()) {
+      payload.projectPathKey = input.projectPathKey.trim();
+    }
+    return normalizeTunnelResponse(
+      await this.request<RawTunnelResponse>("tunnel.create", payload),
+    );
+  }
+
+  async updateTunnel(input: TunnelUpdateInput): Promise<TunnelSummary> {
+    const payload: Record<string, unknown> = {
+      id: input.id,
+      targetUrl: input.targetUrl,
+      ttlSeconds: input.ttlSeconds,
+      name: input.name,
+    };
+    if (input.projectPathKey?.trim()) {
+      payload.projectPathKey = input.projectPathKey.trim();
+    }
+    return normalizeTunnelResponse(
+      await this.request<RawTunnelResponse>("tunnel.update", payload),
+    );
+  }
+
+  async closeTunnel(id: string): Promise<TunnelSummary> {
+    return normalizeTunnelResponse(
+      await this.request<RawTunnelResponse>("tunnel.close", {
+        id,
+      }),
+    );
   }
 
   async listHistory(
@@ -1544,6 +1782,7 @@ export class GatewayWebSocketClient {
       if (!this.socket || !this.authenticated || this.socket.readyState !== WebSocket.OPEN) {
         return;
       }
+      const requestStartedAt = Date.now();
       if (stream.kind === "attach") {
         this.sendEnvelope({
           id: requestId,
@@ -1565,11 +1804,56 @@ export class GatewayWebSocketClient {
         });
       }
       stream.attachedSocket = this.socket;
+      this.armChatStreamStartWatchdog(
+        requestId,
+        stream,
+        requestStartedAt,
+        stream.kind === "attach" ? "chat.attach" : "chat.resume",
+      );
     } catch {
       this.scheduleReconnect();
     } finally {
       stream.resuming = false;
     }
+  }
+
+  private armChatStreamStartWatchdog(
+    requestId: string,
+    stream: ChatStreamState,
+    requestStartedAt: number,
+    action: string,
+  ) {
+    this.clearChatStreamStartWatchdog(stream);
+    const socket = this.socket;
+    if (!socket) {
+      return;
+    }
+    const host = getRuntimeHost();
+    stream.startWatchdogId = host.setTimeout(() => {
+      const active = this.chatStreams.get(requestId);
+      if (!active || active !== stream || active.lastSeq > 0) {
+        return;
+      }
+      active.startWatchdogId = undefined;
+      if (
+        this.socket === socket &&
+        active.attachedSocket === socket &&
+        this.authenticated &&
+        socket.readyState === WebSocket.OPEN &&
+        this.lastInboundAt <= requestStartedAt
+      ) {
+        this.handleDisconnect(this.buildTransportStallError(`while waiting for ${action}`));
+      }
+    }, CHAT_STREAM_TRANSPORT_STALL_MS);
+  }
+
+  private clearChatStreamStartWatchdog(stream: ChatStreamState) {
+    if (stream.startWatchdogId === undefined) {
+      return;
+    }
+    const host = getRuntimeHost();
+    host.clearTimeout(stream.startWatchdogId);
+    stream.startWatchdogId = undefined;
   }
 
   private async detachChatStream(requestId: string) {
@@ -1651,7 +1935,7 @@ export class GatewayWebSocketClient {
       return;
     }
 
-    if (envelope.type === "chat.event" && requestId) {
+    if ((envelope.type === "chat.event" || envelope.type === "chat.control") && requestId) {
       const stream = this.chatStreams.get(requestId);
       if (!stream) {
         return;
@@ -1667,8 +1951,13 @@ export class GatewayWebSocketClient {
       if (event?.conversation_id) {
         stream.conversationId = event.conversation_id;
       }
+      this.clearChatStreamStartWatchdog(stream);
       stream.queue.push(event);
-      if (event?.type === "done" || event?.type === "error") {
+      if (
+        event?.type === "done" ||
+        event?.type === "error" ||
+        isTerminalChatControlEvent(event)
+      ) {
         stream.abortHandler?.();
         stream.queue.close();
         this.chatStreams.delete(requestId);
@@ -1676,7 +1965,7 @@ export class GatewayWebSocketClient {
       return;
     }
 
-    if (envelope.type === "conversation.event") {
+    if (envelope.type === "conversation.event" || envelope.type === "conversation.control") {
       const event = envelope.payload as ChatEvent;
       if (event?.conversation_id) {
         this.emitConversation(event);
@@ -1688,6 +1977,7 @@ export class GatewayWebSocketClient {
       const stream = this.chatStreams.get(requestId);
       if (stream) {
         const message = typeof envelope.error === "string" ? envelope.error : "Request failed";
+        this.clearChatStreamStartWatchdog(stream);
         stream.queue.push({
           type: "error",
           message,
@@ -1746,11 +2036,13 @@ export class GatewayWebSocketClient {
       const streams = [...this.chatStreams.values()];
       this.chatStreams.clear();
       for (const stream of streams) {
+        this.clearChatStreamStartWatchdog(stream);
         stream.abortHandler?.();
         stream.queue.fail(error);
       }
     } else {
       for (const stream of this.chatStreams.values()) {
+        this.clearChatStreamStartWatchdog(stream);
         stream.attachedSocket = null;
       }
     }
@@ -1781,12 +2073,22 @@ export class GatewayWebSocketClient {
   }
 
   private shouldRecycleAuthenticatedSocket(now = Date.now()) {
+    if (
+      this.socket === null ||
+      !this.authenticated ||
+      this.socket.readyState !== WebSocket.OPEN ||
+      this.lastInboundAt <= 0
+    ) {
+      return false;
+    }
+    if (now - this.lastInboundAt >= SOCKET_INBOUND_STALL_MS) {
+      return true;
+    }
     return (
-      this.socket !== null &&
-      this.authenticated &&
-      this.socket.readyState === WebSocket.OPEN &&
-      this.lastInboundAt > 0 &&
-      now - this.lastInboundAt >= SOCKET_INBOUND_STALL_MS
+      this.lastForegroundWakeupAt > 0 &&
+      now - this.lastForegroundWakeupAt <= FOREGROUND_WAKEUP_RECENCY_MS &&
+      this.lastInboundAt < this.lastForegroundWakeupAt &&
+      now - this.lastInboundAt >= FOREGROUND_SOCKET_RECYCLE_IDLE_MS
     );
   }
 
@@ -1815,6 +2117,7 @@ export class GatewayWebSocketClient {
 
 export type GatewayWebSocketClientLike = {
   getStatus(): Promise<AgentStatus>;
+  prepareChatRuntime(reason?: string): Promise<AgentStatus>;
   subscribeStatus(listener: StatusListener): () => void;
   subscribeHistory(listener: HistoryListener): () => void;
   subscribeConversation(listener: ConversationListener): () => void;
@@ -1869,6 +2172,10 @@ export type GatewayWebSocketClientLike = {
   closeTerminal(sessionId: string, projectPathKey?: string): Promise<TerminalSession>;
   closeProjectTerminals(projectPathKey: string): Promise<TerminalSession[]>;
   detachTerminal(sessionId: string, projectPathKey?: string): Promise<void>;
+  listTunnels(): Promise<TunnelSummary[]>;
+  createTunnel(input: TunnelCreateInput): Promise<TunnelSummary>;
+  updateTunnel(input: TunnelUpdateInput): Promise<TunnelSummary>;
+  closeTunnel(id: string): Promise<TunnelSummary>;
   listHistory(page: number, pageSize: number, filter?: HistoryListFilter): Promise<HistoryList>;
   listHistoryWorkdirs(): Promise<HistoryWorkdirsResponse>;
   listSharedHistory(page: number, pageSize: number): Promise<HistoryList>;
@@ -2030,6 +2337,10 @@ type SharedWorkerClientRequestMessage =
       stream_id: string;
     }
   | {
+      type: "wakeup";
+      connection_id: string;
+    }
+  | {
       type: "dispose";
       connection_id: string;
     };
@@ -2067,6 +2378,9 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
   private terminalListeners = new Set<TerminalListener>();
   private lastStatus: AgentStatus | null = null;
   private lastStatusError: string | null = null;
+  private readonly workerWakeup = (event?: Event) => {
+    this.postWorkerWakeup(event);
+  };
 
   constructor(private readonly token: string) {
     this.connectionID = this.nextRequestId("connection");
@@ -2087,6 +2401,7 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
       this.handleDisconnect(new Error("Gateway SharedWorker message failed"));
     };
     this.port.start();
+    this.installWorkerWakeups();
     const host = getRuntimeHost();
     this.readyTimeoutId = host.setTimeout(() => {
       this.handleDisconnect(new Error("Gateway SharedWorker connection timed out"));
@@ -2105,6 +2420,13 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
 
   async getStatus(): Promise<AgentStatus> {
     const status = await this.request<AgentStatus>("status.get", {});
+    this.statusRefreshRequested = false;
+    this.emitStatus(status, null);
+    return status;
+  }
+
+  async prepareChatRuntime(reason?: string): Promise<AgentStatus> {
+    const status = await this.request<AgentStatus>("chat.prepare", { reason: reason ?? "" });
     this.statusRefreshRequested = false;
     this.emitStatus(status, null);
     return status;
@@ -2429,6 +2751,47 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
     });
   }
 
+  async listTunnels(): Promise<TunnelSummary[]> {
+    return normalizeTunnelListResponse(await this.request<RawTunnelResponse>("tunnel.list", {}));
+  }
+
+  async createTunnel(input: TunnelCreateInput): Promise<TunnelSummary> {
+    const payload: Record<string, unknown> = {
+      targetUrl: input.targetUrl,
+      ttlSeconds: input.ttlSeconds,
+      name: input.name,
+    };
+    if (input.projectPathKey?.trim()) {
+      payload.projectPathKey = input.projectPathKey.trim();
+    }
+    return normalizeTunnelResponse(
+      await this.request<RawTunnelResponse>("tunnel.create", payload),
+    );
+  }
+
+  async updateTunnel(input: TunnelUpdateInput): Promise<TunnelSummary> {
+    const payload: Record<string, unknown> = {
+      id: input.id,
+      targetUrl: input.targetUrl,
+      ttlSeconds: input.ttlSeconds,
+      name: input.name,
+    };
+    if (input.projectPathKey?.trim()) {
+      payload.projectPathKey = input.projectPathKey.trim();
+    }
+    return normalizeTunnelResponse(
+      await this.request<RawTunnelResponse>("tunnel.update", payload),
+    );
+  }
+
+  async closeTunnel(id: string): Promise<TunnelSummary> {
+    return normalizeTunnelResponse(
+      await this.request<RawTunnelResponse>("tunnel.close", {
+        id,
+      }),
+    );
+  }
+
   async listHistory(
     page: number,
     pageSize: number,
@@ -2681,6 +3044,7 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
       return;
     }
     this.disposed = true;
+    this.uninstallWorkerWakeups();
     try {
       this.postMessage({ type: "dispose", connection_id: this.connectionID });
     } catch {
@@ -2808,6 +3172,48 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
     await this.connectPromise;
   }
 
+  private installWorkerWakeups() {
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("online", this.workerWakeup);
+      window.addEventListener("focus", this.workerWakeup);
+      window.addEventListener("pageshow", this.workerWakeup);
+      window.addEventListener("pagehide", this.workerWakeup);
+    }
+    if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+      document.addEventListener("visibilitychange", this.workerWakeup);
+      document.addEventListener("freeze", this.workerWakeup as EventListener);
+      document.addEventListener("resume", this.workerWakeup as EventListener);
+    }
+  }
+
+  private uninstallWorkerWakeups() {
+    if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+      window.removeEventListener("online", this.workerWakeup);
+      window.removeEventListener("focus", this.workerWakeup);
+      window.removeEventListener("pageshow", this.workerWakeup);
+      window.removeEventListener("pagehide", this.workerWakeup);
+    }
+    if (typeof document !== "undefined" && typeof document.removeEventListener === "function") {
+      document.removeEventListener("visibilitychange", this.workerWakeup);
+      document.removeEventListener("freeze", this.workerWakeup as EventListener);
+      document.removeEventListener("resume", this.workerWakeup as EventListener);
+    }
+  }
+
+  private postWorkerWakeup(event?: Event) {
+    if (this.disposed || !isForegroundWakeupEvent(event)) {
+      return;
+    }
+    try {
+      this.postMessage({
+        type: "wakeup",
+        connection_id: this.connectionID,
+      });
+    } catch {
+      this.handleDisconnect(new Error("Gateway SharedWorker wakeup failed"));
+    }
+  }
+
   private postMessage(message: SharedWorkerClientRequestMessage) {
     this.port.postMessage(message);
   }
@@ -2900,7 +3306,7 @@ class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
       stream.conversationId = event.conversation_id;
     }
     stream.queue.push(event);
-    if (event?.type === "done" || event?.type === "error") {
+    if (event?.type === "done" || event?.type === "error" || isTerminalChatControlEvent(event)) {
       stream.abortHandler?.();
       stream.queue.close();
       this.chatStreams.delete(streamId);

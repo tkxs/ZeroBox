@@ -59,16 +59,18 @@ import { McpHubPage } from "@/pages/mcp-hub/McpHubPage";
 import type { SectionId } from "@/pages/settings/types";
 import { useChatSkills } from "@/pages/chat/useChatSkills";
 import { mergeAlwaysEnabledSkillNames } from "@/lib/skills";
-import { buildModelOptions, sortHistoryItems } from "@/lib/chat/chatPageHelpers";
+import { buildModelOptions, sortHistoryItems, VIBING_STATUS } from "@/lib/chat/chatPageHelpers";
 import { SettingsPage } from "@/pages/SettingsPage";
 import {
   findProviderModelConfig,
   getChatRuntimeReasoningLevelsForProvider,
   getProjectToolsFileTreeProjectState,
+  getProjectToolsPanelActiveTab,
   getProjectToolsPanelTabOrder,
   isAgentDevMode,
   isProjectToolsFileTreeOpen,
   isProjectToolsGitReviewOpen,
+  isProjectToolsTunnelOpen,
   normalizeChatRuntimeControlsForProvider,
   normalizeSettings,
   removeProjectToolsProjectState,
@@ -79,6 +81,8 @@ import {
   updateProjectToolsFileTreeProjectState,
   updateProjectToolsFileTreeOpen,
   updateProjectToolsGitReviewOpen,
+  updateProjectToolsTunnelOpen,
+  updateProjectToolsPanelActiveTab,
   updateProjectToolsPanelTabOrder,
   type AppSettings,
   type ChatRuntimeControls,
@@ -107,6 +111,7 @@ import {
 import type { TerminalSession } from "./lib/terminal/types";
 import type {
   AgentStatus,
+  ChatControlEvent,
   ChatEvent,
   ConversationSummary,
   GatewayHistoryEvent,
@@ -379,6 +384,8 @@ const SECONDS_TIMESTAMP_MAX = 10_000_000_000;
 const DRAFT_HISTORY_ADOPTION_WINDOW_MS = 30_000;
 const LIVE_STREAM_HISTORY_REFRESH_SUPPRESS_MS = 30_000;
 const PAGE_RESTORE_HISTORY_REFRESH_THROTTLE_MS = 900;
+const CHAT_RUNTIME_PREPARE_TIMEOUT_MS = 2_500;
+const CHAT_RUNTIME_FOREGROUND_PREPARE_TIMEOUT_MS = 1_500;
 const DEFAULT_BROWSER_TITLE = "LiveAgent Gateway";
 const NEW_CONVERSATION_BROWSER_TITLE = "LiveAgent";
 const SHARED_HISTORY_BROWSER_TITLE = "分享会话";
@@ -475,6 +482,66 @@ function isChatEventTitleFinal(event: ChatEvent) {
 
 function isTerminalChatEvent(event: ChatEvent) {
   return event.type === "done" || event.type === "error";
+}
+
+function isChatControlEvent(event: ChatEvent): event is ChatControlEvent {
+  switch (event.type) {
+    case "accepted":
+    case "delivered":
+    case "claimed":
+    case "starting":
+    case "started":
+    case "progress":
+    case "completed":
+    case "failed":
+    case "cancelled":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function isTerminalChatControlEvent(event: ChatEvent) {
+  return (
+    isChatControlEvent(event) &&
+    (event.state === "completed" || event.state === "failed" || event.state === "cancelled")
+  );
+}
+
+function isRunningChatControlEvent(event: ChatEvent) {
+  return isChatControlEvent(event) && (event.state === "running" || event.type === "started");
+}
+
+type TunnelManagerToolChange = {
+  action: "create" | "close";
+  projectPathKey: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readTunnelManagerToolChange(event: ChatEvent): TunnelManagerToolChange | null {
+  if (event.type !== "tool_result" || event.isError === true) {
+    return null;
+  }
+  const details = asRecord(event.details);
+  if (details.kind !== "tunnel_manager") {
+    return null;
+  }
+  const action = typeof details.action === "string" ? details.action.trim() : "";
+  if (action !== "create" && action !== "close") {
+    return null;
+  }
+  const tunnel = asRecord(details.tunnel);
+  const projectPathKey =
+    (typeof tunnel.projectPathKey === "string" ? tunnel.projectPathKey.trim() : "") ||
+    (typeof tunnel.project_path_key === "string" ? tunnel.project_path_key.trim() : "") ||
+    event.workdir?.trim() ||
+    "";
+  return { action, projectPathKey };
 }
 
 function buildGatewaySelectedModel(
@@ -829,6 +896,7 @@ export default function App() {
   const [isFileDropActive, setIsFileDropActive] = useState(false);
   const [activeView, setActiveView] = useState<"chat" | "skills-hub" | "mcp-hub">("chat");
   const [projectToolsPanelOpen, setProjectToolsPanelOpen] = useState(false);
+  const [tunnelRefreshToken, setTunnelRefreshToken] = useState(0);
   const previousProjectToolsFileTreeOpenRef = useRef(false);
   const [workspaceEditorMounted, setWorkspaceEditorMounted] = useState(false);
   const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
@@ -861,6 +929,7 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const conversationIdRef = useRef(conversationId);
   const selectedHistoryIdRef = useRef(selectedHistoryId);
+  const statusRef = useRef<AgentStatus | null>(status);
   const chatBusyRef = useRef(chatBusy);
   const chatMessagesRef = useRef(chatMessages);
   const chatErrorRef = useRef(chatError);
@@ -878,6 +947,7 @@ export default function App() {
   const sharedHistoryItemsRef = useRef<ChatHistorySummary[]>([]);
   const sharedHistoryListRequestRef = useRef<Promise<ChatHistorySummary[]> | null>(null);
   const pendingUploadedFilesRef = useRef(pendingUploadedFiles);
+  const pendingUploadsByConversationRef = useRef<Map<string, PendingUploadedFile[]>>(new Map());
   const isUploadingFilesRef = useRef(isUploadingFiles);
   const uploadDragDepthRef = useRef(0);
   const localRunningConversationIdsRef = useRef<ReadonlySet<string>>(new Set());
@@ -909,6 +979,9 @@ export default function App() {
   const draftConversationPinnedRef = useRef(false);
   const protectedConversationRef = useRef("");
   const chatStartLocksRef = useRef<Set<string>>(new Set());
+  const chatPreflightInFlightRef = useRef(false);
+  const chatStartInFlightRef = useRef(false);
+  const chatRuntimePreparePromiseRef = useRef<Promise<AgentStatus> | null>(null);
   const submitInFlightRef = useRef(false);
   const pendingDraftConversationMigrationRef = useRef<PendingDraftConversationMigration | null>(
     null,
@@ -1134,6 +1207,10 @@ export default function App() {
   }, [selectedHistoryId]);
 
   useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  useEffect(() => {
     chatBusyRef.current = chatBusy;
   }, [chatBusy]);
 
@@ -1190,8 +1267,70 @@ export default function App() {
   }, [pendingUploadedFiles]);
 
   useEffect(() => {
+    const displayedConversationId = resolveVisibleConversationId(
+      selectedHistoryId,
+      conversationId,
+    ).trim();
+    const nextFiles = displayedConversationId
+      ? (pendingUploadsByConversationRef.current.get(displayedConversationId) ?? [])
+      : [];
+    pendingUploadedFilesRef.current = nextFiles;
+    setPendingUploadedFiles(nextFiles);
+  }, [conversationId, selectedHistoryId]);
+
+  useEffect(() => {
     isUploadingFilesRef.current = isUploadingFiles;
   }, [isUploadingFiles]);
+
+  function getDisplayedConversationId() {
+    return resolveVisibleConversationId(
+      selectedHistoryIdRef.current,
+      conversationIdRef.current,
+    ).trim();
+  }
+
+  function isDisplayedConversation(targetConversationId: string) {
+    const conversationIdValue = targetConversationId.trim();
+    return conversationIdValue !== "" && getDisplayedConversationId() === conversationIdValue;
+  }
+
+  function getPendingUploadsForConversation(targetConversationId: string) {
+    const conversationIdValue = targetConversationId.trim();
+    if (!conversationIdValue || isDisplayedConversation(conversationIdValue)) {
+      return pendingUploadedFilesRef.current;
+    }
+    return pendingUploadsByConversationRef.current.get(conversationIdValue) ?? [];
+  }
+
+  function setPendingUploadsForConversation(
+    targetConversationId: string,
+    nextFiles: PendingUploadedFile[],
+  ) {
+    const conversationIdValue = targetConversationId.trim();
+    const normalizedFiles = nextFiles.slice();
+    if (conversationIdValue) {
+      if (normalizedFiles.length > 0) {
+        pendingUploadsByConversationRef.current.set(conversationIdValue, normalizedFiles);
+      } else {
+        pendingUploadsByConversationRef.current.delete(conversationIdValue);
+      }
+    }
+    if (!conversationIdValue || isDisplayedConversation(conversationIdValue)) {
+      pendingUploadedFilesRef.current = normalizedFiles;
+      setPendingUploadedFiles(normalizedFiles);
+    }
+  }
+
+  function updatePendingUploadsForConversation(
+    targetConversationId: string,
+    updater: (current: PendingUploadedFile[]) => PendingUploadedFile[],
+  ) {
+    const conversationIdValue = targetConversationId.trim();
+    const currentFiles = getPendingUploadsForConversation(conversationIdValue);
+    const nextFiles = updater(currentFiles);
+    setPendingUploadsForConversation(conversationIdValue, nextFiles);
+    return nextFiles;
+  }
 
   useEffect(() => {
     localRunningConversationIdsRef.current = localRunningConversationIds;
@@ -2035,6 +2174,37 @@ export default function App() {
     [queueSettingsSave],
   );
 
+  const openTunnelToolPanel = useCallback(
+    (projectPathKey?: string) => {
+      const targetProjectPathKey =
+        workspaceProjectPathKey(projectPathKey) ||
+        workspaceProjectPathKey(activeWorkspaceProjectPath);
+      if (!targetProjectPathKey) return;
+      setActiveView("chat");
+      setProjectToolsPanelOpen(true);
+      setSettings((prev) =>
+        updateProjectToolsTunnelOpen(
+          updateProjectToolsPanelActiveTab(prev, targetProjectPathKey, "tunnel"),
+          targetProjectPathKey,
+          true,
+        ),
+      );
+    },
+    [activeWorkspaceProjectPath, setSettings],
+  );
+
+  const handleTunnelManagerChatEvent = useCallback(
+    (event: ChatEvent) => {
+      const change = readTunnelManagerToolChange(event);
+      if (!change) return;
+      setTunnelRefreshToken((current) => current + 1);
+      if (change.action === "create") {
+        openTunnelToolPanel(change.projectPathKey);
+      }
+    },
+    [openTunnelToolPanel],
+  );
+
   const persistProjectConversationActivity = useCallback(
     (activity: ReadonlyMap<string, number>) => {
       if (activity.size === 0) {
@@ -2248,12 +2418,7 @@ export default function App() {
       activateWorkspaceProject(project);
       setSettings((prev) =>
         updateProjectToolsFileTreeOpen(
-          updateCustomSettings(prev, {
-            projectToolsPanel: {
-              ...prev.customSettings.projectToolsPanel,
-              activeTab: "fileTree",
-            },
-          }),
+          updateProjectToolsPanelActiveTab(prev, pathKey, "fileTree"),
           pathKey,
           true,
         ),
@@ -2828,6 +2993,7 @@ export default function App() {
             liveStore.appendEvent(event, {
               flush: event.type === "done" || event.type === "error",
             });
+            handleTunnelManagerChatEvent(event);
 
             if (event.type === "done" || event.type === "error") {
               terminalEventSeen = true;
@@ -2884,6 +3050,7 @@ export default function App() {
       commitTerminalConversationLiveStream,
       getConversationAbortController,
       getConversationLiveStreamStore,
+      handleTunnelManagerChatEvent,
       markCompletedLiveStream,
       markLiveConversationStreamActive,
       recoverUnavailableConversationStream,
@@ -3090,6 +3257,7 @@ export default function App() {
     clearConversationLiveStream,
     getConversationAbortController,
     getHistoryPositionLockedConversationIds,
+    handleTunnelManagerChatEvent,
     hasRecentlyCompletedLiveStream,
     hasRetainedConversationLiveStream,
     isAgentMode,
@@ -3122,14 +3290,35 @@ export default function App() {
         return;
       }
 
+      const visibleBroadcastConversationId = resolveVisibleConversationId(
+        selectedHistoryIdRef.current,
+        conversationIdRef.current,
+      );
+      if (isChatControlEvent(event)) {
+        if (isRunningChatControlEvent(event)) {
+          setRemoteConversationRunningState(targetConversationId, true, {
+            workdir: event.workdir,
+          });
+          if (
+            visibleBroadcastConversationId === targetConversationId &&
+            !isConversationLiveStreamAttached(targetConversationId)
+          ) {
+            attachVisibleConversationLiveStream(targetConversationId, api);
+          }
+        } else if (isTerminalChatControlEvent(event)) {
+          setRemoteConversationRunningState(targetConversationId, false, {
+            workdir: event.workdir,
+          });
+        }
+        return;
+      }
       const isTerminalEvent = isTerminalChatEvent(event);
       if (!isTerminalEvent && !isChatStreamNotAvailableEvent(event)) {
         setRemoteConversationRunningState(targetConversationId, true, {
           workdir: event.workdir,
         });
         if (
-          resolveVisibleConversationId(selectedHistoryIdRef.current, conversationIdRef.current) ===
-            targetConversationId &&
+          visibleBroadcastConversationId === targetConversationId &&
           !isConversationLiveStreamAttached(targetConversationId)
         ) {
           attachVisibleConversationLiveStream(targetConversationId, api);
@@ -3177,6 +3366,9 @@ export default function App() {
       liveStore.appendEvent(event, {
         flush: isTerminalEvent,
       });
+      if (visibleBroadcastConversationId === targetConversationId) {
+        handleTunnelManagerChatEvent(event);
+      }
       if (isTerminalEvent) {
         markCompletedLiveStream(targetConversationId);
         commitTerminalConversationLiveStream(targetConversationId);
@@ -3197,6 +3389,7 @@ export default function App() {
     commitTerminalConversationLiveStream,
     getConversationAbortController,
     getConversationLiveStreamStore,
+    handleTunnelManagerChatEvent,
     isConversationLiveStreamAttached,
     markCompletedLiveStream,
     markLiveConversationStreamActive,
@@ -3825,9 +4018,74 @@ export default function App() {
     ],
   );
 
+  const prepareChatRuntime = useCallback(
+    async (
+      reason: string,
+      currentApi = api,
+      timeoutMs = CHAT_RUNTIME_PREPARE_TIMEOUT_MS,
+    ): Promise<AgentStatus> => {
+      if (!currentApi) {
+        throw new Error("Gateway client is not ready.");
+      }
+
+      if (!chatRuntimePreparePromiseRef.current) {
+        chatPreflightInFlightRef.current = true;
+        chatRuntimePreparePromiseRef.current = currentApi
+          .prepareChatRuntime(reason)
+          .then((nextStatus) => {
+            statusRef.current = nextStatus;
+            setStatus(nextStatus);
+            setStatusError(null);
+            return nextStatus;
+          })
+          .catch((error) => {
+            setStatusError(asErrorMessage(error, "status request failed"));
+            throw error;
+          })
+          .finally(() => {
+            chatRuntimePreparePromiseRef.current = null;
+            chatPreflightInFlightRef.current = false;
+          });
+      }
+
+      const preparePromise = chatRuntimePreparePromiseRef.current;
+      if (!preparePromise) {
+        throw new Error("Gateway chat runtime preparation did not start.");
+      }
+      if (timeoutMs <= 0) {
+        return preparePromise;
+      }
+
+      let timeoutId: number | null = null;
+      try {
+        return await Promise.race([
+          preparePromise,
+          new Promise<AgentStatus>((_, reject) => {
+            timeoutId = window.setTimeout(() => {
+              reject(new Error("Desktop chat runtime is recovering. Please retry shortly."));
+            }, timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timeoutId !== null) {
+          window.clearTimeout(timeoutId);
+        }
+      }
+    },
+    [api],
+  );
+
   const recoverVisibleConversationAfterPageRestore = useCallback(
     (currentApi = api) => {
       if (!currentApi) {
+        return;
+      }
+
+      if (
+        chatPreflightInFlightRef.current ||
+        chatStartInFlightRef.current ||
+        submitInFlightRef.current
+      ) {
         return;
       }
 
@@ -3906,6 +4164,9 @@ export default function App() {
     if (!api || !status?.online) {
       return;
     }
+    if (chatPreflightInFlightRef.current || chatStartInFlightRef.current) {
+      return;
+    }
 
     const currentConversationId = conversationIdRef.current.trim();
     const shouldKeepNewConversation =
@@ -3932,14 +4193,22 @@ export default function App() {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") {
         return;
       }
-      recoverVisibleConversationAfterPageRestoreRef.current(api);
-      if (delayedRestoreTimer !== null) {
-        window.clearTimeout(delayedRestoreTimer);
-      }
-      delayedRestoreTimer = window.setTimeout(() => {
-        delayedRestoreTimer = null;
-        recoverVisibleConversationAfterPageRestoreRef.current(api);
-      }, PAGE_RESTORE_HISTORY_REFRESH_THROTTLE_MS + 350);
+      void prepareChatRuntime(
+        "foreground",
+        api,
+        CHAT_RUNTIME_FOREGROUND_PREPARE_TIMEOUT_MS,
+      )
+        .catch(() => undefined)
+        .finally(() => {
+          recoverVisibleConversationAfterPageRestoreRef.current(api);
+          if (delayedRestoreTimer !== null) {
+            window.clearTimeout(delayedRestoreTimer);
+          }
+          delayedRestoreTimer = window.setTimeout(() => {
+            delayedRestoreTimer = null;
+            recoverVisibleConversationAfterPageRestoreRef.current(api);
+          }, PAGE_RESTORE_HISTORY_REFRESH_THROTTLE_MS + 350);
+        });
     };
 
     const handleVisibilityChange = () => {
@@ -3963,7 +4232,7 @@ export default function App() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       document.removeEventListener("resume", runRecovery);
     };
-  }, [api, historyShareToken, status?.online]);
+  }, [api, historyShareToken, prepareChatRuntime, status?.online]);
 
   async function sendChat(message: string, options?: SendChatOptions) {
     if (!api || chatBusyRef.current) {
@@ -3978,6 +4247,17 @@ export default function App() {
       selectedHistoryIdRef.current = activeConversationId;
       setConversationId(activeConversationId);
       setSelectedHistoryId(activeConversationId);
+    }
+    const startedAsDraftConversation = isLocalDraftConversationId(activeConversationId);
+    const pendingDraftConversationId =
+      pendingDraftConversationMigrationRef.current?.draftConversationId.trim() ?? "";
+    if (pendingDraftConversationId && pendingDraftConversationId !== activeConversationId) {
+      const message = "上一条新会话仍在创建，请等待它出现在历史记录后再发送新会话。";
+      updateConversationRuntimeEntry(activeConversationId, (current) => ({
+        ...current,
+        error: message,
+      }));
+      return;
     }
     if (
       chatStartLocksRef.current.has(activeConversationId) ||
@@ -3996,7 +4276,6 @@ export default function App() {
     getConversationLiveStreamStore(activeConversationId);
     const controller = new AbortController();
     setConversationAbortController(activeConversationId, controller);
-    const startedAsDraftConversation = isLocalDraftConversationId(activeConversationId);
     const clientRequestId =
       options?.clientRequestId?.trim() ||
       `webui-chat-${activeConversationId}-${crypto.randomUUID()}`;
@@ -4022,7 +4301,6 @@ export default function App() {
       : null;
     protectedConversationRef.current = activeConversationId;
     blockedHistoryHydrationConversationIdsRef.current.add(activeConversationId);
-    setConversationRunningState(activeConversationId, true);
     if (
       resolveVisibleConversationId(selectedHistoryIdRef.current, conversationIdRef.current) ===
       activeConversationId
@@ -4032,7 +4310,9 @@ export default function App() {
     updateConversationRuntimeEntry(activeConversationId, (current) => ({
       ...current,
       error: null,
-      toolStatus: null,
+      toolStatus: "Starting desktop runtime...",
+      toolStatusIsCompaction: false,
+      isSending: true,
       workdir: effectiveWorkdir || undefined,
       messages: [
         ...current.messages,
@@ -4065,6 +4345,14 @@ export default function App() {
     }
 
     let terminalEventSeen = false;
+    let runStarted = false;
+    const markRunStarted = () => {
+      if (runStarted) {
+        return;
+      }
+      runStarted = true;
+      setConversationRunningState(activeConversationId, true);
+    };
     const runtimeControls = normalizeChatRuntimeControlsForProvider(
       options?.runtimeControls ?? settings.chatRuntimeControls,
       {
@@ -4073,6 +4361,11 @@ export default function App() {
       },
     );
     try {
+      chatStartInFlightRef.current = true;
+      const preparedStatus = await prepareChatRuntime("send", api, CHAT_RUNTIME_PREPARE_TIMEOUT_MS);
+      if (preparedStatus.chat_runtime_ready !== true) {
+        throw new Error("Desktop chat runtime is not ready. Please retry.");
+      }
       for await (const event of api.chat(
         message,
         isLocalDraftConversationId(activeConversationId) ? undefined : activeConversationId,
@@ -4097,6 +4390,10 @@ export default function App() {
             migrateConversationSummary(previousConversationId, nextConversationId);
             activeConversationId = nextConversationId;
             lockedConversationIds.add(activeConversationId);
+            if (runStarted) {
+              setConversationRunningState(previousConversationId, false);
+              setConversationRunningState(activeConversationId, true);
+            }
           }
           const summary = pickConversationSummary(historyItemsRef.current, activeConversationId);
           if (!summary && startedAsDraftConversation) {
@@ -4121,6 +4418,27 @@ export default function App() {
             });
           }
         }
+        if (isChatControlEvent(event)) {
+          if (isRunningChatControlEvent(event)) {
+            markRunStarted();
+            updateConversationRuntimeEntry(activeConversationId, (current) => ({
+              ...current,
+              toolStatus: VIBING_STATUS,
+              toolStatusIsCompaction: false,
+            }));
+          } else if (isTerminalChatControlEvent(event)) {
+            terminalEventSeen = true;
+            clearConversationStreamingState(activeConversationId);
+            if (event.type === "failed" || event.state === "failed") {
+              updateConversationRuntimeEntry(activeConversationId, (current) => ({
+                ...current,
+                error: event.message?.trim() || "Desktop runtime did not start the request.",
+              }));
+            }
+          }
+          continue;
+        }
+        markRunStarted();
         if (isChatStreamNotAvailableEvent(event)) {
           terminalEventSeen = true;
           recoverUnavailableActiveConversationStream(activeConversationId, api);
@@ -4143,6 +4461,7 @@ export default function App() {
           getConversationLiveStreamStore(activeConversationId)?.appendEvent(event, {
             flush: event.type === "done" || event.type === "error",
           });
+          handleTunnelManagerChatEvent(event);
           if (event.type === "done" || event.type === "error") {
             terminalEventSeen = true;
             markCompletedLiveStream(activeConversationId);
@@ -4175,6 +4494,7 @@ export default function App() {
         }
       }
     } finally {
+      chatStartInFlightRef.current = false;
       clearConversationStreamingState(activeConversationId);
       if (status?.online && !terminalEventSeen) {
         await reloadHistory(api, {
@@ -4267,7 +4587,16 @@ export default function App() {
     protectedConversationRef.current = PROTECTED_DRAFT_CONVERSATION;
     chatStartLocksRef.current.clear();
     submitInFlightRef.current = false;
-    pendingDraftConversationMigrationRef.current = null;
+    const pendingDraftConversationId =
+      pendingDraftConversationMigrationRef.current?.draftConversationId.trim() ?? "";
+    const pendingDraftStillActive =
+      pendingDraftConversationId !== "" &&
+      (localRunningConversationIdsRef.current.has(pendingDraftConversationId) ||
+        getConversationAbortController(pendingDraftConversationId) !== null ||
+        blockedHistoryHydrationConversationIdsRef.current.has(pendingDraftConversationId));
+    if (!pendingDraftStillActive) {
+      pendingDraftConversationMigrationRef.current = null;
+    }
     composerRef.current?.clear();
     const nextRuntime = createConversationRuntimeEntry({
       workdir: options?.workdir?.trim() || undefined,
@@ -4276,7 +4605,7 @@ export default function App() {
     syncVisibleConversationRuntime(nextConversationId, nextRuntime);
     setSelectedHistory(null);
     setSelectedHistoryEntries([]);
-    setPendingUploadedFiles([]);
+    setPendingUploadsForConversation(nextConversationId, []);
   }
 
   const removeWorkspaceProjectFromSettings = useCallback(
@@ -4498,6 +4827,7 @@ export default function App() {
               blockedHistoryHydrationConversationIdsRef.current.delete(conversationId);
               clearConversationLiveStream(conversationId);
               clearCachedComposerDraft(conversationId);
+              pendingUploadsByConversationRef.current.delete(conversationId);
             }
           }
           if (terminalSessionsToClose.length > 0 && terminalClient) {
@@ -4974,7 +5304,7 @@ export default function App() {
       setHistoryError(null);
       setChatError(null);
       composerRef.current?.clear();
-      setPendingUploadedFiles([]);
+      setPendingUploadsForConversation(activeConversationId, []);
       blockedHistoryHydrationConversationIdsRef.current.add(activeConversationId);
       invalidateHistoryLoad();
       markVisibleConversationRevision();
@@ -5065,10 +5395,17 @@ export default function App() {
         setChatError(translate("chat.upload.requireWorkdir", settings.locale));
         return;
       }
+      const targetConversationId = getDisplayedConversationId();
+      if (!targetConversationId) {
+        setChatError("请先选择或创建会话后再上传文件。");
+        return;
+      }
 
+      const currentUploads = getPendingUploadsForConversation(targetConversationId);
+      setPendingUploadsForConversation(targetConversationId, currentUploads);
       const remainingFileSlots = Math.max(
         0,
-        MAX_UPLOAD_FILES - pendingUploadedFilesRef.current.length,
+        MAX_UPLOAD_FILES - currentUploads.length,
       );
       if (remainingFileSlots === 0) {
         setChatError(
@@ -5094,15 +5431,16 @@ export default function App() {
         });
 
         if (result.files.length > 0) {
-          setPendingUploadedFiles((current) => {
+          updatePendingUploadsForConversation(targetConversationId, (current) => {
             const next = mergePendingUploadedFiles(current, result.files).slice(
               0,
               MAX_UPLOAD_FILES,
             );
-            pendingUploadedFilesRef.current = next;
             return next;
           });
-          composerRef.current?.focus();
+          if (isDisplayedConversation(targetConversationId)) {
+            composerRef.current?.focus();
+          }
         }
 
         const warnings: string[] = [];
@@ -5119,11 +5457,13 @@ export default function App() {
             }),
           );
         }
-        if (warnings.length > 0) {
+        if (warnings.length > 0 && isDisplayedConversation(targetConversationId)) {
           setChatError(warnings.join("\n"));
         }
       } catch (error) {
-        setChatError(asErrorMessage(error, "导入文件失败"));
+        if (isDisplayedConversation(targetConversationId)) {
+          setChatError(asErrorMessage(error, "导入文件失败"));
+        }
       } finally {
         isUploadingFilesRef.current = false;
         setIsUploadingFiles(false);
@@ -5281,6 +5621,7 @@ export default function App() {
     sharedHistoryItemsRef.current = [];
     sharedHistoryListRequestRef.current = null;
     pendingUploadedFilesRef.current = [];
+    pendingUploadsByConversationRef.current.clear();
     draftConversationPinnedRef.current = false;
     protectedConversationRef.current = "";
     chatStartLocksRef.current.clear();
@@ -5530,6 +5871,10 @@ export default function App() {
     settings.customSettings,
     terminalProjectPathKey,
   );
+  const projectToolsTunnelOpen = isProjectToolsTunnelOpen(
+    settings.customSettings,
+    terminalProjectPathKey,
+  );
   const projectToolsDisabledMessage = !settingsSyncReady
     ? "Syncing desktop settings..."
     : !isAgentMode
@@ -5545,6 +5890,15 @@ export default function App() {
   const gitDisabledMessage = !settings.remote.enableWebGit
     ? "WebUI Git is disabled in desktop Remote settings."
     : undefined;
+  const tunnelEnabled =
+    settingsSyncReady && settings.remote.enableWebTunnels === true && status?.online === true;
+  const tunnelDisabledMessage = !settingsSyncReady
+    ? translate("chat.runtime.tunnelSettingsSyncing", settings.locale)
+    : !settings.remote.enableWebTunnels
+      ? translate("projectTools.tunnelWebDisabled", settings.locale)
+      : status?.online !== true
+        ? translate("projectTools.tunnelRemoteOffline", settings.locale)
+        : undefined;
   const handleOpenWorkspaceFile = useCallback(
     (path: string) => {
       if (!terminalProjectPath || !terminalProjectPathKey) return;
@@ -5574,6 +5928,7 @@ export default function App() {
     },
     [terminalProjectPath, terminalProjectPathKey],
   );
+
   const requestWorkspaceEditorClose = useCallback(() => {
     setWorkspaceEditorCloseRequestId((current) => current + 1);
   }, []);
@@ -6490,13 +6845,33 @@ export default function App() {
                           if (!text && files.length === 0) {
                             return;
                           }
+                          const uploadConversationId = getDisplayedConversationId();
+                          const pendingDraftConversationId =
+                            pendingDraftConversationMigrationRef.current?.draftConversationId.trim() ??
+                            "";
+                          if (
+                            pendingDraftConversationId &&
+                            pendingDraftConversationId !== uploadConversationId
+                          ) {
+                            const message =
+                              "上一条新会话仍在创建，请等待它出现在历史记录后再发送新会话。";
+                            if (uploadConversationId) {
+                              updateConversationRuntimeEntry(uploadConversationId, (current) => ({
+                                ...current,
+                                error: message,
+                              }));
+                            } else {
+                              setChatError(message);
+                            }
+                            return;
+                          }
                           composerRef.current?.clear();
-                          setPendingUploadedFiles([]);
+                          setPendingUploadsForConversation(uploadConversationId, []);
                           void sendChat(text, {
                             uploadedFiles: files,
                             runtimeControls: chatRuntimeControlsForCurrentProvider,
                           }).catch(() => {
-                            setPendingUploadedFiles((current) =>
+                            updatePendingUploadsForConversation(uploadConversationId, (current) =>
                               mergePendingUploadedFiles(current, files),
                             );
                           });
@@ -6510,13 +6885,23 @@ export default function App() {
                         isObservingRemoteLiveConversation ? displayedConversationId : undefined,
                       );
                     }}
+                    onPrepareChatRuntime={() => {
+                      if (!api || historyShareToken) {
+                        return;
+                      }
+                      void prepareChatRuntime(
+                        "composer-focus",
+                        api,
+                        CHAT_RUNTIME_FOREGROUND_PREPARE_TIMEOUT_MS,
+                      ).catch(() => undefined);
+                    }}
                     onComposerBusyChange={handleComposerBusyChange}
                     onChatRuntimeControlsChange={handleChatRuntimeControlsChange}
                     onPickReadableFiles={() => fileInputRef.current?.click()}
                     onPasteFiles={handleImportReadableFiles}
                     pendingUploadedFiles={pendingUploadedFiles}
                     onRemovePendingUpload={(relativePath) => {
-                      setPendingUploadedFiles((current) =>
+                      updatePendingUploadsForConversation(getDisplayedConversationId(), (current) =>
                         current.filter((file) => file.relativePath !== relativePath),
                       );
                     }}
@@ -6646,7 +7031,10 @@ export default function App() {
             theme={settings.theme}
             disabledMessage={projectToolsDisabledMessage}
             terminalDisabledMessage={terminalDisabledMessage}
-            activeTab={settings.customSettings.projectToolsPanel.activeTab}
+            activeTab={getProjectToolsPanelActiveTab(
+              settings.customSettings,
+              terminalProjectPathKey,
+            )}
             tabOrder={getProjectToolsPanelTabOrder(settings.customSettings, terminalProjectPathKey)}
             fileTreeOpen={projectToolsFileTreeOpen}
             fileTreeState={getProjectToolsFileTreeProjectState(
@@ -6657,10 +7045,15 @@ export default function App() {
               settings.customSettings,
               terminalProjectPathKey,
             )}
+            tunnelOpen={projectToolsTunnelOpen}
             client={terminalClient}
             gitClient={gitClient}
             gitWriteEnabled={settings.remote.enableWebGit}
             gitDisabledMessage={gitDisabledMessage}
+            tunnelClient={isAgentMode ? api : null}
+            tunnelEnabled={tunnelEnabled}
+            tunnelDisabledMessage={tunnelDisabledMessage}
+            tunnelRefreshToken={tunnelRefreshToken}
             onWidthChange={(nextWidth) =>
               setSettings((prev) =>
                 updateCustomSettings(prev, {
@@ -6673,12 +7066,7 @@ export default function App() {
             }
             onActiveTabChange={(activeTab) =>
               setSettings((prev) =>
-                updateCustomSettings(prev, {
-                  projectToolsPanel: {
-                    ...prev.customSettings.projectToolsPanel,
-                    activeTab,
-                  },
-                }),
+                updateProjectToolsPanelActiveTab(prev, terminalProjectPathKey, activeTab),
               )
             }
             onTabOrderChange={(tabOrder) =>
@@ -6700,6 +7088,9 @@ export default function App() {
               setSettings((prev) =>
                 updateProjectToolsGitReviewOpen(prev, terminalProjectPathKey, open),
               )
+            }
+            onTunnelOpenChange={(open) =>
+              setSettings((prev) => updateProjectToolsTunnelOpen(prev, terminalProjectPathKey, open))
             }
             onSessionsChange={handleProjectTerminalSessionsChange}
             onInsertFileMention={(path, kind) => {

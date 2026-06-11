@@ -3,6 +3,7 @@ import {
   normalizeChatRuntimeControls,
   normalizeProjectToolsFileTreeSettings,
   normalizeProjectToolsGitReviewSettings,
+  normalizeProjectToolsTunnelSettings,
   normalizeSettings,
   workspaceProjectPathKey,
 } from "./index";
@@ -11,6 +12,10 @@ export type GatewayProviderApiKeyUpdates = Record<string, string>;
 export type GatewaySettingsSyncProvider = Omit<AppSettings["customProviders"][number], "apiKey"> & {
   apiKeyConfigured?: boolean;
 };
+export type GatewaySettingsSyncCustomSettings = Omit<
+  Partial<AppSettings["customSettings"]>,
+  "projectToolsPanel"
+>;
 
 export type GatewaySettingsSyncPayload = {
   system: AppSettings["system"];
@@ -19,9 +24,9 @@ export type GatewaySettingsSyncPayload = {
   agents: AppSettings["agents"];
   hooks: AppSettings["hooks"];
   cron: AppSettings["cron"];
-  remote?: Pick<AppSettings["remote"], "enableWebTerminal" | "enableWebGit">;
+  remote?: Pick<AppSettings["remote"], "enableWebTerminal" | "enableWebGit" | "enableWebTunnels">;
   memory: AppSettings["memory"];
-  customSettings: Partial<AppSettings["customSettings"]>;
+  customSettings: GatewaySettingsSyncCustomSettings;
   skills: AppSettings["skills"];
   chatRuntimeControls: AppSettings["chatRuntimeControls"];
   selectedModel: AppSettings["selectedModel"] | null;
@@ -82,9 +87,10 @@ function collectProviderApiKeyUpdates(
   return Object.keys(updates).length > 0 ? updates : undefined;
 }
 
-function syncableCustomSettings(customSettings: AppSettings["customSettings"]) {
-  const syncable = { ...customSettings } as Partial<AppSettings["customSettings"]>;
-  delete syncable.projectToolsPanel;
+function syncableCustomSettings(
+  customSettings: AppSettings["customSettings"],
+): GatewaySettingsSyncCustomSettings {
+  const { projectToolsPanel: _projectToolsPanel, ...syncable } = customSettings;
   return {
     ...syncable,
     chatSidebar: {
@@ -161,10 +167,7 @@ function mergeSyncedSystemSettings(
   }
 
   const incomingSystem = incoming as AppSettings["system"];
-  const activeWorkspaceProjectId = resolveSyncedActiveWorkspaceProjectId(
-    current,
-    incomingSystem,
-  );
+  const activeWorkspaceProjectId = resolveSyncedActiveWorkspaceProjectId(current, incomingSystem);
   if (!Array.isArray(incomingSystem.workspaceProjects)) {
     return {
       ...incomingSystem,
@@ -247,7 +250,11 @@ function mergeSyncedRemoteSettings(
   incoming: unknown,
 ): AppSettings["remote"] {
   const source = asObject(incoming);
-  if (!Object.hasOwn(source, "enableWebTerminal") && !Object.hasOwn(source, "enableWebGit")) {
+  if (
+    !Object.hasOwn(source, "enableWebTerminal") &&
+    !Object.hasOwn(source, "enableWebGit") &&
+    !Object.hasOwn(source, "enableWebTunnels")
+  ) {
     return current;
   }
   return {
@@ -258,6 +265,9 @@ function mergeSyncedRemoteSettings(
     enableWebGit: Object.hasOwn(source, "enableWebGit")
       ? source.enableWebGit === true
       : current.enableWebGit,
+    enableWebTunnels: Object.hasOwn(source, "enableWebTunnels")
+      ? source.enableWebTunnels === true
+      : current.enableWebTunnels,
   };
 }
 
@@ -318,6 +328,21 @@ function mergeSyncedProjectToolsGitReviewSettings(
   };
 }
 
+function mergeSyncedProjectToolsTunnelSettings(
+  current: AppSettings["customSettings"]["projectToolsTunnel"],
+  incoming: unknown,
+): AppSettings["customSettings"]["projectToolsTunnel"] {
+  const currentState = normalizeProjectToolsTunnelSettings(current);
+  const incomingState = normalizeProjectToolsTunnelSettings(incoming);
+  const openFromIncoming = incomingState.openVersion >= currentState.openVersion;
+  return {
+    openProjectPathKeys: openFromIncoming
+      ? incomingState.openProjectPathKeys
+      : currentState.openProjectPathKeys,
+    openVersion: Math.max(currentState.openVersion, incomingState.openVersion),
+  };
+}
+
 export function buildGatewaySettingsSyncPayload(
   settings: AppSettings,
   options: { includeProviderApiKeyUpdates?: boolean } = {},
@@ -332,6 +357,7 @@ export function buildGatewaySettingsSyncPayload(
     remote: {
       enableWebTerminal: settings.remote.enableWebTerminal,
       enableWebGit: settings.remote.enableWebGit,
+      enableWebTunnels: settings.remote.enableWebTunnels,
     },
     memory: settings.memory,
     customSettings: syncableCustomSettings(settings.customSettings),
@@ -365,9 +391,9 @@ export function applyGatewaySettingsSyncPayload(
     ? ((source.memory as AppSettings["memory"] | null | undefined) ?? {})
     : current.memory;
   const customSettings = Object.hasOwn(source, "customSettings")
-    ? ((source.customSettings as AppSettings["customSettings"] | null | undefined) ?? {})
+    ? ((source.customSettings as GatewaySettingsSyncCustomSettings | null | undefined) ?? {})
     : current.customSettings;
-  const incomingCustomSettings = customSettings as Partial<AppSettings["customSettings"]>;
+  const incomingCustomSettings = customSettings as GatewaySettingsSyncCustomSettings;
 
   return normalizeSettings({
     ...current,
@@ -398,6 +424,12 @@ export function applyGatewaySettingsSyncPayload(
             incomingCustomSettings.projectToolsGitReview,
           )
         : current.customSettings.projectToolsGitReview,
+      projectToolsTunnel: Object.hasOwn(incomingCustomSettings, "projectToolsTunnel")
+        ? mergeSyncedProjectToolsTunnelSettings(
+            current.customSettings.projectToolsTunnel,
+            incomingCustomSettings.projectToolsTunnel,
+          )
+        : current.customSettings.projectToolsTunnel,
       chatSidebar: current.customSettings.chatSidebar,
       projectToolsPanel: current.customSettings.projectToolsPanel,
     },

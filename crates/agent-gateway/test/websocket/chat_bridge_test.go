@@ -77,6 +77,17 @@ func receiveEnvelopeWithID(t *testing.T, conn *websocket.Conn, id string) wsEnve
 	return wsEnvelope{}
 }
 
+func assertNoEnvelopeWithin(t *testing.T, conn *websocket.Conn, timeout time.Duration) {
+	t.Helper()
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		t.Fatalf("set websocket deadline: %v", err)
+	}
+	var env wsEnvelope
+	if err := websocket.JSON.Receive(conn, &env); err == nil {
+		t.Fatalf("unexpected websocket envelope: %#v", env)
+	}
+}
+
 func authWebSocket(t *testing.T, conn *websocket.Conn, token string) {
 	t.Helper()
 	sendEnvelope(t, conn, "auth-1", "auth", map[string]any{"token": token})
@@ -90,11 +101,37 @@ func readOutboundEnvelope(t *testing.T, agentSession *session.AgentSession) *gat
 	t.Helper()
 	select {
 	case outbound := <-agentSession.Outbound():
-		return outbound
+		outbound.Ack(nil)
+		return outbound.GatewayEnvelope
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for gateway request to reach agent")
 		return nil
 	}
+}
+
+func dispatchChatStarted(t *testing.T, sm *session.Manager, requestID string, conversationID string) {
+	t.Helper()
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: requestID,
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.AgentEnvelope_ChatEvent{
+			ChatEvent: &gatewayv1.ChatEvent{
+				Type:           gatewayv1.ChatEvent_TOKEN,
+				ConversationId: conversationID,
+				Data:           `{"type":"started"}`,
+			},
+		},
+	})
+}
+
+func markRuntimeReady(sm *session.Manager, agentSession *session.AgentSession) {
+	sm.UpdateRuntimeStatus(agentSession, &gatewayv1.RuntimeStatusEvent{
+		WorkerId:       "test-runtime",
+		State:          "ready",
+		Visible:        true,
+		ActiveRunCount: 0,
+		Timestamp:      time.Now().Unix(),
+	})
 }
 
 func TestWebSocketRejectsRequestsBeforeAuth(t *testing.T) {
@@ -121,6 +158,7 @@ func TestWebSocketChatStartForwardsNormalizedRequestAndStreamsEvents(t *testing.
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
 
 	handler := server.NewWebSocketServer(&config.Config{
 		Token:          "ws-token",
@@ -184,7 +222,9 @@ func TestWebSocketChatStartForwardsNormalizedRequestAndStreamsEvents(t *testing.
 
 	var outbound *gatewayv1.GatewayEnvelope
 	select {
-	case outbound = <-agentSession.Outbound():
+	case delivered := <-agentSession.Outbound():
+		delivered.Ack(nil)
+		outbound = delivered.GatewayEnvelope
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for chat request to reach agent")
 	}
@@ -278,6 +318,351 @@ func TestWebSocketChatStartForwardsNormalizedRequestAndStreamsEvents(t *testing.
 	}
 }
 
+func TestWebSocketChatStartRequiresRuntimeReady(t *testing.T) {
+	t.Parallel()
+
+	sm := session.NewManager()
+	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
+	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(agentSession)
+
+	handler := server.NewWebSocketServer(&config.Config{
+		Token:          "ws-token",
+		RequestTimeout: time.Second,
+	}, sm)
+	conn, cleanup := dialGatewayWebSocket(t, handler)
+	defer cleanup()
+
+	authWebSocket(t, conn, "ws-token")
+	sendEnvelope(t, conn, "chat-not-ready", "chat.start", map[string]any{
+		"conversation_id": "conversation-not-ready",
+		"message":         "hello gateway",
+	})
+
+	env := receiveEnvelope(t, conn)
+	if env.ID != "chat-not-ready" ||
+		env.Type != "error" ||
+		!strings.Contains(env.Error, "Desktop chat runtime is not ready") {
+		t.Fatalf("not-ready response = %#v, want chat runtime readiness error", env)
+	}
+	select {
+	case outbound := <-agentSession.Outbound():
+		t.Fatalf("unexpected outbound request while runtime not ready: %#v", outbound)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := sm.ActiveChatRunConversationIDs(); len(got) != 0 {
+		t.Fatalf("active chat runs after not-ready request = %#v, want empty", got)
+	}
+}
+
+func TestWebSocketChatStartClearsRunWhenAgentDeliveryStalls(t *testing.T) {
+	t.Parallel()
+
+	sm := session.NewManager()
+	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
+	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
+
+	handler := server.NewWebSocketServer(&config.Config{
+		Token:                 "ws-token",
+		RequestTimeout:        time.Second,
+		WebSocketWriteTimeout: 50 * time.Millisecond,
+	}, sm)
+	conn, cleanup := dialGatewayWebSocket(t, handler)
+	defer cleanup()
+
+	authWebSocket(t, conn, "ws-token")
+	sendEnvelope(t, conn, "chat-stalled", "chat.start", map[string]any{
+		"conversation_id": "conversation-stalled",
+		"message":         "hello gateway",
+	})
+
+	select {
+	case outbound := <-agentSession.Outbound():
+		if outbound.GetChatRequest() == nil {
+			t.Fatalf("outbound payload = %T, want ChatRequest", outbound.GetPayload())
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for chat request to be enqueued")
+	}
+
+	env := receiveEnvelope(t, conn)
+	if env.ID != "chat-stalled" || env.Type != "error" || env.Error != "request timed out" {
+		t.Fatalf("stalled delivery response = %#v, want timeout error", env)
+	}
+	if got := sm.ActiveChatRunConversationIDs(); len(got) != 0 {
+		t.Fatalf("active chat runs after stalled delivery = %#v, want empty", got)
+	}
+}
+
+func TestWebSocketChatStartClearsRunWhenDesktopDoesNotAccept(t *testing.T) {
+	t.Parallel()
+
+	sm := session.NewManager()
+	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
+	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
+
+	handler := server.NewWebSocketServer(&config.Config{
+		Token:                 "ws-token",
+		RequestTimeout:        time.Second,
+		WebSocketWriteTimeout: time.Second,
+		ChatStartTimeout:      50 * time.Millisecond,
+	}, sm)
+	conn, cleanup := dialGatewayWebSocket(t, handler)
+	defer cleanup()
+
+	authWebSocket(t, conn, "ws-token")
+	sendEnvelope(t, conn, "chat-unaccepted", "chat.start", map[string]any{
+		"conversation_id": "conversation-unaccepted",
+		"message":         "hello gateway",
+	})
+
+	outbound := readOutboundEnvelope(t, agentSession)
+	if outbound.GetChatRequest() == nil {
+		t.Fatalf("outbound payload = %T, want ChatRequest", outbound.GetPayload())
+	}
+	if got := sm.ActiveChatRunConversationIDs(); len(got) != 0 {
+		t.Fatalf("active chat runs before desktop accept = %#v, want empty", got)
+	}
+
+	env := receiveEnvelope(t, conn)
+	if env.ID != "chat-unaccepted" || env.Type != "chat.event" {
+		t.Fatalf("unaccepted desktop response = %#v, want chat.event", env)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		t.Fatalf("decode unaccepted desktop payload: %v", err)
+	}
+	if payload["type"] != "error" ||
+		payload["conversation_id"] != "conversation-unaccepted" ||
+		!strings.Contains(fmt.Sprint(payload["message"]), "Desktop backend did not accept") {
+		t.Fatalf("unaccepted desktop payload = %#v", payload)
+	}
+	if got := sm.ActiveChatRunConversationIDs(); len(got) != 0 {
+		t.Fatalf("active chat runs after unaccepted desktop request = %#v, want empty", got)
+	}
+	if status := sm.Status(); status.Online {
+		t.Fatalf("status online = true after desktop failed to accept chat request")
+	}
+}
+
+func TestWebSocketChatStartAcceptedByDesktopDoesNotTripStartTimeout(t *testing.T) {
+	t.Parallel()
+
+	sm := session.NewManager()
+	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
+	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
+
+	handler := server.NewWebSocketServer(&config.Config{
+		Token:                 "ws-token",
+		RequestTimeout:        time.Second,
+		WebSocketWriteTimeout: time.Second,
+		ChatStartTimeout:      50 * time.Millisecond,
+	}, sm)
+	conn, cleanup := dialGatewayWebSocket(t, handler)
+	defer cleanup()
+
+	authWebSocket(t, conn, "ws-token")
+	sendEnvelope(t, conn, "chat-accepted", "chat.start", map[string]any{
+		"conversation_id": "conversation-accepted",
+		"message":         "hello gateway",
+	})
+
+	outbound := readOutboundEnvelope(t, agentSession)
+	if outbound.GetChatRequest() == nil {
+		t.Fatalf("outbound payload = %T, want ChatRequest", outbound.GetPayload())
+	}
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: outbound.GetRequestId(),
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.AgentEnvelope_ChatEvent{
+			ChatEvent: &gatewayv1.ChatEvent{
+				Type:           gatewayv1.ChatEvent_TOKEN,
+				ConversationId: "conversation-accepted",
+				Data:           `{"type":"accepted"}`,
+			},
+		},
+	})
+
+	if got := sm.ActiveChatRunConversationIDs(); len(got) != 0 {
+		t.Fatalf("active chat runs after desktop accept before start = %#v, want empty", got)
+	}
+	assertNoEnvelopeWithin(t, conn, 120*time.Millisecond)
+}
+
+func TestWebSocketChatStartFailsWhenDesktopAcceptsButDoesNotStart(t *testing.T) {
+	t.Parallel()
+
+	sm := session.NewManager()
+	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
+	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
+
+	handler := server.NewWebSocketServer(&config.Config{
+		Token:                  "ws-token",
+		RequestTimeout:         time.Second,
+		WebSocketWriteTimeout:  time.Second,
+		ChatStartTimeout:       25 * time.Millisecond,
+		ChatRenderStartTimeout: 75 * time.Millisecond,
+	}, sm)
+	conn, cleanup := dialGatewayWebSocket(t, handler)
+	defer cleanup()
+
+	authWebSocket(t, conn, "ws-token")
+	sendEnvelope(t, conn, "chat-render-stalled", "chat.start", map[string]any{
+		"conversation_id": "conversation-render-stalled",
+		"message":         "hello gateway",
+	})
+
+	outbound := readOutboundEnvelope(t, agentSession)
+	if outbound.GetChatRequest() == nil {
+		t.Fatalf("outbound payload = %T, want ChatRequest", outbound.GetPayload())
+	}
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: outbound.GetRequestId(),
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.AgentEnvelope_ChatEvent{
+			ChatEvent: &gatewayv1.ChatEvent{
+				Type:           gatewayv1.ChatEvent_TOKEN,
+				ConversationId: "conversation-render-stalled",
+				Data:           `{"type":"accepted"}`,
+			},
+		},
+	})
+
+	env := receiveEnvelope(t, conn)
+	if env.ID != "chat-render-stalled" || env.Type != "chat.event" {
+		t.Fatalf("render-stalled response = %#v, want chat.event", env)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		t.Fatalf("decode render-stalled payload: %v", err)
+	}
+	if payload["type"] != "error" ||
+		payload["conversation_id"] != "conversation-render-stalled" ||
+		!strings.Contains(fmt.Sprint(payload["message"]), "Desktop app accepted") {
+		t.Fatalf("render-stalled payload = %#v", payload)
+	}
+}
+
+func TestWebSocketChatResumeFailsPendingRunWhenDesktopStillDoesNotAccept(t *testing.T) {
+	t.Parallel()
+
+	sm := session.NewManager()
+	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
+	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
+
+	handler := server.NewWebSocketServer(&config.Config{
+		Token:                 "ws-token",
+		RequestTimeout:        time.Second,
+		WebSocketWriteTimeout: time.Second,
+		ChatStartTimeout:      50 * time.Millisecond,
+	}, sm)
+	conn1, cleanup1 := dialGatewayWebSocket(t, handler)
+	defer cleanup1()
+
+	authWebSocket(t, conn1, "ws-token")
+	sendEnvelope(t, conn1, "chat-pending", "chat.start", map[string]any{
+		"conversation_id": "conversation-pending",
+		"message":         "hello gateway",
+	})
+	outbound := readOutboundEnvelope(t, agentSession)
+	if outbound.GetChatRequest() == nil {
+		t.Fatalf("outbound payload = %T, want ChatRequest", outbound.GetPayload())
+	}
+	_ = conn1.Close()
+
+	conn2, cleanup2 := dialGatewayWebSocket(t, handler)
+	defer cleanup2()
+	authWebSocket(t, conn2, "ws-token")
+	sendEnvelope(t, conn2, "resume-pending", "chat.resume", map[string]any{
+		"request_id":      outbound.GetRequestId(),
+		"conversation_id": "conversation-pending",
+	})
+
+	env := receiveEnvelope(t, conn2)
+	if env.ID != outbound.GetRequestId() || env.Type != "chat.event" {
+		t.Fatalf("resume pending response = %#v, want chat.event", env)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		t.Fatalf("decode resume pending payload: %v", err)
+	}
+	if payload["type"] != "error" || !strings.Contains(fmt.Sprint(payload["message"]), "Desktop backend did not accept") {
+		t.Fatalf("resume pending payload = %#v", payload)
+	}
+	if status := sm.Status(); status.Online {
+		t.Fatalf("status online = true after resumed pending chat was not accepted")
+	}
+}
+
+func TestWebSocketChatResumeFailsAcceptedRunWhenDesktopDoesNotStart(t *testing.T) {
+	t.Parallel()
+
+	sm := session.NewManager()
+	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
+	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
+	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
+
+	handler := server.NewWebSocketServer(&config.Config{
+		Token:                  "ws-token",
+		RequestTimeout:         time.Second,
+		WebSocketWriteTimeout:  time.Second,
+		ChatStartTimeout:       25 * time.Millisecond,
+		ChatRenderStartTimeout: 75 * time.Millisecond,
+	}, sm)
+	conn1, cleanup1 := dialGatewayWebSocket(t, handler)
+	defer cleanup1()
+
+	authWebSocket(t, conn1, "ws-token")
+	sendEnvelope(t, conn1, "chat-accepted-pending", "chat.start", map[string]any{
+		"conversation_id": "conversation-accepted-pending",
+		"message":         "hello gateway",
+	})
+	outbound := readOutboundEnvelope(t, agentSession)
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: outbound.GetRequestId(),
+		Timestamp: time.Now().Unix(),
+		Payload: &gatewayv1.AgentEnvelope_ChatEvent{
+			ChatEvent: &gatewayv1.ChatEvent{
+				Type:           gatewayv1.ChatEvent_TOKEN,
+				ConversationId: "conversation-accepted-pending",
+				Data:           `{"type":"accepted"}`,
+			},
+		},
+	})
+	_ = conn1.Close()
+
+	conn2, cleanup2 := dialGatewayWebSocket(t, handler)
+	defer cleanup2()
+	authWebSocket(t, conn2, "ws-token")
+	sendEnvelope(t, conn2, "resume-accepted-pending", "chat.resume", map[string]any{
+		"request_id":      outbound.GetRequestId(),
+		"conversation_id": "conversation-accepted-pending",
+	})
+
+	env := receiveEnvelope(t, conn2)
+	if env.ID != outbound.GetRequestId() || env.Type != "chat.event" {
+		t.Fatalf("resume accepted pending response = %#v, want chat.event", env)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		t.Fatalf("decode resume accepted pending payload: %v", err)
+	}
+	if payload["type"] != "error" || !strings.Contains(fmt.Sprint(payload["message"]), "Desktop app accepted") {
+		t.Fatalf("resume accepted pending payload = %#v", payload)
+	}
+}
+
 func TestWebSocketChatStartDedupesClientRequestID(t *testing.T) {
 	t.Parallel()
 
@@ -285,6 +670,7 @@ func TestWebSocketChatStartDedupesClientRequestID(t *testing.T) {
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
 
 	handler := server.NewWebSocketServer(&config.Config{
 		Token:          "ws-token",
@@ -366,6 +752,7 @@ func TestWebSocketChatStartFailsWhenAgentSessionDisconnects(t *testing.T) {
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
 
 	handler := server.NewWebSocketServer(&config.Config{
 		Token:          "ws-token",
@@ -406,6 +793,7 @@ func TestWebSocketChatStartFailsWhenAgentSessionDisconnects(t *testing.T) {
 
 	replacementSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(replacementSession)
+	markRuntimeReady(sm, replacementSession)
 	sendEnvelope(t, conn, "chat-2", "chat.start", map[string]any{
 		"conversation_id":   "conversation-1",
 		"client_request_id": "client-submit-1",
@@ -424,6 +812,7 @@ func TestWebSocketMemoryManageForwardsJSONArgs(t *testing.T) {
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
 
 	handler := server.NewWebSocketServer(&config.Config{
 		Token:          "ws-token",
@@ -487,6 +876,7 @@ func TestWebSocketChatResumeReplaysEventsAfterReconnect(t *testing.T) {
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
 
 	handler := server.NewWebSocketServer(&config.Config{
 		Token:           "ws-token",
@@ -596,6 +986,7 @@ func TestWebSocketChatAttachReplaysBufferedEventsByConversationID(t *testing.T) 
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
 
 	handler := server.NewWebSocketServer(&config.Config{
 		Token:           "ws-token",
@@ -686,6 +1077,7 @@ func TestWebSocketChatAttachExpiresAfterDoneHistoryUpsert(t *testing.T) {
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
 
 	handler := server.NewWebSocketServer(&config.Config{
 		Token:           "ws-token",
@@ -751,6 +1143,7 @@ func TestWebSocketChatCancelReleasesBufferedAttachRun(t *testing.T) {
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
 
 	handler := server.NewWebSocketServer(&config.Config{
 		Token:           "ws-token",
@@ -810,6 +1203,7 @@ func TestWebSocketForwardsHistorySettingsAndFsRPCs(t *testing.T) {
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
 
 	handler := server.NewWebSocketServer(&config.Config{
 		Token:          "ws-token",
@@ -828,6 +1222,7 @@ func TestWebSocketForwardsHistorySettingsAndFsRPCs(t *testing.T) {
 	if chatOutbound.GetChatRequest() == nil {
 		t.Fatalf("chat outbound payload = %T, want ChatRequest", chatOutbound.GetPayload())
 	}
+	dispatchChatStarted(t, sm, chatOutbound.GetRequestId(), "conversation-1")
 
 	sendEnvelope(t, conn, "history-1", "history.list", map[string]any{
 		"page":      2,
@@ -1275,6 +1670,7 @@ func TestWebSocketDefaultsInvalidHistoryListPagination(t *testing.T) {
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
+	markRuntimeReady(sm, agentSession)
 
 	handler := server.NewWebSocketServer(&config.Config{
 		Token:          "ws-token",

@@ -8,6 +8,7 @@ import (
 
 	"github.com/liveagent/agent-gateway/internal/handler"
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
+	"github.com/liveagent/agent-gateway/internal/session"
 )
 
 func (c *websocketConnection) handleChatStart(req websocketRequest) {
@@ -34,12 +35,17 @@ func (c *websocketConnection) handleChatStart(req websocketRequest) {
 		_ = c.writeError(req.ID, "message is required")
 		return
 	}
-	if !c.sm.IsOnline() {
+	status := c.sm.Status()
+	if !status.Online {
 		_ = c.writeError(req.ID, "agent offline")
 		return
 	}
+	if !status.ChatRuntimeReady {
+		_ = c.writeError(req.ID, "Desktop chat runtime is not ready. Please retry.")
+		return
+	}
 
-	snapshot, created, err := c.sm.StartChatRunWithClientRequest(
+	snapshot, created, err := c.sm.StartPendingChatRunWithClientRequest(
 		req.ID,
 		body.ConversationID,
 		body.ClientRequestID,
@@ -76,7 +82,7 @@ func (c *websocketConnection) handleChatStart(req websocketRequest) {
 	defer c.releaseActiveChat(responseID)
 
 	if created {
-		if err := c.sm.SendToAgent(&gatewayv1.GatewayEnvelope{
+		if err := c.sendToAgent(&gatewayv1.GatewayEnvelope{
 			RequestId: sourceRequestID,
 			Timestamp: time.Now().Unix(),
 			Payload: &gatewayv1.GatewayEnvelope_ChatRequest{
@@ -99,6 +105,11 @@ func (c *websocketConnection) handleChatStart(req websocketRequest) {
 		}
 	}
 
+	startTimer := time.NewTimer(c.chatStartTimeout())
+	defer startTimer.Stop()
+	renderStartTimer := time.NewTimer(c.chatRenderStartTimeout())
+	defer renderStartTimer.Stop()
+
 	// Do not enforce a hard timeout for streaming chat requests. The GUI path can run
 	// multiple compaction rounds stably; WebUI should behave the same and only stop
 	// when the user cancels, the connection closes, or the agent returns done/error.
@@ -109,25 +120,32 @@ func (c *websocketConnection) handleChatStart(req websocketRequest) {
 		case <-ctx.Done():
 			_ = c.writeError(responseID, websocketErrorMessage(ctx.Err()))
 			return
+		case <-startTimer.C:
+			c.sm.FailStartingChatRun(
+				sourceRequestID,
+				"Desktop backend did not accept the remote chat request. Please retry.",
+			)
+		case <-renderStartTimer.C:
+			c.sm.FailUnstartedChatRun(
+				sourceRequestID,
+				"Desktop app accepted the remote chat request but did not start it. Please retry.",
+			)
 		case <-eventDone:
 			return
 		case event, ok := <-eventCh:
 			if !ok {
 				return
 			}
-			chatEvent := event.Event
-			if chatEvent == nil {
-				continue
-			}
-			if chatEvent.GetConversationId() != "" {
-				body.ConversationID = strings.TrimSpace(chatEvent.GetConversationId())
+			if eventConversationID(event) != "" {
+				body.ConversationID = eventConversationID(event)
 				c.updateActiveChatConversationID(responseID, body.ConversationID)
 			}
-			if err := c.writeChatEvent(responseID, websocketChatEventPayload(chatEvent, event.Seq, event.Workdir)); err != nil {
+			terminal, err := c.writeChatBroadcastEvent(responseID, event)
+			if err != nil {
 				c.close()
 				return
 			}
-			if chatEvent.GetType() == gatewayv1.ChatEvent_DONE || chatEvent.GetType() == gatewayv1.ChatEvent_ERROR {
+			if terminal {
 				return
 			}
 		}
@@ -178,6 +196,11 @@ func (c *websocketConnection) handleChatResume(req websocketRequest) {
 	c.registerActiveChat(responseID, snapshot.RequestID, snapshot.ConversationID, cancel)
 	defer c.releaseActiveChat(responseID)
 
+	startTimer := time.NewTimer(c.chatStartTimeout())
+	defer startTimer.Stop()
+	renderStartTimer := time.NewTimer(c.chatRenderStartTimeout())
+	defer renderStartTimer.Stop()
+
 	if snapshot.Done && snapshot.LatestSeq <= body.AfterSeq {
 		payload := map[string]any{
 			"type": "done",
@@ -199,24 +222,31 @@ func (c *websocketConnection) handleChatResume(req websocketRequest) {
 		case <-ctx.Done():
 			_ = c.writeError(responseID, websocketErrorMessage(ctx.Err()))
 			return
+		case <-startTimer.C:
+			c.sm.FailStartingChatRun(
+				snapshot.RequestID,
+				"Desktop backend did not accept the remote chat request. Please retry.",
+			)
+		case <-renderStartTimer.C:
+			c.sm.FailUnstartedChatRun(
+				snapshot.RequestID,
+				"Desktop app accepted the remote chat request but did not start it. Please retry.",
+			)
 		case <-eventDone:
 			return
 		case event, ok := <-eventCh:
 			if !ok {
 				return
 			}
-			chatEvent := event.Event
-			if chatEvent == nil {
-				continue
+			if conversationID := eventConversationID(event); conversationID != "" {
+				c.updateActiveChatConversationID(responseID, conversationID)
 			}
-			if chatEvent.GetConversationId() != "" {
-				c.updateActiveChatConversationID(responseID, strings.TrimSpace(chatEvent.GetConversationId()))
-			}
-			if err := c.writeChatEvent(responseID, websocketChatEventPayload(chatEvent, event.Seq, event.Workdir)); err != nil {
+			terminal, err := c.writeChatBroadcastEvent(responseID, event)
+			if err != nil {
 				c.close()
 				return
 			}
-			if chatEvent.GetType() == gatewayv1.ChatEvent_DONE || chatEvent.GetType() == gatewayv1.ChatEvent_ERROR {
+			if terminal {
 				return
 			}
 		}
@@ -279,15 +309,12 @@ func (c *websocketConnection) handleChatAttach(req websocketRequest) {
 			if !ok {
 				return
 			}
-			chatEvent := event.Event
-			if chatEvent == nil {
-				continue
-			}
-			if err := c.writeChatEvent(req.ID, websocketChatEventPayload(chatEvent, event.Seq, event.Workdir)); err != nil {
+			terminal, err := c.writeChatBroadcastEvent(req.ID, event)
+			if err != nil {
 				c.close()
 				return
 			}
-			if chatEvent.GetType() == gatewayv1.ChatEvent_DONE || chatEvent.GetType() == gatewayv1.ChatEvent_ERROR {
+			if terminal {
 				return
 			}
 		}
@@ -328,7 +355,7 @@ func (c *websocketConnection) handleChatCancel(req websocketRequest) {
 		return
 	}
 
-	if err := c.sm.SendToAgent(&gatewayv1.GatewayEnvelope{
+	if err := c.sendToAgent(&gatewayv1.GatewayEnvelope{
 		RequestId: req.ID,
 		Timestamp: time.Now().Unix(),
 		Payload: &gatewayv1.GatewayEnvelope_CancelChat{
@@ -391,6 +418,87 @@ func (c *websocketConnection) cancelActiveChatsByConversation(conversationID str
 	for _, chat := range c.chatTracker.cancelByConversation(conversationID) {
 		chat.cancel()
 	}
+}
+
+func (c *websocketConnection) writeChatBroadcastEvent(
+	requestID string,
+	event *session.ChatBroadcastEvent,
+) (bool, error) {
+	if event == nil {
+		return false, nil
+	}
+	if event.Control != nil {
+		payload := websocketChatControlPayload(event.Control, event.Seq, event.Workdir)
+		if err := c.writeChatControl(requestID, payload); err != nil {
+			return false, err
+		}
+		return isTerminalChatControlPayload(event.Control), nil
+	}
+	if event.Event == nil {
+		return false, nil
+	}
+	if err := c.writeChatEvent(
+		requestID,
+		websocketChatEventPayload(event.Event, event.Seq, event.Workdir),
+	); err != nil {
+		return false, err
+	}
+	return event.Event.GetType() == gatewayv1.ChatEvent_DONE ||
+		event.Event.GetType() == gatewayv1.ChatEvent_ERROR, nil
+}
+
+func eventConversationID(event *session.ChatBroadcastEvent) string {
+	if event == nil {
+		return ""
+	}
+	if event.Control != nil {
+		return strings.TrimSpace(event.Control.GetConversationId())
+	}
+	if event.Event != nil {
+		return strings.TrimSpace(event.Event.GetConversationId())
+	}
+	return ""
+}
+
+func isTerminalChatControlPayload(control *gatewayv1.ChatControlEvent) bool {
+	switch strings.TrimSpace(control.GetState()) {
+	case "completed", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func websocketChatControlPayload(
+	control *gatewayv1.ChatControlEvent,
+	seq int64,
+	workdirInput ...string,
+) map[string]any {
+	payload := map[string]any{
+		"type":              strings.TrimSpace(control.GetType()),
+		"request_id":        strings.TrimSpace(control.GetRequestId()),
+		"client_request_id": strings.TrimSpace(control.GetClientRequestId()),
+		"conversation_id":   strings.TrimSpace(control.GetConversationId()),
+		"run_epoch":         control.GetRunEpoch(),
+		"state":             strings.TrimSpace(control.GetState()),
+	}
+	if seq > 0 {
+		payload["seq"] = seq
+	} else if control.GetSeq() > 0 {
+		payload["seq"] = control.GetSeq()
+	}
+	if errorCode := strings.TrimSpace(control.GetErrorCode()); errorCode != "" {
+		payload["error_code"] = errorCode
+	}
+	if message := strings.TrimSpace(control.GetMessage()); message != "" {
+		payload["message"] = message
+	}
+	if len(workdirInput) > 0 {
+		if workdir := strings.TrimSpace(workdirInput[0]); workdir != "" {
+			payload["workdir"] = workdir
+		}
+	}
+	return payload
 }
 
 func websocketChatEventPayload(event *gatewayv1.ChatEvent, seq int64, workdirInput ...string) map[string]any {
