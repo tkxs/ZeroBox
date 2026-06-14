@@ -49,18 +49,15 @@ type TunnelManagerDetails = {
 const TUNNEL_MANAGER_TOOL: Tool = {
   name: "TunnelManager",
   description:
-    "Manage temporary Remote HTTP tunnels for localhost services through the Gateway. Use list to inspect active tunnels, create to expose a local http://localhost/127.0.0.1/[::1] service, and close to revoke a tunnel.",
+    "Manage temporary Remote HTTP tunnels through the Gateway. Use list to inspect active tunnels, create to expose a localhost or IPv4/IPv6 http service, and close to revoke a tunnel.",
   parameters: Type.Object({
-    action: Type.Union(
-      [Type.Literal("list"), Type.Literal("create"), Type.Literal("close")],
-      {
-        description: "Tunnel action to perform.",
-      },
-    ),
+    action: Type.Union([Type.Literal("list"), Type.Literal("create"), Type.Literal("close")], {
+      description: "Tunnel action to perform.",
+    }),
     targetUrl: Type.Optional(
       Type.String({
         description:
-          "Required for action=create. Local HTTP target, e.g. http://localhost:3000 or http://127.0.0.1:5173/app.",
+          "Required for action=create. HTTP target, e.g. http://localhost:3000, http://127.0.0.1:5173/app, or http://192.168.1.5:8080.",
       }),
     ),
     name: Type.Optional(

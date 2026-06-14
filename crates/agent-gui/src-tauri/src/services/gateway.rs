@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex, Once};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -3351,8 +3352,8 @@ fn validate_tunnel_target_url(input: &str) -> Result<TunnelTarget, String> {
         .map(|value| value.trim().to_ascii_lowercase())
         .ok_or_else(|| "targetUrl host is required".to_string())?;
     let host = host.trim_start_matches('[').trim_end_matches(']');
-    if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-        return Err("targetUrl host must be localhost, 127.0.0.1, or ::1".to_string());
+    if host != "localhost" && host.parse::<IpAddr>().is_err() {
+        return Err("targetUrl host must be localhost or an IP address".to_string());
     }
     url.set_fragment(None);
     Ok(TunnelTarget { url })
@@ -4419,18 +4420,20 @@ mod tests {
     }
 
     #[test]
-    fn validate_tunnel_target_url_only_accepts_localhost_http() {
+    fn validate_tunnel_target_url_accepts_localhost_and_ip_http_targets() {
         for value in [
             "http://localhost:3000",
             "http://127.0.0.1:8080/app",
             "http://[::1]:5173",
+            "http://192.168.1.5:3000",
+            "http://10.0.0.20:8080/app",
+            "http://[fd00::1]:5173",
         ] {
             assert!(validate_tunnel_target_url(value).is_ok(), "{value}");
         }
 
         for value in [
             "https://localhost:3000",
-            "http://192.168.1.5:3000",
             "http://example.com",
             "http://user:pass@localhost:3000",
             "http://localhost:3000/#fragment",

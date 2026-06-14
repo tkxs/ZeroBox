@@ -131,6 +131,25 @@ function TtlSegmented({
   );
 }
 
+function normalizeTunnelHostname(hostname: string) {
+  return hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+}
+
+function isIpv4Address(hostname: string) {
+  const parts = hostname.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((part) => {
+    if (!/^\d+$/.test(part)) return false;
+    const value = Number(part);
+    return value >= 0 && value <= 255 && String(value) === part;
+  });
+}
+
+function isIpAddress(hostname: string) {
+  if (isIpv4Address(hostname)) return true;
+  return hostname.includes(":");
+}
+
 function validateLocalHttpTarget(input: string) {
   const value = input.trim();
   if (!value) return "projectTools.tunnelTargetRequired";
@@ -139,8 +158,8 @@ function validateLocalHttpTarget(input: string) {
     if (url.protocol !== "http:") {
       return "projectTools.tunnelInvalidUrl";
     }
-    const hostname = url.hostname.toLowerCase();
-    if (!["localhost", "127.0.0.1", "::1", "[::1]"].includes(hostname)) {
+    const hostname = normalizeTunnelHostname(url.hostname);
+    if (hostname !== "localhost" && !isIpAddress(hostname)) {
       return "projectTools.tunnelLocalhostOnly";
     }
     if (url.username || url.password || url.hash) {
