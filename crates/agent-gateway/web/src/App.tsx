@@ -402,6 +402,7 @@ const CHAT_RUNTIME_PREPARE_TIMEOUT_MS = 2_500;
 const CHAT_RUNTIME_FOREGROUND_PREPARE_TIMEOUT_MS = 1_500;
 const CHAT_RUNTIME_KEEP_WARM_INTERVAL_MS = 10_000;
 const CHAT_RUNTIME_STARTING_STATUS_DELAY_MS = 1_200;
+const CHAT_RUNTIME_READY_STATUS_TTL_MS = 20_000;
 const CHAT_RUNTIME_STARTING_STATUS = "Starting desktop runtime...";
 const DEFAULT_BROWSER_TITLE = "LiveAgent Gateway";
 const NEW_CONVERSATION_BROWSER_TITLE = "LiveAgent";
@@ -459,6 +460,33 @@ function normalizeGatewayTimestampMs(value: number | null | undefined) {
     return 0;
   }
   return value < SECONDS_TIMESTAMP_MAX ? value * 1000 : value;
+}
+
+function isChatRuntimeReadyStatus(
+  status: AgentStatus | null | undefined,
+  now = Date.now(),
+) {
+  if (status?.online !== true) {
+    return false;
+  }
+
+  const runtimeState = normalizeOptionalStatus(status.runtime_state)?.toLowerCase() ?? "";
+  if (runtimeState === "suspended") {
+    return false;
+  }
+
+  const hasReadyState =
+    runtimeState === "ready" || runtimeState === "draining" || runtimeState === "busy";
+  if (status.chat_runtime_ready !== true && !hasReadyState) {
+    return false;
+  }
+
+  const runtimeHeartbeatAt = normalizeGatewayTimestampMs(status.runtime_last_heartbeat);
+  if (runtimeHeartbeatAt <= 0) {
+    return status.chat_runtime_ready === true;
+  }
+
+  return now - runtimeHeartbeatAt <= CHAT_RUNTIME_READY_STATUS_TTL_MS;
 }
 
 function isAbortError(error: unknown) {
@@ -2606,6 +2634,7 @@ export default function App() {
     }
 
     const unsubscribe = api.subscribeStatus((nextStatus, error) => {
+      statusRef.current = nextStatus;
       setStatus(nextStatus);
       setStatusError(error);
     });
@@ -4402,13 +4431,7 @@ export default function App() {
       window.clearTimeout(runtimeStartingStatusTimer);
       runtimeStartingStatusTimer = null;
     };
-    const markRunStarted = () => {
-      if (runStarted) {
-        return;
-      }
-      runStarted = true;
-      clearRuntimeStartingStatusTimer();
-      setConversationRunningState(activeConversationId, true);
+    const clearRuntimeStartingStatus = () => {
       updateConversationRuntimeEntry(activeConversationId, (current) => {
         if (current.toolStatus !== CHAT_RUNTIME_STARTING_STATUS) {
           return current;
@@ -4420,18 +4443,21 @@ export default function App() {
         };
       });
     };
-    const runtimeControls = normalizeChatRuntimeControlsForProvider(
-      options?.runtimeControls ?? settings.chatRuntimeControls,
-      {
-        providerId: currentChatProvider?.type,
-        requestFormat: currentChatProvider?.requestFormat,
-      },
-    );
-    try {
-      chatStartInFlightRef.current = true;
+    const shouldShowRuntimeStartingStatus = () =>
+      !isChatRuntimeReadyStatus(statusRef.current);
+    const scheduleRuntimeStartingStatusTimer = () => {
+      clearRuntimeStartingStatusTimer();
+      if (!shouldShowRuntimeStartingStatus()) {
+        return;
+      }
       runtimeStartingStatusTimer = window.setTimeout(() => {
         runtimeStartingStatusTimer = null;
-        if (runStarted || terminalEventSeen || controller.signal.aborted) {
+        if (
+          runStarted ||
+          terminalEventSeen ||
+          controller.signal.aborted ||
+          !shouldShowRuntimeStartingStatus()
+        ) {
           return;
         }
         updateConversationRuntimeEntry(activeConversationId, (current) => {
@@ -4445,12 +4471,38 @@ export default function App() {
           };
         });
       }, CHAT_RUNTIME_STARTING_STATUS_DELAY_MS);
+    };
+    const markRunStarted = () => {
+      if (runStarted) {
+        return;
+      }
+      runStarted = true;
+      clearRuntimeStartingStatusTimer();
+      setConversationRunningState(activeConversationId, true);
+      clearRuntimeStartingStatus();
+    };
+    const runtimeControls = normalizeChatRuntimeControlsForProvider(
+      options?.runtimeControls ?? settings.chatRuntimeControls,
+      {
+        providerId: currentChatProvider?.type,
+        requestFormat: currentChatProvider?.requestFormat,
+      },
+    );
+    try {
+      chatStartInFlightRef.current = true;
+      scheduleRuntimeStartingStatusTimer();
       // chat.start is itself the reliable wake-up signal for a suspended desktop
       // WebView. Keep the status refresh in the background so a stale runtime
       // heartbeat cannot block the request that would wake it.
-      void prepareChatRuntime("send", api, CHAT_RUNTIME_PREPARE_TIMEOUT_MS).catch(
-        () => undefined,
-      );
+      void prepareChatRuntime("send", api, CHAT_RUNTIME_PREPARE_TIMEOUT_MS)
+        .then((nextStatus) => {
+          statusRef.current = nextStatus;
+          if (isChatRuntimeReadyStatus(nextStatus)) {
+            clearRuntimeStartingStatusTimer();
+            clearRuntimeStartingStatus();
+          }
+        })
+        .catch(() => undefined);
       for await (const event of api.chat(
         message,
         isLocalDraftConversationId(activeConversationId) ? undefined : activeConversationId,
