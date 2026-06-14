@@ -1362,6 +1362,7 @@ export function ChatPage(props: ChatPageProps) {
   const previousHistoryScopeKeyRef = useRef(historyScopeKey);
   const currentConversationHistoryUpdatedAtRef = useRef<number | null>(null);
   const locallySyncedHistoryUpdatedAtRef = useRef(new Map<string, number>());
+  const gatewayBridgeHistorySummaryRef = useRef(new Map<string, ChatHistorySummary>());
   const startNewConversationActionRef = useRef<(options?: { workdir?: string }) => void>(
     () => undefined,
   );
@@ -1772,6 +1773,7 @@ export function ChatPage(props: ChatPageProps) {
       composerDraftCacheRef.current.delete(key);
       locallySyncedHistoryUpdatedAtRef.current.delete(key);
       appliedGatewayHistoryTruncationsRef.current.delete(key);
+      gatewayBridgeHistorySummaryRef.current.delete(key);
       pendingUploadsByConversationRef.current.delete(key);
       clearMemoryExtractorState(key);
       clearSilentMemoryExtractionState(key);
@@ -2345,10 +2347,8 @@ export function ChatPage(props: ChatPageProps) {
     const knownConversation =
       requestedConversationId === currentConversationIdRef.current ||
       conversationRuntimeCacheRef.current.has(requestedConversationId) ||
-      historyItemsRef.current.some((item) => item.id === requestedConversationId);
-    if (!knownConversation) {
-      throw new Error(`Conversation not found: ${requestedConversationId}`);
-    }
+      historyItemsRef.current.some((item) => item.id === requestedConversationId) ||
+      gatewayBridgeHistorySummaryRef.current.has(requestedConversationId);
     if (isConversationRunning(requestedConversationId)) {
       throw new Error(`Conversation is already running: ${requestedConversationId}`);
     }
@@ -2373,6 +2373,7 @@ export function ChatPage(props: ChatPageProps) {
       (item) => item.id === requestedConversationId && item.isPending,
     );
     const shouldHydrateFromHistory =
+      !knownConversation ||
       forceHydrate ||
       hydratingConversationIdRef.current === requestedConversationId ||
       hydrationFailedConversationIdRef.current === requestedConversationId ||
@@ -2394,8 +2395,23 @@ export function ChatPage(props: ChatPageProps) {
       isSending: cached?.isSending,
       workdir: record.cwd,
     });
+    const historySummary: ChatHistorySummary = {
+      id: record.id,
+      title: record.title,
+      providerId: record.providerId,
+      model: record.model,
+      sessionId: record.sessionId,
+      cwd: record.cwd,
+      messageCount: record.state.meta.totalMessageCount,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      isPinned: record.isPinned,
+      pinnedAt: record.pinnedAt,
+    };
     setConversationRuntimeCacheEntry(conversationRuntimeCacheRef.current, record.id, nextEntry);
     persistedConversationStateRef.current.set(record.id, record.state);
+    gatewayBridgeHistorySummaryRef.current.set(record.id, historySummary);
+    setHistoryItems((prev) => mergeHistoryItem(prev, historySummary));
     if (currentConversationIdRef.current === record.id) {
       syncVisibleConversationRuntime(record.id, nextEntry);
     }
@@ -2869,7 +2885,9 @@ export function ChatPage(props: ChatPageProps) {
     });
     const baseConversationState = runtimeEntry.state;
     const isFirstTurn = baseConversationState.meta.totalMessageCount === 0;
-    const existingHistoryItem = historyItemsRef.current.find((item) => item.id === conversationId);
+    const existingHistoryItem =
+      historyItemsRef.current.find((item) => item.id === conversationId) ??
+      gatewayBridgeHistorySummaryRef.current.get(conversationId);
     const shouldCreatePendingHistoryItem = isFirstTurn && !existingHistoryItem;
     const fallbackTitle =
       existingHistoryItem &&
