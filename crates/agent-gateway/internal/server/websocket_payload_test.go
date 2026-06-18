@@ -63,6 +63,37 @@ func TestWebsocketTerminalPayloadsPreserveOutputOffsets(t *testing.T) {
 	}
 }
 
+func TestWebsocketProtoPayloadPreservesFrontendNumberTypes(t *testing.T) {
+	payload := websocketConversationSummaryPayload(&gatewayv1.ConversationSummary{
+		Id:           "conversation-1",
+		CreatedAt:    42,
+		UpdatedAt:    84,
+		MessageCount: 3,
+	})
+
+	if got := payload["created_at"]; got != int64(42) {
+		t.Fatalf("created_at = %#v (%T), want int64(42)", got, got)
+	}
+	if got := payload["updated_at"]; got != int64(84) {
+		t.Fatalf("updated_at = %#v (%T), want int64(84)", got, got)
+	}
+	if got := payload["message_count"]; got != int32(3) {
+		t.Fatalf("message_count = %#v (%T), want int32(3)", got, got)
+	}
+}
+
+func TestWebsocketProtoPayloadPreservesNilPayloads(t *testing.T) {
+	if payload := websocketConversationSummaryPayload(nil); payload != nil {
+		t.Fatalf("conversation nil payload = %#v, want nil", payload)
+	}
+	if payload := websocketHistoryShareStatusPayload(nil); payload != nil {
+		t.Fatalf("history share nil payload = %#v, want nil", payload)
+	}
+	if payload := websocketTerminalShellOptionPayload(nil); payload != nil {
+		t.Fatalf("terminal shell option nil payload = %#v, want nil", payload)
+	}
+}
+
 func TestWebsocketFsPayloadsUseFrontendFieldNames(t *testing.T) {
 	list := websocketFsListResponsePayload(&gatewayv1.FsListResponse{
 		Path:       "src",

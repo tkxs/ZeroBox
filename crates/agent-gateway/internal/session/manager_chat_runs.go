@@ -292,11 +292,7 @@ func (m *Manager) failOpenChatRunsForSessionEpoch(sessionEpoch uint64, message s
 			Seq:       run.nextSeq,
 			Workdir:   strings.TrimSpace(run.workdir),
 		}
-		run.events = append(run.events, cloneChatBroadcastEvent(broadcast))
-		if len(run.events) > maxBufferedChatRunEvents {
-			copy(run.events, run.events[len(run.events)-maxBufferedChatRunEvents:])
-			run.events = run.events[:maxBufferedChatRunEvents]
-		}
+		run.appendEvent(broadcast)
 
 		subscribers := make([]*chatRunSubscriber, 0, len(run.subscribers))
 		for _, subscriber := range run.subscribers {
@@ -423,11 +419,7 @@ func (m *Manager) failChatRunIf(
 		Seq:       run.nextSeq,
 		Workdir:   strings.TrimSpace(run.workdir),
 	}
-	run.events = append(run.events, cloneChatBroadcastEvent(broadcast))
-	if len(run.events) > maxBufferedChatRunEvents {
-		copy(run.events, run.events[len(run.events)-maxBufferedChatRunEvents:])
-		run.events = run.events[:maxBufferedChatRunEvents]
-	}
+	run.appendEvent(broadcast)
 	runSubscribers = make([]*chatRunSubscriber, 0, len(run.subscribers))
 	for _, subscriber := range run.subscribers {
 		runSubscribers = append(runSubscribers, subscriber)
@@ -597,11 +589,7 @@ func (m *Manager) broadcastChatEvent(requestID string, event *gatewayv1.ChatEven
 		run.updatedAt = now
 		broadcast.Seq = run.nextSeq
 		broadcast.Workdir = strings.TrimSpace(run.workdir)
-		run.events = append(run.events, cloneChatBroadcastEvent(broadcast))
-		if len(run.events) > maxBufferedChatRunEvents {
-			copy(run.events, run.events[len(run.events)-maxBufferedChatRunEvents:])
-			run.events = run.events[:maxBufferedChatRunEvents]
-		}
+		run.appendEvent(broadcast)
 		if isTerminalChatEvent(event) {
 			if event.GetType() == gatewayv1.ChatEvent_DONE {
 				run.applyState(ChatRunStateCompleted)
@@ -867,6 +855,54 @@ func (r *chatRun) applyState(state string) {
 	}
 }
 
+func (r *chatRun) appendEvent(event *ChatBroadcastEvent) {
+	if r == nil || event == nil {
+		return
+	}
+	r.events = appendCappedChatRunEvent(r.events, event, maxBufferedChatRunEvents)
+}
+
+func appendCappedChatRunEvent(
+	events []*ChatBroadcastEvent,
+	event *ChatBroadcastEvent,
+	limit int,
+) []*ChatBroadcastEvent {
+	if event == nil {
+		return events
+	}
+	if limit <= 0 {
+		return events[:0]
+	}
+	cloned := cloneChatBroadcastEvent(event)
+	if len(events) < limit {
+		return append(events, cloned)
+	}
+	if len(events) > limit {
+		events = events[len(events)-limit:]
+	}
+	copy(events, events[1:])
+	events[len(events)-1] = cloned
+	return events
+}
+
+func (r *chatRun) shouldPrune(now time.Time) bool {
+	if r == nil {
+		return true
+	}
+	if r.done {
+		return !r.expiresAt.IsZero() && now.After(r.expiresAt)
+	}
+	if chatRunUpdatedBefore(r.updatedAt, now, chatRunStaleRetention) {
+		return true
+	}
+	return normalizeChatRunState(r.state) != ChatRunStateRunning &&
+		chatRunUpdatedBefore(r.updatedAt, now, chatRunStartRetention)
+}
+
+func chatRunUpdatedBefore(updatedAt time.Time, now time.Time, retention time.Duration) bool {
+	return !updatedAt.IsZero() && retention > 0 && now.Sub(updatedAt) > retention
+}
+
 func (s *chatRunSubscriber) close() {
 	s.closeOnce.Do(func() {
 		close(s.done)
@@ -879,17 +915,7 @@ func (m *Manager) pruneExpiredChatRunsLocked(now time.Time) {
 			delete(m.chatStore.chatRuns, requestID)
 			continue
 		}
-		if run.done {
-			if !run.expiresAt.IsZero() && now.After(run.expiresAt) {
-				m.removeChatRunLocked(requestID, run)
-			}
-			continue
-		}
-		if normalizeChatRunState(run.state) != ChatRunStateRunning && !run.updatedAt.IsZero() && now.Sub(run.updatedAt) > chatRunStartRetention {
-			m.removeChatRunLocked(requestID, run)
-			continue
-		}
-		if !run.updatedAt.IsZero() && now.Sub(run.updatedAt) > chatRunStaleRetention {
+		if run.shouldPrune(now) {
 			m.removeChatRunLocked(requestID, run)
 		}
 	}
@@ -1066,11 +1092,7 @@ func (m *Manager) appendChatControlLocked(
 		Seq:       seq,
 		Workdir:   strings.TrimSpace(run.workdir),
 	}
-	run.events = append(run.events, cloneChatBroadcastEvent(broadcast))
-	if len(run.events) > maxBufferedChatRunEvents {
-		copy(run.events, run.events[len(run.events)-maxBufferedChatRunEvents:])
-		run.events = run.events[:maxBufferedChatRunEvents]
-	}
+	run.appendEvent(broadcast)
 	return broadcast
 }
 

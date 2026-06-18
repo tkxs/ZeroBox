@@ -197,8 +197,9 @@ func (c *websocketConnection) handleHistoryGet(req websocketRequest) {
 		_ = c.writeError(req.ID, "invalid history.get payload")
 		return
 	}
-	if strings.TrimSpace(body.ConversationID) == "" {
-		_ = c.writeError(req.ID, "conversation_id is required")
+	conversationID, err := requireTrimmedWebSocketString(body.ConversationID, "conversation_id")
+	if err != nil {
+		_ = c.writeError(req.ID, err.Error())
 		return
 	}
 
@@ -207,7 +208,7 @@ func (c *websocketConnection) handleHistoryGet(req websocketRequest) {
 		Timestamp: time.Now().Unix(),
 		Payload: &gatewayv1.GatewayEnvelope_HistoryGet{
 			HistoryGet: &gatewayv1.HistoryGetRequest{
-				ConversationId: body.ConversationID,
+				ConversationId: conversationID,
 				MaxMessages:    body.MaxMessages,
 			},
 		},
@@ -248,12 +249,14 @@ func (c *websocketConnection) handleHistoryRename(req websocketRequest) {
 		_ = c.writeError(req.ID, "invalid history.rename payload")
 		return
 	}
-	if strings.TrimSpace(body.ConversationID) == "" {
-		_ = c.writeError(req.ID, "conversation_id is required")
+	conversationID, err := requireTrimmedWebSocketString(body.ConversationID, "conversation_id")
+	if err != nil {
+		_ = c.writeError(req.ID, err.Error())
 		return
 	}
-	if strings.TrimSpace(body.Title) == "" {
-		_ = c.writeError(req.ID, "title is required")
+	title, err := requireTrimmedWebSocketString(body.Title, "title")
+	if err != nil {
+		_ = c.writeError(req.ID, err.Error())
 		return
 	}
 
@@ -262,8 +265,8 @@ func (c *websocketConnection) handleHistoryRename(req websocketRequest) {
 		Timestamp: time.Now().Unix(),
 		Payload: &gatewayv1.GatewayEnvelope_HistoryRename{
 			HistoryRename: &gatewayv1.HistoryRenameRequest{
-				ConversationId: body.ConversationID,
-				Title:          body.Title,
+				ConversationId: conversationID,
+				Title:          title,
 			},
 		},
 	})
@@ -297,8 +300,9 @@ func (c *websocketConnection) handleHistoryPin(req websocketRequest) {
 		_ = c.writeError(req.ID, "invalid history.pin payload")
 		return
 	}
-	if strings.TrimSpace(body.ConversationID) == "" {
-		_ = c.writeError(req.ID, "conversation_id is required")
+	conversationID, err := requireTrimmedWebSocketString(body.ConversationID, "conversation_id")
+	if err != nil {
+		_ = c.writeError(req.ID, err.Error())
 		return
 	}
 
@@ -307,7 +311,7 @@ func (c *websocketConnection) handleHistoryPin(req websocketRequest) {
 		Timestamp: time.Now().Unix(),
 		Payload: &gatewayv1.GatewayEnvelope_HistoryPin{
 			HistoryPin: &gatewayv1.HistoryPinRequest{
-				ConversationId: body.ConversationID,
+				ConversationId: conversationID,
 				IsPinned:       body.IsPinned,
 			},
 		},
@@ -340,8 +344,9 @@ func (c *websocketConnection) handleHistoryShareGet(req websocketRequest) {
 		_ = c.writeError(req.ID, "invalid history.share.get payload")
 		return
 	}
-	if strings.TrimSpace(body.ConversationID) == "" {
-		_ = c.writeError(req.ID, "conversation_id is required")
+	conversationID, err := requireTrimmedWebSocketString(body.ConversationID, "conversation_id")
+	if err != nil {
+		_ = c.writeError(req.ID, err.Error())
 		return
 	}
 
@@ -350,7 +355,7 @@ func (c *websocketConnection) handleHistoryShareGet(req websocketRequest) {
 		Timestamp: time.Now().Unix(),
 		Payload: &gatewayv1.GatewayEnvelope_HistoryShareGet{
 			HistoryShareGet: &gatewayv1.HistoryShareGetRequest{
-				ConversationId: body.ConversationID,
+				ConversationId: conversationID,
 			},
 		},
 	})
@@ -384,8 +389,9 @@ func (c *websocketConnection) handleHistoryShareSet(req websocketRequest) {
 		_ = c.writeError(req.ID, "invalid history.share.set payload")
 		return
 	}
-	if strings.TrimSpace(body.ConversationID) == "" {
-		_ = c.writeError(req.ID, "conversation_id is required")
+	conversationID, err := requireTrimmedWebSocketString(body.ConversationID, "conversation_id")
+	if err != nil {
+		_ = c.writeError(req.ID, err.Error())
 		return
 	}
 
@@ -394,7 +400,7 @@ func (c *websocketConnection) handleHistoryShareSet(req websocketRequest) {
 		Timestamp: time.Now().Unix(),
 		Payload: &gatewayv1.GatewayEnvelope_HistoryShareSet{
 			HistoryShareSet: &gatewayv1.HistoryShareSetRequest{
-				ConversationId:    body.ConversationID,
+				ConversationId:    conversationID,
 				Enabled:           body.Enabled,
 				RedactToolContent: body.RedactToolContent,
 			},
@@ -428,8 +434,9 @@ func (c *websocketConnection) handleHistoryDelete(req websocketRequest) {
 		_ = c.writeError(req.ID, "invalid history.delete payload")
 		return
 	}
-	if strings.TrimSpace(body.ConversationID) == "" {
-		_ = c.writeError(req.ID, "conversation_id is required")
+	conversationID, err := requireTrimmedWebSocketString(body.ConversationID, "conversation_id")
+	if err != nil {
+		_ = c.writeError(req.ID, err.Error())
 		return
 	}
 
@@ -438,7 +445,7 @@ func (c *websocketConnection) handleHistoryDelete(req websocketRequest) {
 		Timestamp: time.Now().Unix(),
 		Payload: &gatewayv1.GatewayEnvelope_HistoryDelete{
 			HistoryDelete: &gatewayv1.HistoryDeleteRequest{
-				ConversationId: body.ConversationID,
+				ConversationId: conversationID,
 			},
 		},
 	})
@@ -471,8 +478,9 @@ func (c *websocketConnection) handleHistoryTruncate(req websocketRequest) {
 		_ = c.writeError(req.ID, "invalid history.truncate payload")
 		return
 	}
-	if strings.TrimSpace(body.ConversationID) == "" {
-		_ = c.writeError(req.ID, "conversation_id is required")
+	conversationID, err := requireTrimmedWebSocketString(body.ConversationID, "conversation_id")
+	if err != nil {
+		_ = c.writeError(req.ID, err.Error())
 		return
 	}
 	if body.SegmentIndex < 0 {
@@ -489,7 +497,7 @@ func (c *websocketConnection) handleHistoryTruncate(req websocketRequest) {
 		Timestamp: time.Now().Unix(),
 		Payload: &gatewayv1.GatewayEnvelope_HistoryTruncate{
 			HistoryTruncate: &gatewayv1.HistoryTruncateRequest{
-				ConversationId:   body.ConversationID,
+				ConversationId:   conversationID,
 				SegmentIndex:     int32(body.SegmentIndex),
 				MessageIndex:     int32(body.MessageIndex),
 				OmitMessagesJson: body.OmitMessagesJSON,

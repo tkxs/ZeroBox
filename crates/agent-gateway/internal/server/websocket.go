@@ -12,6 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/liveagent/agent-gateway/internal/auth"
 	"github.com/liveagent/agent-gateway/internal/config"
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
 	"github.com/liveagent/agent-gateway/internal/session"
@@ -259,8 +260,7 @@ func (c *websocketConnection) handleAuth(req websocketRequest) {
 		return
 	}
 
-	expectedToken := strings.TrimSpace(c.cfg.Token)
-	if expectedToken == "" || strings.TrimSpace(payload.Token) != expectedToken {
+	if !auth.ValidateToken(payload.Token, c.cfg.Token) {
 		_ = c.writeError(req.ID, "unauthorized")
 		c.close()
 		return
