@@ -17,15 +17,15 @@ import {
   FolderOpen,
   FolderTree,
   Link2,
+  McpLogo,
   MessageSquareText,
   MoreHorizontal,
   PanelLeftClose,
   Pin,
   PinOff,
-  Plug,
   Plus,
   Share2,
-  Sparkles,
+  SkillIcon,
   SquarePen,
   Trash2,
 } from "../icons";
@@ -1304,9 +1304,9 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
               )}
               title="Skills Hub"
             >
-              <Sparkles
+              <SkillIcon
                 className={cn(
-                  "h-4 w-4 shrink-0",
+                  "h-[17px] w-[17px] shrink-0",
                   activeView === "skills-hub" ? "text-amber-500" : "text-foreground/85",
                 )}
               />
@@ -1324,7 +1324,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
               )}
               title="MCP Hub"
             >
-              <Plug
+              <McpLogo
                 className={cn(
                   "h-4 w-4 shrink-0",
                   activeView === "mcp-hub" ? "text-violet-500" : "text-foreground/85",

@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { Cloud, Plug, Plus, Server, Sparkles } from "../../components/icons";
+import { Cloud, McpLogo, Plug, Plus, Server, Sparkles } from "../../components/icons";
 import { Button } from "../../components/ui/button";
 import { useLocale } from "../../i18n";
 import { McpRegistryBrowser } from "./McpRegistryBrowser";
@@ -65,7 +65,7 @@ export function McpHubPage(props: McpHubPageProps) {
 
       <div className="relative z-10 flex h-full min-h-0 flex-col overflow-hidden">
         <HubHeader
-          icon={<Plug className="h-5 w-5" />}
+          icon={<McpLogo className="h-5 w-5" />}
           title="MCP Hub"
           subtitle={t("mcpHub.subtitle")}
           sidebarOpen={sidebarOpen}

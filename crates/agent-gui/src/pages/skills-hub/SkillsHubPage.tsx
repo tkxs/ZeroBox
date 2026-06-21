@@ -11,9 +11,11 @@ import {
   Loader2,
   Lock,
   MessageSquare,
+  Plug,
   RefreshCw,
   Search,
-  Sparkles,
+  Server,
+  SkillIcon,
   Trash2,
   X,
 } from "../../components/icons";
@@ -743,7 +745,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
 
       <div className="relative z-10 flex h-full min-h-0 flex-col overflow-hidden">
         <HubHeader
-          icon={<Sparkles className="h-5 w-5" />}
+          icon={<SkillIcon className="h-6 w-6" />}
           title={t("settings.skillsHubTitle")}
           subtitle={rootDir ? rootDir : t("settings.skillsHubSubtitle")}
           sidebarOpen={sidebarOpen}
@@ -771,7 +773,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                         : "border-border/40 bg-muted/40 text-muted-foreground",
                     )}
                   >
-                    <Sparkles className="h-5 w-5" />
+                    <Plug className="h-5 w-5" />
                     {skillsEnabled ? (
                       <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-background" />
                     ) : null}
@@ -875,7 +877,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                   {
                     value: "installed" as const,
                     label: t("settings.skillsHubInstalledTab"),
-                    icon: Sparkles,
+                    icon: Server,
                     count: selectableSkills.length,
                   },
                   {
@@ -1050,7 +1052,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                                           : "border-border/30 bg-muted/50 text-muted-foreground group-hover:border-border/50 group-hover:bg-background/70 group-hover:text-foreground/85",
                                       )}
                                     >
-                                      <Sparkles className="h-[18px] w-[18px]" />
+                                      <SkillIcon className="h-6 w-6" />
                                     </div>
 
                                     {alwaysEnabled ? (
@@ -1292,7 +1294,7 @@ function InstalledSkillPreviewDrawer(props: {
       >
         <div className="flex items-start gap-3 border-b border-border/40 px-5 py-4">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-border/55 bg-background/80 text-foreground/85 shadow-[0_1px_0_rgba(255,255,255,0.55)_inset]">
-            {alwaysEnabled ? <Lock className="h-5 w-5" /> : <Sparkles className="h-5 w-5" />}
+            {alwaysEnabled ? <Lock className="h-5 w-5" /> : <SkillIcon className="h-7 w-7" />}
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80">
@@ -1333,7 +1335,7 @@ function InstalledSkillPreviewDrawer(props: {
               <div className="rounded-2xl border border-border/40 bg-background/70 p-3.5 shadow-[0_1px_0_rgba(255,255,255,0.55)_inset]">
                 <div className="flex items-start gap-3">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-border/45 bg-background/80 text-foreground/75">
-                    <Sparkles className="h-3.5 w-3.5" />
+                    <SkillIcon className="h-5 w-5" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/70">
@@ -1707,7 +1709,7 @@ function SkillsStoreView(props: {
                               : "border-border/30 bg-muted/50 text-muted-foreground group-hover:border-border/50 group-hover:bg-background/70 group-hover:text-foreground/85",
                           )}
                         >
-                          <Sparkles className="h-[18px] w-[18px]" />
+                          <SkillIcon className="h-6 w-6" />
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex min-w-0 items-start gap-1.5">
@@ -1937,7 +1939,7 @@ function SkillsStorePreviewDrawer(props: {
                 loading="lazy"
               />
             ) : (
-              <Sparkles className="h-5 w-5" />
+              <SkillIcon className="h-7 w-7" />
             )}
           </div>
           <div className="min-w-0 flex-1">
