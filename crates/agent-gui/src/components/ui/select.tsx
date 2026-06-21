@@ -35,15 +35,9 @@ type SelectValueProps = Omit<
 
 export const SelectValue = React.forwardRef<HTMLSpanElement, SelectValueProps>(
   ({ placeholder, children, ...props }, ref) => {
-    const rendered =
-      children !== undefined
-        ? children
-        : placeholder !== undefined
-          ? (value: unknown) => (value == null ? placeholder : undefined)
-          : undefined;
     return (
-      <SelectPrimitive.Value ref={ref} {...props}>
-        {rendered as React.ComponentPropsWithoutRef<typeof SelectPrimitive.Value>["children"]}
+      <SelectPrimitive.Value ref={ref} placeholder={placeholder} {...props}>
+        {children as React.ComponentPropsWithoutRef<typeof SelectPrimitive.Value>["children"]}
       </SelectPrimitive.Value>
     );
   },
