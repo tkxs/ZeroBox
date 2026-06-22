@@ -160,6 +160,7 @@ import {
   isAbortError,
   isChatControlEvent,
   isChatEventTitleFinal,
+  isTerminalChatEvent,
   isChatRuntimeReadyStatus,
   isPreparingChatControlEvent,
   isRuntimeStartedChatControlEvent,
@@ -2230,12 +2231,11 @@ export default function GatewayApp() {
               return;
             }
 
-            liveStore.appendEvent(event, {
-              flush: event.type === "done" || event.type === "error",
-            });
+            const terminalEvent = isTerminalChatEvent(event);
+            liveStore.appendEvent(event, { flush: terminalEvent });
             handleTunnelManagerChatEvent(event);
 
-            if (event.type === "done" || event.type === "error") {
+            if (terminalEvent) {
               terminalEventSeen = true;
               markCompletedLiveStream(conversationIdValue);
               commitTerminalConversationLiveStream(conversationIdValue);
@@ -3663,11 +3663,13 @@ export default function GatewayApp() {
             clearRuntimeStartingStatusTimer();
             clearConversationStreamingState(activeConversationId);
             if (event.type === "failed" || event.state === "failed") {
-              updateConversationRuntimeEntry(activeConversationId, (current) => ({
-                ...current,
-                error: event.message?.trim() || "Desktop runtime did not start the request.",
-              }));
+              getConversationLiveStreamStore(activeConversationId)?.appendEvent(event, {
+                flush: true,
+              });
             }
+            markCompletedLiveStream(activeConversationId);
+            commitTerminalConversationLiveStream(activeConversationId);
+            refreshHistoryAfterCompletedLiveStream(activeConversationId, api);
           } else if (isRuntimeStartedChatControlEvent(event)) {
             markRuntimeStarted();
             updateConversationRuntimeEntry(activeConversationId, (current) => ({
@@ -3700,11 +3702,12 @@ export default function GatewayApp() {
             toolStatusIsCompaction: isCompaction,
           }));
         } else {
+          const terminalEvent = isTerminalChatEvent(event);
           getConversationLiveStreamStore(activeConversationId)?.appendEvent(event, {
-            flush: event.type === "done" || event.type === "error",
+            flush: terminalEvent,
           });
           handleTunnelManagerChatEvent(event);
-          if (event.type === "done" || event.type === "error") {
+          if (terminalEvent) {
             terminalEventSeen = true;
             markCompletedLiveStream(activeConversationId);
             commitTerminalConversationLiveStream(activeConversationId);

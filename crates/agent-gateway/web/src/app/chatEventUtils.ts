@@ -102,7 +102,7 @@ export function isChatEventTitleFinal(event: ChatEvent) {
 }
 
 export function isTerminalChatEvent(event: ChatEvent) {
-  return event.type === "done" || event.type === "error";
+  return event.type === "done" || event.type === "error" || isTerminalChatControlEvent(event);
 }
 
 export function isChatControlEvent(event: ChatEvent): event is ChatControlEvent {

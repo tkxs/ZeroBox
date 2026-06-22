@@ -85,6 +85,24 @@ function readChatEventSeq(event: ChatEvent) {
     : null;
 }
 
+function isTerminalChatEvent(event: ChatEvent) {
+  if (event.type === "done" || event.type === "error") {
+    return true;
+  }
+  if (event.type !== "completed" && event.type !== "failed" && event.type !== "cancelled") {
+    return false;
+  }
+  return (
+    event.state === "completed" ||
+    event.state === "failed" ||
+    event.state === "cancelled"
+  );
+}
+
+function shouldAppendChatEvent(event: ChatEvent) {
+  return event.type !== "done" && event.type !== "completed" && event.type !== "cancelled";
+}
+
 function resolveCommitInterval(snapshot: LiveConversationStreamSnapshot) {
   if (typeof document !== "undefined" && document.visibilityState !== "visible") {
     return LIVE_STREAM_BACKGROUND_COMMIT_INTERVAL_MS;
@@ -244,9 +262,11 @@ export function createLiveConversationStreamStore(): LiveConversationStreamStore
 
       updateDraft(
         (previous) => {
-          const nextEntries =
-            event.type === "done" ? previous.entries : pushChatEvent(previous.entries, event);
-          const shouldClearStatus = event.type === "done" || event.type === "error";
+          const terminal = isTerminalChatEvent(event);
+          const nextEntries = shouldAppendChatEvent(event)
+            ? pushChatEvent(previous.entries, event)
+            : previous.entries;
+          const shouldClearStatus = terminal;
           if (
             nextEntries === previous.entries &&
             (!shouldClearStatus ||

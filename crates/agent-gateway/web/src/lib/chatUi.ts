@@ -658,6 +658,41 @@ function buildHostedSearchEntry(
   };
 }
 
+function formatLiveErrorMessage(message: string, prefix: boolean) {
+  if (!prefix || message === "Request failed") {
+    return message;
+  }
+  return message.startsWith("Request failed:") || message.startsWith("Request failed：")
+    ? message
+    : `Request failed: ${message}`;
+}
+
+function hasTailAssistantText(entries: ChatEntry[]) {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry) continue;
+    if (entry.kind === "user" || entry.kind === "checkpoint" || entry.kind === "error") {
+      return false;
+    }
+    if (entry.kind === "assistant" && entry.text.trim()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasLiveErrorTextEntry(entries: ChatEntry[], message: string) {
+  return entries.some((entry) => {
+    if (entry.kind === "error") {
+      return entry.text.trim() === message;
+    }
+    if (entry.kind === "assistant") {
+      return entry.text.trim() === message;
+    }
+    return false;
+  });
+}
+
 export function parseHistoryMessagesJson(raw: string): ChatEntry[] {
   if (raw.trim() === "") return [];
 
@@ -1389,26 +1424,28 @@ export function pushChatEvent(entries: ChatEntry[], event: ChatEvent): ChatEntry
     return enrichTailHostedSearchEntriesWithText(next);
   }
 
-  if (event.type === "error") {
-    const round = readRound(event.round);
-    const message = event.message.trim();
+  if (event.type === "error" || event.type === "failed") {
+    const round = event.type === "error" ? readRound(event.round) : undefined;
+    const rawMessage = event.message ?? "";
+    const message = formatLiveErrorMessage(
+      rawMessage.trim() || "Request failed",
+      event.type === "failed",
+    );
     if (isAbortLikeError(message)) {
       return entries;
     }
-    if (
-      entries.some(
-        (entry) => entry.kind === "error" && entry.text.trim() === message,
-      )
-    ) {
+    if (hasLiveErrorTextEntry(entries, message)) {
       return entries;
     }
-    const errorId = hashText(message || event.message);
+    const errorId = hashText(message);
+    const text = `${hasTailAssistantText(entries) ? "\n\n" : ""}${message}`;
     return [
       ...entries,
       {
         id: `live-error-${round ?? 0}-${errorId}`,
-        kind: "error",
-        text: message || event.message,
+        kind: "assistant",
+        round,
+        text,
       },
     ];
   }
