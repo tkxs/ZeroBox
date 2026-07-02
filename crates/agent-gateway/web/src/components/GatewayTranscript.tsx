@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Check, CheckCircle2, ChevronDown, Copy, File, FileText, Loader2, Pencil, Settings, X } from "./icons";
@@ -47,43 +46,19 @@ import {
 
 import {
   buildTranscriptItems,
-  chatEntryDedupKey,
   type ChatEntry,
   type GatewayTranscriptItem,
   type GatewayTranscriptRound,
 } from "../lib/chatUi";
-function entryMatchesForDedup(a: ChatEntry, b: ChatEntry): boolean {
-  if (a.kind !== b.kind) return false;
-  return chatEntryDedupKey(a) === chatEntryDedupKey(b);
-}
-
-function omitEquivalentTailEntries(existing: ChatEntry[], live: ChatEntry[]) {
-  if (live.length === 0) return existing;
-  const maxOverlap = Math.min(existing.length, live.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap--) {
-    const start = existing.length - overlap;
-    let matches = true;
-    for (let i = 0; i < overlap; i++) {
-      if (!entryMatchesForDedup(existing[start + i], live[i])) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches) return existing.slice(0, start);
-  }
-  return existing;
-}
-import type {
-  LiveConversationStreamSnapshot,
-  LiveConversationStreamStore,
-} from "../lib/gatewayTypes";
 import type { SectionId } from "../pages/settings/types";
 
 type GatewayTranscriptProps = {
   conversationId?: string;
+  // Committed (history-backed) entries — rendered in the virtualized region.
   entries: ChatEntry[];
-  liveStore?: LiveConversationStreamStore | null;
-  hasLiveStream?: boolean;
+  // Settled + live tail entries — rendered in the non-virtualized live
+  // region. Committed and tail are disjoint by construction.
+  tailEntries?: ChatEntry[];
   error?: string | null;
   toolStatus?: string | null;
   toolStatusIsCompaction?: boolean;
@@ -110,12 +85,16 @@ type GatewayTranscriptProps = {
   redactToolContent?: boolean;
 };
 
-const EMPTY_LIVE_SNAPSHOT: LiveConversationStreamSnapshot = {
-  revision: 0,
-  entries: [],
-  toolStatus: null,
-  toolStatusIsCompaction: false,
-};
+// Live-born entries carry a `${runId}/` prefix on their ids (the transcript
+// store namespaces every entry it builds from stream events). They keep
+// Streamdown's streaming render mode forever — even after they fold into the
+// virtualized committed region — so the streaming→static mode flip (and its
+// full re-highlight reflow) can never happen.
+function isLiveBornEntryId(id: string) {
+  return id.includes("/");
+}
+
+const EMPTY_TAIL_ENTRIES: ChatEntry[] = [];
 const TRANSCRIPT_ROW_ESTIMATED_HEIGHT = 260;
 const TRANSCRIPT_ROW_GAP = 18;
 const TRANSCRIPT_ROW_OVERSCAN_COUNT = 5;
@@ -126,14 +105,6 @@ type GatewayTranscriptVirtualItem =
 
 function resolveNearestScrollViewport(element: HTMLElement | null) {
   return element?.closest("[data-radix-scroll-area-viewport]") as HTMLDivElement | null;
-}
-
-function subscribeEmptyLiveStore() {
-  return () => {};
-}
-
-function getEmptyLiveSnapshot() {
-  return EMPTY_LIVE_SNAPSHOT;
 }
 
 function normalizeRoundsForRender(
@@ -1056,6 +1027,7 @@ const GatewayTranscriptHistory = memo(function GatewayTranscriptHistory(props: {
                   showUsage={showUsage}
                   usageContextWindow={usageContextWindow}
                   isLive={false}
+                  renderMode={isLiveBornEntryId(item.id) ? "streaming" : "static"}
                   readOnly={readOnly}
                   redactToolContent={redactToolContent}
                 />
@@ -1100,7 +1072,7 @@ const GatewayTranscriptHistory = memo(function GatewayTranscriptHistory(props: {
 });
 
 const GatewayTranscriptLiveState = memo(function GatewayTranscriptLiveState(props: {
-  liveSnapshot: LiveConversationStreamSnapshot;
+  tailEntries: ChatEntry[];
   lastHistoryKind?: GatewayTranscriptItem["kind"];
   isStreaming: boolean;
   isAgentMode: boolean;
@@ -1113,7 +1085,7 @@ const GatewayTranscriptLiveState = memo(function GatewayTranscriptLiveState(prop
   toolStatusIsCompaction: boolean;
 }) {
   const {
-    liveSnapshot,
+    tailEntries,
     lastHistoryKind,
     isStreaming,
     isAgentMode,
@@ -1126,10 +1098,7 @@ const GatewayTranscriptLiveState = memo(function GatewayTranscriptLiveState(prop
     toolStatusIsCompaction,
   } = props;
   const loadCommitDetails = useGatewayCommitDetailsLoader(workspaceRoot, gitClient);
-  const liveItems = useMemo(
-    () => buildTranscriptItems(liveSnapshot.entries),
-    [liveSnapshot.entries],
-  );
+  const liveItems = useMemo(() => buildTranscriptItems(tailEntries), [tailEntries]);
   const activeLiveAssistantIndex = useMemo(() => {
     const lastItem = liveItems.at(-1);
     if (lastItem?.kind !== "assistant") {
@@ -1138,13 +1107,12 @@ const GatewayTranscriptLiveState = memo(function GatewayTranscriptLiveState(prop
     return liveItems.length - 1;
   }, [liveItems]);
   const displayedToolStatus = useMemo(
-    () => normalizeLiveToolStatus(liveSnapshot.toolStatus ?? toolStatus ?? null),
-    [liveSnapshot.toolStatus, toolStatus],
+    () => normalizeLiveToolStatus(toolStatus ?? null),
+    [toolStatus],
   );
-  const displayedToolStatusIsCompaction =
-    liveSnapshot.toolStatus !== null
-      ? liveSnapshot.toolStatusIsCompaction
-      : toolStatusIsCompaction;
+  const displayedToolStatusIsCompaction = toolStatusIsCompaction;
+  // The pending bubble (typing dots / vibing / compacting) shows while busy
+  // and the tail has no assistant-ish output yet.
   const shouldShowPendingLiveBubble = useMemo(() => {
     if (!isStreaming) {
       return false;
@@ -1205,6 +1173,7 @@ const GatewayTranscriptLiveState = memo(function GatewayTranscriptLiveState(prop
                   usageContextWindow={usageContextWindow}
                   isLive={isLatestLiveAssistant}
                   isStreaming={isLatestLiveStreaming}
+                  renderMode="streaming"
                 />
                 {shouldShowLiveStatus ? (
                   <LiveStatusFooter status={liveStatusText} />
@@ -1276,8 +1245,7 @@ const GatewayTranscriptLiveState = memo(function GatewayTranscriptLiveState(prop
 export function GatewayTranscript({
   conversationId,
   entries,
-  liveStore,
-  hasLiveStream = false,
+  tailEntries = EMPTY_TAIL_ENTRIES,
   error,
   toolStatus,
   toolStatusIsCompaction = false,
@@ -1300,20 +1268,11 @@ export function GatewayTranscript({
   redactToolContent = false,
 }: GatewayTranscriptProps) {
   const { t } = useLocale();
-  const liveSnapshot = useSyncExternalStore(
-    liveStore?.subscribe ?? subscribeEmptyLiveStore,
-    liveStore?.getSnapshot ?? getEmptyLiveSnapshot,
-    liveStore?.getSnapshot ?? getEmptyLiveSnapshot,
-  );
-  const historyEntries = useMemo(
-    () => omitEquivalentTailEntries(entries, liveSnapshot.entries),
-    [entries, liveSnapshot.entries],
-  );
-  const historyItems = useMemo(() => buildTranscriptItems(historyEntries), [historyEntries]);
+  const historyItems = useMemo(() => buildTranscriptItems(entries), [entries]);
   const transcriptListRef = useRef<HTMLDivElement | null>(null);
   const [transcriptScrollViewport, setTranscriptScrollViewport] =
     useState<HTMLDivElement | null>(null);
-  const hasLiveEntries = liveSnapshot.entries.length > 0;
+  const hasLiveEntries = tailEntries.length > 0;
   const lastHistoryKind = historyItems.at(-1)?.kind;
   const inlineErrorText = error?.trim() ?? "";
   const shouldShowInlineError = useMemo(
@@ -1336,7 +1295,7 @@ export function GatewayTranscript({
     return <HistoryLoadingState title={loadingTitle} />;
   }
 
-  if (historyItems.length === 0 && !hasLiveEntries && !isStreaming && !hasLiveStream) {
+  if (historyItems.length === 0 && !hasLiveEntries && !isStreaming) {
     const showNoModelsState = !hasModels;
     return (
       <div className="gateway-transcript-shell">
@@ -1415,7 +1374,7 @@ export function GatewayTranscript({
         />
         {!readOnly ? (
           <GatewayTranscriptLiveState
-            liveSnapshot={liveSnapshot}
+            tailEntries={tailEntries}
             lastHistoryKind={lastHistoryKind}
             isStreaming={isStreaming}
             isAgentMode={isAgentMode}

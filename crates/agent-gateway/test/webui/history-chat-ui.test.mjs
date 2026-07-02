@@ -5,8 +5,7 @@ import { createWebModuleLoader } from "../helpers/load-web-module.mjs";
 const loader = createWebModuleLoader();
 const historySync = loader.loadModule("src/lib/historySync.ts");
 const chatUi = loader.loadModule("src/lib/chatUi.ts");
-const liveStore = loader.loadModule("src/lib/liveConversationStreamStore.ts");
-const liveCommit = loader.loadModule("src/lib/liveConversationCommit.ts");
+const transcriptStoreModule = loader.loadModule("src/lib/chat/stream/transcriptStore.ts");
 const historyShare = loader.loadModule("src/lib/historyShare.ts");
 const requestContextSanitizer = loader.loadModule("src/lib/chat/requestContextSanitizer.ts");
 const conversationState = loader.loadModule("src/lib/chat/conversationState.ts");
@@ -95,12 +94,6 @@ test("applyGatewayHistoryEvent upserts newest summaries and removes deleted conv
     conversation_id: "two",
   });
   assert.deepEqual(deleted.map((item) => item.id), ["one"]);
-
-  const running = historySync.applyGatewayHistoryEvent(deleted, {
-    kind: "running",
-    conversation_id: "one",
-  });
-  assert.equal(running, deleted);
 });
 
 test("applyGatewayHistoryEvent sorts pinned conversations before recent conversations", () => {
@@ -359,53 +352,6 @@ test("reconcileConversationSummaries retains running local rows missing from a l
   });
 
   assert.equal(refreshed[0], existing[0]);
-});
-
-test("normalizeRunningConversations requires run ids and preserves replay cursors", () => {
-  assert.deepEqual(
-    historySync.normalizeRunningConversations([
-      {
-        conversation_id: " conversation-1 ",
-        run_id: " run-1 ",
-        cwd: " /workspace ",
-        first_seq: 42.9,
-        run_epoch: 3.2,
-        updated_at: 123,
-      },
-      {
-        conversation_id: "conversation-1",
-        run_id: "run-duplicate",
-        first_seq: 7,
-      },
-      {
-        conversation_id: "conversation-2",
-        first_seq: 0,
-      },
-    ]),
-    [
-      {
-        conversation_id: "conversation-1",
-        run_id: "run-1",
-        cwd: "/workspace",
-        first_seq: 42,
-        run_epoch: 3,
-        updated_at: 123,
-      },
-    ],
-  );
-});
-
-test("resolveRunningConversationStreamAfterSeq starts remote replay at current run boundary", () => {
-  assert.equal(historySync.resolveRunningConversationStreamAfterSeq(42), 41);
-  assert.equal(historySync.resolveRunningConversationStreamAfterSeq(42.9), 41);
-  assert.equal(historySync.resolveRunningConversationStreamAfterSeq(1), 0);
-  assert.equal(historySync.resolveRunningConversationStreamAfterSeq(0), 0);
-  assert.equal(historySync.resolveRunningConversationStreamAfterSeq(undefined), 0);
-  assert.equal(historySync.resolveRunningConversationStreamAfterSeq("42"), 0);
-  assert.equal(
-    historySync.resolveRunningConversationStreamAfterSeq(42, { runId: "chat-command-1" }),
-    0,
-  );
 });
 
 test("applyGatewayHistoryEvent can protect optimistic titles from summary broadcasts", () => {
@@ -1093,217 +1039,6 @@ test("pushChatEvent keeps a deduped result while applying late result arguments"
   assert.equal(entries[0].toolCall.arguments.command, "printf duplicate");
 });
 
-test("createLiveConversationStreamStore batches entries and clears tool status on terminal events", () => {
-  globalThis.window = undefined;
-  globalThis.document = { visibilityState: "visible" };
-
-  const store = liveStore.createLiveConversationStreamStore();
-  let notifications = 0;
-  const unsubscribe = store.subscribe(() => {
-    notifications += 1;
-  });
-
-  store.setToolStatus("Compacting...", true);
-  assert.equal(store.getSnapshot().toolStatus, "Compacting...");
-  assert.equal(store.getSnapshot().toolStatusIsCompaction, true);
-  assert.equal(notifications, 1);
-
-  store.appendEvent({ type: "token", text: "hello", round: 1 });
-  assert.equal(store.getSnapshot().entries[0].text, "hello");
-  assert.equal(store.getSnapshot().toolStatus, "Compacting...");
-
-  store.appendEvent({ type: "done", conversation_id: "conversation-1" });
-  assert.equal(store.getSnapshot().toolStatus, null);
-  assert.equal(store.getSnapshot().toolStatusIsCompaction, false);
-
-  unsubscribe();
-});
-
-test("createLiveConversationStreamStore commits background events without waiting for animation frames", () => {
-  const previousWindow = globalThis.window;
-  const previousDocument = globalThis.document;
-  let rafScheduled = 0;
-  globalThis.window = {
-    requestAnimationFrame() {
-      rafScheduled += 1;
-      return 1;
-    },
-    cancelAnimationFrame() {},
-    setTimeout(callback) {
-      callback();
-      return 1;
-    },
-    clearTimeout() {},
-  };
-  globalThis.document = { visibilityState: "hidden" };
-
-  try {
-    const store = liveStore.createLiveConversationStreamStore();
-    store.appendEvent({ type: "token", text: "background", round: 1 });
-
-    assert.equal(rafScheduled, 0);
-    assert.equal(store.getSnapshot().entries.length, 1);
-    assert.equal(store.getSnapshot().entries[0].text, "background");
-  } finally {
-    globalThis.window = previousWindow;
-    globalThis.document = previousDocument;
-  }
-});
-
-test("createLiveConversationStreamStore falls back when a scheduled animation frame is paused", () => {
-  const previousWindow = globalThis.window;
-  const previousDocument = globalThis.document;
-  let fallbackCallback = null;
-  let canceledFrame = null;
-  globalThis.window = {
-    requestAnimationFrame() {
-      return 7;
-    },
-    cancelAnimationFrame(id) {
-      canceledFrame = id;
-    },
-    setTimeout(callback) {
-      fallbackCallback = callback;
-      return 11;
-    },
-    clearTimeout() {},
-  };
-  globalThis.document = { visibilityState: "visible" };
-
-  try {
-    const store = liveStore.createLiveConversationStreamStore();
-    store.appendEvent({ type: "token", text: "queued", round: 1 });
-
-    assert.equal(store.getSnapshot().entries.length, 0);
-    assert.equal(typeof fallbackCallback, "function");
-
-    fallbackCallback();
-
-    assert.equal(canceledFrame, 7);
-    assert.equal(store.getSnapshot().entries.length, 1);
-    assert.equal(store.getSnapshot().entries[0].text, "queued");
-  } finally {
-    globalThis.window = previousWindow;
-    globalThis.document = previousDocument;
-  }
-});
-
-test("createLiveConversationStreamStore ignores replayed events with the same seq", () => {
-  globalThis.window = undefined;
-  globalThis.document = { visibilityState: "visible" };
-
-  const store = liveStore.createLiveConversationStreamStore();
-  store.appendEvent({
-    type: "token",
-    text: "hello",
-    round: 1,
-    conversation_id: "conversation-1",
-    seq: 1,
-  });
-  store.appendEvent({
-    type: "token",
-    text: "hello",
-    round: 1,
-    conversation_id: "conversation-1",
-    seq: 1,
-  });
-  store.appendEvent({
-    type: "token",
-    text: " world",
-    round: 1,
-    conversation_id: "conversation-1",
-    seq: 2,
-  });
-
-  assert.equal(store.getSnapshot().entries.length, 1);
-  assert.equal(store.getSnapshot().entries[0].text, "hello world");
-
-  store.reset();
-  store.appendEvent({
-    type: "token",
-    text: "fresh",
-    round: 1,
-    conversation_id: "conversation-1",
-    seq: 1,
-  });
-
-  assert.equal(store.getSnapshot().entries.length, 1);
-  assert.equal(store.getSnapshot().entries[0].text, "fresh");
-});
-
-test("createLiveConversationStreamStore does not render queue control events", () => {
-  globalThis.window = undefined;
-  globalThis.document = { visibilityState: "visible" };
-
-  const store = liveStore.createLiveConversationStreamStore();
-  store.appendEvent({
-    type: "accepted",
-    state: "queued",
-    conversation_id: "conversation-1",
-    seq: 1,
-  });
-  store.appendEvent({
-    type: "queued_in_gui",
-    state: "desktop_queued",
-    conversation_id: "conversation-1",
-    seq: 2,
-  });
-  store.appendEvent({
-    type: "started",
-    state: "running",
-    conversation_id: "conversation-1",
-    seq: 3,
-  });
-  store.appendEvent({
-    type: "token",
-    text: "visible",
-    round: 1,
-    conversation_id: "conversation-1",
-    seq: 4,
-  });
-
-  assert.equal(store.getSnapshot().entries.length, 1);
-  assert.equal(store.getSnapshot().entries[0].text, "visible");
-});
-
-test("createLiveConversationStreamStore renders live user_message events", () => {
-  globalThis.window = undefined;
-  globalThis.document = { visibilityState: "visible" };
-
-  const store = liveStore.createLiveConversationStreamStore();
-  store.appendEvent({
-    type: "user_message",
-    message: "queued from gui",
-    uploaded_files: [
-      {
-        relative_path: "notes.md",
-        absolute_path: "/workspace/notes.md",
-        file_name: "notes.md",
-        kind: "text",
-        size_bytes: 12,
-      },
-    ],
-    conversation_id: "conversation-1",
-    seq: 1,
-  });
-  store.appendEvent({
-    type: "token",
-    text: "reply",
-    round: 1,
-    conversation_id: "conversation-1",
-    seq: 2,
-  });
-
-  const entries = store.getSnapshot().entries;
-  assert.equal(entries.length, 2);
-  assert.equal(entries[0].kind, "user");
-  assert.equal(entries[0].text, "queued from gui");
-  assert.equal(entries[0].attachments.length, 1);
-  assert.equal(entries[0].attachments[0].relativePath, "notes.md");
-  assert.equal(entries[1].kind, "assistant");
-  assert.equal(entries[1].text, "reply");
-});
-
 function findTreeNode(node, predicate) {
   if (Array.isArray(node)) {
     for (const child of node) {
@@ -1331,7 +1066,56 @@ function findTreeNode(node, predicate) {
   return null;
 }
 
-test("GatewayTranscript live renderer shows user bubbles before live assistant output", () => {
+test("formatConversationTitle falls back to stable labels", () => {
+  assert.equal(chatUi.formatConversationTitle({ id: "abc", title: "  Named  " }), "Named");
+  assert.equal(chatUi.formatConversationTitle(null, "conversation-abcdef"), "会话 conversa");
+  assert.equal(chatUi.formatConversationTitle(null, ""), "新对话");
+});
+
+test("resolveConversationBrowserTitle uses project title for project-level empty selection", () => {
+  assert.equal(
+    chatUi.resolveConversationBrowserTitle({
+      conversation: null,
+      conversationId: "conversation-abcdef",
+      projectName: "  Project Alpha  ",
+      newConversationTitle: "LiveAgent",
+    }),
+    "Project Alpha",
+  );
+  assert.equal(
+    chatUi.resolveConversationBrowserTitle({
+      conversation: { id: "conversation-abcdef", title: "  Named  " },
+      conversationId: "conversation-abcdef",
+      projectName: "Project Alpha",
+      newConversationTitle: "LiveAgent",
+    }),
+    "Named",
+  );
+  assert.equal(
+    chatUi.resolveConversationBrowserTitle({
+      conversation: null,
+      conversationId: "__local_draft__:abc",
+      projectName: "Project Alpha",
+      isLocalDraftConversation: true,
+      newConversationTitle: "LiveAgent",
+    }),
+    "LiveAgent",
+  );
+});
+
+test("buildOptimisticConversationTitle uses the first ten characters of the first prompt paragraph", () => {
+  assert.equal(
+    chatUi.buildOptimisticConversationTitle("  12345 67890 abc\nstill first paragraph\n\nsecond"),
+    "12345 6789",
+  );
+  assert.equal(
+    chatUi.buildOptimisticConversationTitle("这是第一段提示词超过十个字\n\n第二段"),
+    "这是第一段提示词超过",
+  );
+  assert.equal(chatUi.buildOptimisticConversationTitle("   \n\n  "), "新对话");
+});
+
+test("GatewayTranscript renders committed and tail regions from disjoint inputs", () => {
   const fakeReact = {
     createContext(defaultValue) {
       return { defaultValue };
@@ -1399,46 +1183,38 @@ test("GatewayTranscript live renderer shows user bubbles before live assistant o
       },
     },
   });
-  const transcriptLiveStore = transcriptLoader.loadModule("src/lib/liveConversationStreamStore.ts");
   const { GatewayTranscript } = transcriptLoader.loadModule("src/components/GatewayTranscript.tsx");
 
   globalThis.window = undefined;
   globalThis.document = { visibilityState: "visible" };
 
-  const store = transcriptLiveStore.createLiveConversationStreamStore();
-  store.appendEvent(
-    {
-      type: "user_message",
-      message: "queued from gui",
-      conversation_id: "conversation-1",
-      seq: 1,
-    },
-    { flush: true },
-  );
-  store.appendEvent(
-    {
-      type: "token",
-      text: "reply",
-      round: 1,
-      conversation_id: "conversation-1",
-      seq: 2,
-    },
-    { flush: true },
-  );
+  // Tail entries carry a run-id prefix (live-born ids from the transcript
+  // store); committed entries came from parsed history.
+  const committed = [
+    { id: "user-1", kind: "user", text: "earlier question", attachments: [] },
+    { id: "assistant-1", kind: "assistant", text: "earlier answer", round: 1 },
+  ];
+  const tail = [
+    { id: "run-1/live-user-1", kind: "user", text: "queued from gui", attachments: [] },
+    { id: "run-1/live-assistant-1", kind: "assistant", text: "reply", round: 1 },
+  ];
 
   const transcriptTree = GatewayTranscript({
     conversationId: "conversation-1",
-    entries: [],
-    liveStore: store,
-    hasLiveStream: true,
+    entries: committed,
+    tailEntries: tail,
     isStreaming: true,
   });
   const liveStateNode = findTreeNode(
     transcriptTree,
-    (node) => typeof node.type === "function" && node.props?.liveSnapshot,
+    (node) => typeof node.type === "function" && Array.isArray(node.props?.tailEntries),
+  );
+  assert.ok(liveStateNode, "live region receives the tail entries");
+  assert.deepEqual(
+    liveStateNode.props.tailEntries.map((entry) => entry.id),
+    ["run-1/live-user-1", "run-1/live-assistant-1"],
   );
 
-  assert.ok(liveStateNode);
   const liveTree = liveStateNode.type(liveStateNode.props);
   assert.ok(
     findTreeNode(
@@ -1447,6 +1223,7 @@ test("GatewayTranscript live renderer shows user bubbles before live assistant o
         typeof node.props?.className === "string" &&
         node.props.className.includes("gateway-transcript-row-user"),
     ),
+    "tail user bubble renders before the live assistant output",
   );
   assert.ok(
     findTreeNode(
@@ -1454,396 +1231,41 @@ test("GatewayTranscript live renderer shows user bubbles before live assistant o
       (node) => typeof node.type === "function" && node.props?.text === "queued from gui",
     ),
   );
-});
-
-test("mergeHistorySnapshotEntries appends remote user turn without dropping loaded history", () => {
-  const existing = [
-    { id: "existing-user-1", kind: "user", text: "first", attachments: [] },
-    { id: "existing-assistant-1", kind: "assistant", text: "first answer", round: 1 },
-  ];
-  const incoming = [
-    { id: "history-user-1", kind: "user", text: "first", attachments: [] },
-    { id: "history-assistant-1", kind: "assistant", text: "first answer", round: 1 },
-    { id: "history-user-2", kind: "user", text: "second prompt", attachments: [] },
-  ];
-
-  const merged = liveCommit.mergeHistorySnapshotEntries(existing, incoming);
-
-  assert.deepEqual(
-    merged.map((entry) => entry.text),
-    ["first", "first answer", "second prompt"],
+  const assistantBubble = findTreeNode(
+    liveTree,
+    (node) => typeof node.type === "function" && node.props?.renderMode !== undefined,
   );
-  assert.equal(merged[0].id, "history-user-1");
-  assert.equal(merged[2].id, "history-user-2");
-});
-
-test("mergeHistorySnapshotEntries keeps full-history prefix when incoming snapshot is a suffix", () => {
-  const existing = [
-    { id: "old-user", kind: "user", text: "old", attachments: [] },
-    { id: "old-assistant", kind: "assistant", text: "old answer", round: 1 },
-    { id: "recent-user", kind: "user", text: "recent", attachments: [] },
-    { id: "recent-assistant", kind: "assistant", text: "recent answer", round: 1 },
-  ];
-  const incoming = [
-    { id: "snapshot-user", kind: "user", text: "recent", attachments: [] },
-    { id: "snapshot-assistant", kind: "assistant", text: "recent answer", round: 1 },
-    { id: "snapshot-new-user", kind: "user", text: "new prompt", attachments: [] },
-  ];
-
-  const merged = liveCommit.mergeHistorySnapshotEntries(existing, incoming);
-
-  assert.deepEqual(
-    merged.map((entry) => entry.text),
-    ["old", "old answer", "recent", "recent answer", "new prompt"],
-  );
-  assert.equal(merged[0].id, "old-user");
-  assert.equal(merged[2].id, "snapshot-user");
-});
-
-test("mergeHistorySnapshotEntries replaces assistant-only live snapshot with persisted user turn", () => {
-  const existing = [
-    { id: "committed-live-assistant", kind: "assistant", text: "live answer", round: 1 },
-  ];
-  const incoming = [
-    { id: "history-user", kind: "user", text: "remote prompt", attachments: [] },
-    { id: "history-assistant", kind: "assistant", text: "live answer", round: 1 },
-  ];
-
-  const merged = liveCommit.mergeHistorySnapshotEntries(existing, incoming);
-
-  assert.deepEqual(
-    merged.map((entry) => entry.text),
-    ["remote prompt", "live answer"],
-  );
-  assert.equal(merged[0].id, "history-user");
-  assert.equal(merged[1].id, "history-assistant");
-});
-
-test("mergeHistorySnapshotEntries keeps live transcript stable when only assistant metadata moves", () => {
-  const meta = {
-    provider: "anthropic",
-    model: "claude-opus",
-    usage: { input: 1, output: 2, totalTokens: 3 },
-  };
-  const existing = [
-    { id: "live-user-1", kind: "user", text: "你好", attachments: [] },
-    { id: "live-assistant-prefix", kind: "assistant", text: "\n", round: 1 },
-    { id: "live-thinking", kind: "thinking", text: "thinking", round: 1 },
-    { id: "live-assistant-answer", kind: "assistant", text: "你好！", round: 1, meta },
-  ];
-  const incoming = [
-    { id: "history-user-1", kind: "user", text: "你好", attachments: [] },
-    { id: "history-assistant-prefix", kind: "assistant", text: "\n", round: 1, meta },
-    { id: "history-thinking", kind: "thinking", text: "thinking", round: 1 },
-    { id: "history-assistant-answer", kind: "assistant", text: "你好！", round: 1 },
-  ];
-
-  const merged = liveCommit.mergeHistorySnapshotEntries(existing, incoming);
-
-  assert.equal(merged, existing);
-  assert.deepEqual(
-    merged.map((entry) => entry.id),
-    ["live-user-1", "live-assistant-prefix", "live-thinking", "live-assistant-answer"],
-  );
-});
-
-test("omitEquivalentTailEntries hides committed live tail without dropping history", () => {
-  const existing = [
-    { id: "history-user-1", kind: "user", text: "first", attachments: [] },
-    { id: "history-assistant-1", kind: "assistant", text: "first answer", round: 1 },
-    { id: "committed-live-assistant", kind: "assistant", text: "live answer", round: 1 },
-  ];
-  const liveEntries = [
-    { id: "live-assistant-1", kind: "assistant", text: "live answer", round: 1 },
-  ];
-
-  const visibleHistory = liveCommit.omitEquivalentTailEntries(existing, liveEntries);
-
-  assert.deepEqual(
-    visibleHistory.map((entry) => entry.text),
-    ["first", "first answer"],
-  );
-  assert.equal(visibleHistory[1].id, "history-assistant-1");
-});
-
-test("omitEquivalentTailEntries treats assistant metadata placement as the same visible tail", () => {
-  const meta = {
-    provider: "anthropic",
-    model: "claude-opus",
-    usage: { input: 1, output: 2, totalTokens: 3 },
-  };
-  const existing = [
-    { id: "history-user-1", kind: "user", text: "你好", attachments: [] },
-    { id: "history-assistant-prefix", kind: "assistant", text: "\n", round: 1, meta },
-    { id: "history-thinking", kind: "thinking", text: "thinking", round: 1 },
-    { id: "history-assistant-answer", kind: "assistant", text: "你好！", round: 1 },
-  ];
-  const liveEntries = [
-    { id: "live-assistant-prefix", kind: "assistant", text: "\n", round: 1 },
-    { id: "live-thinking", kind: "thinking", text: "thinking", round: 1 },
-    { id: "live-assistant-answer", kind: "assistant", text: "你好！", round: 1, meta },
-  ];
-
-  const visibleHistory = liveCommit.omitEquivalentTailEntries(existing, liveEntries);
-
-  assert.deepEqual(
-    visibleHistory.map((entry) => entry.text),
-    ["你好"],
-  );
-});
-
-test("omitEquivalentTailEntries removes live user and assistant overlap", () => {
-  const existing = [
-    { id: "history-user-1", kind: "user", text: "first", attachments: [] },
-    { id: "history-assistant-1", kind: "assistant", text: "first answer", round: 1 },
-    { id: "history-user-2", kind: "user", text: "queued from gui", attachments: [] },
-    { id: "history-assistant-2", kind: "assistant", text: "reply", round: 1 },
-  ];
-  const liveEntries = [
-    { id: "live-user-2", kind: "user", text: "queued from gui", attachments: [] },
-    { id: "live-assistant-2", kind: "assistant", text: "reply", round: 1 },
-  ];
-
-  const visibleHistory = liveCommit.omitEquivalentTailEntries(existing, liveEntries);
-
-  assert.deepEqual(
-    visibleHistory.map((entry) => entry.text),
-    ["first", "first answer"],
-  );
-});
-
-test("omitEquivalentTailEntries removes uploaded live user overlap", () => {
-  const historyAttachment = {
-    relativePath: ".liveagent/uploads/08-conclusion.png",
-    fileName: "08-conclusion.png",
-    kind: "image",
-    sizeBytes: 58368,
-    absolutePath: "/workspace/.liveagent/uploads/08-conclusion.png",
-  };
-  const liveAttachment = {
-    relativePath: ".liveagent/uploads/08-conclusion.png",
-    absolutePath: "/workspace/.liveagent/uploads/08-conclusion.png",
-    fileName: "08-conclusion.png",
-    kind: "image",
-    sizeBytes: 58368,
-  };
-  const existing = [
-    { id: "history-user-1", kind: "user", text: "这是什么", attachments: [historyAttachment] },
-    { id: "history-assistant-1", kind: "assistant", text: "reply", round: 1 },
-  ];
-  const liveEntries = [
-    { id: "live-user-1", kind: "user", text: "这是什么", attachments: [liveAttachment] },
-    { id: "live-assistant-1", kind: "assistant", text: "reply", round: 1 },
-  ];
-
-  const visibleHistory = liveCommit.omitEquivalentTailEntries(existing, liveEntries);
-
-  assert.deepEqual(visibleHistory, []);
-});
-
-test("appendCommittedLiveEntries does not duplicate optimistic user message overlaps", () => {
-  const existing = [
-    { id: "history-user-1", kind: "user", text: "first", attachments: [] },
-    { id: "optimistic-user-2", kind: "user", text: "queued from gui", attachments: [] },
-  ];
-  const liveEntries = [
-    { id: "live-user-2", kind: "user", text: "queued from gui", attachments: [] },
-    { id: "live-assistant-2", kind: "assistant", text: "reply", round: 1 },
-  ];
-
-  const merged = liveCommit.appendCommittedLiveEntries(existing, liveEntries);
-
-  assert.deepEqual(
-    merged.map((entry) => entry.text),
-    ["first", "queued from gui", "reply"],
-  );
-  assert.equal(merged[1].id, "optimistic-user-2");
-  assert.equal(merged[2].kind, "assistant");
-});
-
-test("appendCommittedLiveEntries does not duplicate uploaded optimistic user overlaps", () => {
-  const existing = [
-    {
-      id: "optimistic-user-1",
-      kind: "user",
-      text: "这是什么",
-      attachments: [
-        {
-          relativePath: ".liveagent/uploads/08-conclusion.png",
-          fileName: "08-conclusion.png",
-          kind: "image",
-          sizeBytes: 58368,
-          absolutePath: "/workspace/.liveagent/uploads/08-conclusion.png",
-        },
-      ],
-    },
-  ];
-  const liveEntries = [
-    {
-      id: "live-user-1",
-      kind: "user",
-      text: "这是什么",
-      attachments: [
-        {
-          relativePath: ".liveagent/uploads/08-conclusion.png",
-          absolutePath: "/workspace/.liveagent/uploads/08-conclusion.png",
-          fileName: "08-conclusion.png",
-          kind: "image",
-          sizeBytes: 58368,
-        },
-      ],
-    },
-    { id: "live-assistant-1", kind: "assistant", text: "reply", round: 1 },
-  ];
-
-  const merged = liveCommit.appendCommittedLiveEntries(existing, liveEntries);
-
-  assert.deepEqual(
-    merged.map((entry) => entry.text),
-    ["这是什么", "reply"],
-  );
-  assert.equal(merged[0].id, "optimistic-user-1");
-});
-
-test("mergeHistorySnapshotEntries replaces stale local entries when an authoritative snapshot is shorter", () => {
-  // Simulates: peer A edits the user prompt and resends, server-side history
-  // is now just the new user turn. Without `isFullSnapshot`, the local two-turn
-  // tail is kept and collides with the incoming live stream, producing the
-  // duplicated assistant bubble. With the flag set we yield to the server.
-  const existing = [
-    { id: "local-user-1", kind: "user", text: "old prompt", attachments: [] },
-    { id: "local-assistant-1", kind: "assistant", text: "old answer", round: 1 },
-  ];
-  const incoming = [
-    { id: "server-user-1", kind: "user", text: "edited prompt", attachments: [] },
-  ];
-
-  const withoutFlag = liveCommit.mergeHistorySnapshotEntries(existing, incoming);
+  assert.ok(assistantBubble, "tail assistant bubble rendered");
   assert.equal(
-    withoutFlag,
-    existing,
-    "without the hint we conservatively keep existing — the bug being fixed",
+    assistantBubble.props.renderMode,
+    "streaming",
+    "live-born entries keep the streaming render mode",
   );
+});
 
-  const merged = liveCommit.mergeHistorySnapshotEntries(existing, incoming, {
-    isFullSnapshot: true,
-  });
+test("transcript store history snapshot merge stays quiet for identical content", () => {
+  globalThis.window = undefined;
+  globalThis.document = { visibilityState: "visible" };
+  const store = transcriptStoreModule.createTranscriptStore();
+
+  store.applyHistorySnapshot([
+    { id: "user-1", kind: "user", text: "hello", attachments: [] },
+    { id: "assistant-1", kind: "assistant", text: "world", round: 1 },
+  ]);
+  store.flush();
+  const first = store.getSnapshot();
+  assert.equal(first.committed.length, 2);
+
+  // The quiet upsert merge preserves rendered ids even when the incoming
+  // parse assigned fresh ones (dedup key identity, not id identity).
+  store.applyHistorySnapshot([
+    { id: "user-renamed", kind: "user", text: "hello", attachments: [] },
+    { id: "assistant-renamed", kind: "assistant", text: "world", round: 1 },
+  ]);
+  store.flush();
+  const second = store.getSnapshot();
   assert.deepEqual(
-    merged.map((entry) => entry.text),
-    ["edited prompt"],
+    second.committed.map((entry) => entry.id),
+    ["user-1", "assistant-1"],
   );
-  assert.notStrictEqual(merged, existing);
-});
-
-test("mergeHistorySnapshotEntries with isFullSnapshot=true clears entries when the server is empty", () => {
-  const existing = [
-    { id: "local-user-1", kind: "user", text: "hi", attachments: [] },
-    { id: "local-assistant-1", kind: "assistant", text: "hello", round: 1 },
-  ];
-
-  assert.deepEqual(
-    liveCommit.mergeHistorySnapshotEntries(existing, [], { isFullSnapshot: true }),
-    [],
-  );
-  // Without the hint, empty incoming is treated as "no update available" and
-  // existing is preserved (used during paginated tail fetches).
-  assert.equal(liveCommit.mergeHistorySnapshotEntries(existing, []), existing);
-});
-
-test("mergeHistorySnapshotEntries keeps existing user ids when only the server-side messageRef appears", () => {
-  // Locally created user entries do not have `messageRef` yet — the gateway
-  // assigns it when persisting. The post-stream history refresh would
-  // otherwise see "different" entries and replace them, changing every user
-  // article's React key and re-firing the `chat-bubble-enter` animation on
-  // every user bubble at once.
-  const existing = [
-    { id: "local-user-1", kind: "user", text: "你好", attachments: [] },
-    { id: "live-assistant-1", kind: "assistant", text: "回复", round: 1 },
-  ];
-  const incoming = [
-    {
-      id: "server-user-1",
-      kind: "user",
-      text: "你好",
-      attachments: [],
-      messageRef: { segmentIndex: 0, messageIndex: 0 },
-    },
-    { id: "server-assistant-1", kind: "assistant", text: "回复", round: 1 },
-  ];
-
-  const merged = liveCommit.mergeHistorySnapshotEntries(existing, incoming);
-
-  assert.deepEqual(
-    merged.map((entry) => entry.id),
-    ["local-user-1", "live-assistant-1"],
-    "existing ids must be preserved so React keys stay stable",
-  );
-  assert.deepEqual(merged[0].messageRef, { segmentIndex: 0, messageIndex: 0 });
-});
-
-test("mergeHistorySnapshotEntries with isFullSnapshot=true still preserves identity for matching snapshots", () => {
-  const existing = [
-    { id: "local-user-1", kind: "user", text: "hi", attachments: [] },
-    { id: "local-assistant-1", kind: "assistant", text: "hello", round: 1 },
-  ];
-  const incoming = [
-    { id: "server-user-1", kind: "user", text: "hi", attachments: [] },
-    { id: "server-assistant-1", kind: "assistant", text: "hello", round: 1 },
-  ];
-
-  const merged = liveCommit.mergeHistorySnapshotEntries(existing, incoming, {
-    isFullSnapshot: true,
-  });
-  // Visually equivalent → keep existing references so the React tree does not
-  // remount and the article keys stay stable.
-  assert.equal(merged, existing);
-});
-
-test("formatConversationTitle falls back to stable labels", () => {
-  assert.equal(chatUi.formatConversationTitle({ id: "abc", title: "  Named  " }), "Named");
-  assert.equal(chatUi.formatConversationTitle(null, "conversation-abcdef"), "会话 conversa");
-  assert.equal(chatUi.formatConversationTitle(null, ""), "新对话");
-});
-
-test("resolveConversationBrowserTitle uses project title for project-level empty selection", () => {
-  assert.equal(
-    chatUi.resolveConversationBrowserTitle({
-      conversation: null,
-      conversationId: "conversation-abcdef",
-      projectName: "  Project Alpha  ",
-      newConversationTitle: "LiveAgent",
-    }),
-    "Project Alpha",
-  );
-  assert.equal(
-    chatUi.resolveConversationBrowserTitle({
-      conversation: { id: "conversation-abcdef", title: "  Named  " },
-      conversationId: "conversation-abcdef",
-      projectName: "Project Alpha",
-      newConversationTitle: "LiveAgent",
-    }),
-    "Named",
-  );
-  assert.equal(
-    chatUi.resolveConversationBrowserTitle({
-      conversation: null,
-      conversationId: "__local_draft__:abc",
-      projectName: "Project Alpha",
-      isLocalDraftConversation: true,
-      newConversationTitle: "LiveAgent",
-    }),
-    "LiveAgent",
-  );
-});
-
-test("buildOptimisticConversationTitle uses the first ten characters of the first prompt paragraph", () => {
-  assert.equal(
-    chatUi.buildOptimisticConversationTitle("  12345 67890 abc\nstill first paragraph\n\nsecond"),
-    "12345 6789",
-  );
-  assert.equal(
-    chatUi.buildOptimisticConversationTitle("这是第一段提示词超过十个字\n\n第二段"),
-    "这是第一段提示词超过",
-  );
-  assert.equal(chatUi.buildOptimisticConversationTitle("   \n\n  "), "新对话");
 });

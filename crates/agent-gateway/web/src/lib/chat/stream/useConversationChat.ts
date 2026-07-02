@@ -1,0 +1,151 @@
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import type { GatewayWebSocketClientLike } from "@/lib/gatewaySocket";
+import type { ActivityStore } from "./activityStore";
+import type { ConversationStreamEvent, ConversationSubscribeResult } from "./streamTypes";
+import type { TranscriptSnapshot, TranscriptStore } from "./transcriptStore";
+import { createTranscriptStore } from "./transcriptStore";
+
+// Registry of transcript stores, one per conversation. Stores persist across
+// conversation switches so revisiting a conversation keeps its tail state;
+// they are dropped when the conversation is deleted or re-keyed.
+export type TranscriptStoreRegistry = {
+  get(conversationId: string): TranscriptStore;
+  peek(conversationId: string): TranscriptStore | null;
+  move(fromConversationId: string, toConversationId: string): void;
+  remove(conversationId: string): void;
+  clear(): void;
+};
+
+export function createTranscriptStoreRegistry(): TranscriptStoreRegistry {
+  const stores = new Map<string, TranscriptStore>();
+  return {
+    get(conversationId) {
+      let store = stores.get(conversationId);
+      if (!store) {
+        store = createTranscriptStore();
+        stores.set(conversationId, store);
+      }
+      return store;
+    },
+    peek(conversationId) {
+      return stores.get(conversationId) ?? null;
+    },
+    move(fromConversationId, toConversationId) {
+      const store = stores.get(fromConversationId);
+      if (!store) {
+        return;
+      }
+      stores.delete(fromConversationId);
+      stores.set(toConversationId, store);
+    },
+    remove(conversationId) {
+      stores.delete(conversationId);
+    },
+    clear() {
+      stores.clear();
+    },
+  };
+}
+
+const EMPTY_TRANSCRIPT: TranscriptSnapshot = {
+  committed: [],
+  tail: [],
+  activeRun: null,
+  toolStatus: null,
+  toolStatusIsCompaction: false,
+  foldRevision: 0,
+  revision: 0,
+};
+
+export type ConversationChatBinding = {
+  transcript: TranscriptSnapshot;
+  // The conversation has an active run (from the transcript's own stream
+  // state — activityStore covers non-visible conversations).
+  busy: boolean;
+};
+
+// Binds the visible conversation to its transcript store and a persistent
+// stream subscription. Subscribing eagerly — before any run exists — is what
+// makes queue auto-sends race-free: the events just flow in.
+export function useConversationChat(params: {
+  api: GatewayWebSocketClientLike | null;
+  conversationId: string | null;
+  registry: TranscriptStoreRegistry;
+  activityStore: ActivityStore;
+  isLocalDraft: (conversationId: string) => boolean;
+  // Extra chances for the app layer to observe stream traffic (titles,
+  // pending-command settlement, tunnel events, queue refreshes).
+  onStreamEvent?: (conversationId: string, event: ConversationStreamEvent) => void;
+  onStreamSync?: (conversationId: string, result: ConversationSubscribeResult) => void;
+  hasPendingCommand: (conversationId: string) => boolean;
+  pendingRevision: number;
+}): ConversationChatBinding {
+  const {
+    api,
+    conversationId,
+    registry,
+    activityStore,
+    isLocalDraft,
+    onStreamEvent,
+    onStreamSync,
+    hasPendingCommand,
+    pendingRevision,
+  } = params;
+
+  const onStreamEventRef = useRef(onStreamEvent);
+  onStreamEventRef.current = onStreamEvent;
+  const onStreamSyncRef = useRef(onStreamSync);
+  onStreamSyncRef.current = onStreamSync;
+
+  const store = useMemo(
+    () => (conversationId ? registry.get(conversationId) : null),
+    [conversationId, registry],
+  );
+
+  useEffect(() => {
+    if (!api || !conversationId || !store || isLocalDraft(conversationId)) {
+      return;
+    }
+    const cleanup = api.subscribeConversationStream(conversationId, {
+      onSync: (result) => {
+        store.applySync(result);
+        onStreamSyncRef.current?.(conversationId, result);
+      },
+      onEvent: (event) => {
+        store.applyEvent(event);
+        onStreamEventRef.current?.(conversationId, event);
+      },
+    });
+    return cleanup;
+  }, [api, conversationId, store, isLocalDraft]);
+
+  const subscribeTranscript = useCallback(
+    (listener: () => void) => (store ? store.subscribe(listener) : () => {}),
+    [store],
+  );
+  const getTranscript = useCallback(
+    () => (store ? store.getSnapshot() : EMPTY_TRANSCRIPT),
+    [store],
+  );
+  const transcript = useSyncExternalStore(subscribeTranscript, getTranscript, getTranscript);
+
+  const subscribeActivity = useCallback(
+    (listener: () => void) => activityStore.subscribe(listener),
+    [activityStore],
+  );
+  const getActivityRevision = useCallback(
+    () => activityStore.getSnapshot().revision,
+    [activityStore],
+  );
+  useSyncExternalStore(subscribeActivity, getActivityRevision, getActivityRevision);
+
+  const busy = Boolean(
+    conversationId &&
+      (transcript.activeRun !== null ||
+        hasPendingCommand(conversationId) ||
+        activityStore.isRunning(conversationId)),
+  );
+  void pendingRevision;
+
+  return { transcript, busy };
+}

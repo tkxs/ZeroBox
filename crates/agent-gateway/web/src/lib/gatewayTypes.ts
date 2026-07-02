@@ -1,4 +1,3 @@
-import type { ChatEntry } from "@/lib/chatUi";
 import type {
   CodexRequestFormat,
   ChatRuntimeControls,
@@ -251,12 +250,13 @@ export type HistoryList = {
   running_conversations?: RunningConversationSummary[];
 };
 
+// history.list `running_conversations` items — the gateway's activity
+// registry snapshot at response time.
 export type RunningConversationSummary = {
   conversation_id: string;
   run_id?: string;
+  state?: string;
   cwd?: string;
-  first_seq?: number;
-  run_epoch?: number;
   updated_at?: number;
 };
 
@@ -315,34 +315,4 @@ export type GatewayHistoryEvent =
       kind: "delete";
       conversation_id: string;
       conversation?: undefined;
-    }
-  | {
-      kind: "running" | "idle";
-      conversation_id: string;
-      conversation?: ConversationSummary;
-      run_id?: string;
-      first_seq?: number;
-      run_epoch?: number;
-      updated_at?: number;
     };
-
-export type LiveConversationStreamSnapshot = {
-  revision: number;
-  entries: ChatEntry[];
-  toolStatus: string | null;
-  toolStatusIsCompaction: boolean;
-};
-
-export type LiveConversationStreamStore = {
-  getSnapshot: () => LiveConversationStreamSnapshot;
-  subscribe: (listener: () => void) => () => void;
-  applySnapshot: (event: ChatRuntimeSnapshotEvent, options?: { flush?: boolean }) => void;
-  appendEvent: (event: ChatEvent, options?: { flush?: boolean }) => void;
-  setToolStatus: (
-    toolStatus: string | null | undefined,
-    isCompaction?: boolean,
-    options?: { flush?: boolean },
-  ) => void;
-  reset: () => void;
-  flush: () => void;
-};

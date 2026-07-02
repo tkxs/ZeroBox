@@ -306,27 +306,6 @@ function updateHistoryListWithEvent(history: HistoryList | null, event: any): Hi
     };
   }
 
-  if (event.kind === "running" || event.kind === "idle") {
-    const runId = typeof event.run_id === "string" ? event.run_id.trim() : "";
-    const runningConversations = (history.running_conversations ?? []).filter(
-      (item) => item.conversation_id !== conversationId,
-    );
-    if (event.kind === "running" && runId) {
-      runningConversations.push({
-        conversation_id: conversationId,
-        run_id: runId,
-        cwd: typeof event.conversation?.cwd === "string" ? event.conversation.cwd : undefined,
-        first_seq: typeof event.first_seq === "number" ? event.first_seq : undefined,
-        run_epoch: typeof event.run_epoch === "number" ? event.run_epoch : undefined,
-        updated_at: typeof event.updated_at === "number" ? event.updated_at : undefined,
-      });
-    }
-    return {
-      ...history,
-      running_conversations: runningConversations,
-    };
-  }
-
   const conversation = event.conversation as ConversationSummary | undefined;
   if (event.kind !== "upsert" || !conversation?.id) {
     return history;

@@ -17,8 +17,6 @@ import {
 } from "@/lib/workspaceProjects";
 
 import { MOBILE_SIDEBAR_MEDIA_QUERY } from "./constants";
-import { normalizeOptionalStatus } from "./chatEventUtils";
-import type { ConversationRuntimeEntry } from "./types";
 
 export function formatTranslation(
   template: string,
@@ -131,20 +129,6 @@ export function hasLocalDraftConversation(params: {
   );
 }
 
-export function createConversationRuntimeEntry(
-  input?: Partial<ConversationRuntimeEntry>,
-): ConversationRuntimeEntry {
-  const toolStatus = normalizeOptionalStatus(input?.toolStatus);
-  return {
-    messages: input?.messages ?? [],
-    error: input?.error ?? null,
-    toolStatus,
-    toolStatusIsCompaction: toolStatus ? input?.toolStatusIsCompaction === true : false,
-    isSending: input?.isSending ?? false,
-    workdir: input?.workdir?.trim() || undefined,
-  };
-}
-
 export function resolveVisibleConversationId(
   selectedHistoryId: string,
   conversationId: string,
@@ -165,13 +149,4 @@ export function isMobileSidebarLayout() {
 
 export function shouldOpenSidebarByDefault() {
   return !isMobileSidebarLayout();
-}
-
-export function hasDetachedHistorySelection(
-  selectedHistoryId: string,
-  conversationId: string,
-) {
-  const selectedId = selectedHistoryId.trim();
-  const activeConversationId = conversationId.trim();
-  return selectedId !== "" && selectedId !== activeConversationId;
 }

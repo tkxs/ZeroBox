@@ -23,6 +23,12 @@ type MarkdownProps = {
   content: string;
   className?: string;
   isAnimating?: boolean;
+  // Fixed per-entry render mode: entries born in the live region render in
+  // Streamdown streaming mode forever; history-born entries render static.
+  // The mode of a given entry never flips, so the streaming→static
+  // re-render (and its late shiki re-highlight reflow) cannot happen. When
+  // omitted, falls back to deriving the mode from `isAnimating`.
+  renderMode?: "streaming" | "static";
   // Independently control caret visibility. Defaults to `isAnimating`.
   // Set to `false` when the source content is no longer receiving tokens but
   // we still want to keep Streamdown in streaming mode (to avoid the heavy
@@ -293,10 +299,11 @@ export const Markdown = memo(function Markdown(props: MarkdownProps) {
     content,
     className,
     isAnimating = false,
+    renderMode,
     showCaret = isAnimating,
     readOnly = false,
   } = props;
-  const useStreamingMode = isAnimating;
+  const useStreamingMode = renderMode ? renderMode === "streaming" : isAnimating;
   const isActivelyStreaming = showCaret;
   const codeCopyRootRef = useEnabledCodeCopyButtons(!readOnly && isActivelyStreaming);
   // Keep Streamdown's caret pseudo-element mounted while in streaming mode;
@@ -330,7 +337,7 @@ export const Markdown = memo(function Markdown(props: MarkdownProps) {
           enabled: !readOnly,
           renderModal: (modalProps) => <ExternalLinkModal {...modalProps} />,
         }}
-        {...(useStreamingMode ? {} : { shikiTheme: ["github-light", "github-dark"] as const })}
+        shikiTheme={["github-light", "github-dark"] as const}
         controls={{
           code: { copy: !readOnly, download: false },
           mermaid: { copy: !readOnly, download: false, fullscreen: !readOnly, panZoom: !readOnly },

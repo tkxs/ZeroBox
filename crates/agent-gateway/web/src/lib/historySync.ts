@@ -1,8 +1,4 @@
-import type {
-  ConversationSummary,
-  GatewayHistoryEvent,
-  RunningConversationSummary,
-} from "./gatewayTypes";
+import type { ConversationSummary, GatewayHistoryEvent } from "./gatewayTypes";
 
 type ReconcileConversationSummariesOptions = {
   retainConversationIds?: Iterable<string>;
@@ -145,78 +141,6 @@ export function sortConversationSummaries(
   });
 }
 
-function normalizeRunningConversationSummary(
-  value: unknown,
-): RunningConversationSummary | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const source = value as Record<string, unknown>;
-  const conversationId =
-    typeof source.conversation_id === "string" ? source.conversation_id.trim() : "";
-  if (!conversationId) {
-    return null;
-  }
-  const cwd = typeof source.cwd === "string" ? source.cwd.trim() : "";
-  const runId = typeof source.run_id === "string" ? source.run_id.trim() : "";
-  if (!runId) {
-    return null;
-  }
-  const firstSeq =
-    typeof source.first_seq === "number" &&
-    Number.isFinite(source.first_seq) &&
-    source.first_seq > 0
-      ? Math.floor(source.first_seq)
-      : undefined;
-  const runEpoch =
-    typeof source.run_epoch === "number" &&
-    Number.isFinite(source.run_epoch) &&
-    source.run_epoch > 0
-      ? Math.floor(source.run_epoch)
-      : undefined;
-  const updatedAt =
-    typeof source.updated_at === "number" && Number.isFinite(source.updated_at)
-      ? source.updated_at
-      : undefined;
-  return {
-    conversation_id: conversationId,
-    run_id: runId || undefined,
-    cwd: cwd || undefined,
-    first_seq: firstSeq,
-    run_epoch: runEpoch,
-    updated_at: updatedAt,
-  };
-}
-
-export function normalizeRunningConversations(
-  conversations: readonly unknown[] | undefined,
-) {
-  const seen = new Set<string>();
-  const normalized: RunningConversationSummary[] = [];
-  for (const value of conversations ?? []) {
-    const summary = normalizeRunningConversationSummary(value);
-    if (!summary || seen.has(summary.conversation_id)) {
-      continue;
-    }
-    seen.add(summary.conversation_id);
-    normalized.push(summary);
-  }
-  return normalized;
-}
-
-export function resolveRunningConversationStreamAfterSeq(
-  firstSeq: unknown,
-  options?: { runId?: unknown },
-) {
-  if (typeof options?.runId === "string" && options.runId.trim()) {
-    return 0;
-  }
-  if (typeof firstSeq !== "number" || !Number.isFinite(firstSeq) || firstSeq <= 1) {
-    return 0;
-  }
-  return Math.floor(firstSeq) - 1;
-}
-
 export function upsertConversationSummary(
   conversations: ConversationSummary[],
   nextConversation: ConversationSummary,
@@ -290,9 +214,6 @@ export function applyGatewayHistoryEvent(
   switch (event.kind) {
     case "delete":
       return conversations.filter((item) => item.id !== event.conversation_id);
-    case "running":
-    case "idle":
-      return conversations;
     case "upsert": {
       const conversationId = event.conversation_id.trim();
       const preserveTitleConversationIds = new Set(
