@@ -90,6 +90,7 @@ import {
 } from "@/lib/chat/historyListScope";
 import {
   buildOptimisticConversationTitle,
+  chatEntryDedupKey,
   pushChatEvent,
   resolveConversationBrowserTitle,
   type ChatEntry,
@@ -130,11 +131,7 @@ function shouldHydrateRestoredConversationSnapshot(params: {
 }
 import { memoryDeleteProject } from "@/lib/memory/api";
 function chatEntryContentKey(entry: ChatEntry) {
-  if (entry.kind === "user") {
-    return JSON.stringify({ kind: entry.kind, text: entry.text });
-  }
-  const { id: _id, ...rest } = entry;
-  return JSON.stringify(rest);
+  return chatEntryDedupKey(entry);
 }
 
 function hasEquivalentTailEntries(existing: ChatEntry[], tail: ChatEntry[]) {
@@ -3591,9 +3588,33 @@ export default function GatewayApp() {
     const lockedConversationIds = new Set<string>([activeConversationId]);
     chatStartLocksRef.current.add(activeConversationId);
 
-    commitConversationLiveStreamToRuntime(activeConversationId, {
-      clearLiveStream: true,
-    });
+    // Committing a retained live reply moves it from the live section into the
+    // virtualized history list. For the visible conversation, run that move as
+    // one synchronous, scroll-compensated commit — otherwise the virtualizer
+    // paints a frame with estimated row heights and the transcript visibly
+    // jumps right as the prompt is sent.
+    const retainedLiveEntryCount =
+      liveConversationStreamStoresRef.current.get(activeConversationId)?.getSnapshot().entries
+        .length ?? 0;
+    const isVisibleConversationAtSend =
+      resolveVisibleConversationId(selectedHistoryIdRef.current, conversationIdRef.current) ===
+      activeConversationId;
+    if (retainedLiveEntryCount > 0 && isVisibleConversationAtSend) {
+      preserveTranscriptScrollPosition(
+        () => {
+          flushSync(() => {
+            commitConversationLiveStreamToRuntime(activeConversationId, {
+              clearLiveStream: true,
+            });
+          });
+        },
+        { stickToBottom: isTranscriptAtBottom() },
+      );
+    } else {
+      commitConversationLiveStreamToRuntime(activeConversationId, {
+        clearLiveStream: true,
+      });
+    }
     getConversationLiveStreamStore(activeConversationId);
     const controller = new AbortController();
     setConversationAbortController(activeConversationId, controller);
@@ -3854,6 +3875,7 @@ export default function GatewayApp() {
               activeConversationId,
               preserveRemoteRunCleanupOptions(),
             );
+            break;
           }
           continue;
         }
@@ -3899,6 +3921,7 @@ export default function GatewayApp() {
               api,
               preserveRemoteRunCleanupOptions(),
             );
+            break;
           } else if (isRuntimeStartedChatControlEvent(event)) {
             markRuntimeStarted();
             updateConversationRuntimeEntry(activeConversationId, (current) => ({
@@ -3938,11 +3961,20 @@ export default function GatewayApp() {
           if (terminalEvent) {
             terminalEventSeen = true;
             clearRuntimeStartingStatusTimer();
+            const liveTitle = readChatEventTitle(event);
+            if (liveTitle && isChatEventTitleFinal(event)) {
+              applyLiveConversationTitle(
+                event.conversation_id?.trim() || activeConversationId,
+                liveTitle,
+                { isFinal: true },
+              );
+            }
             finalizeTerminalLiveStream(
               activeConversationId,
               api,
               preserveRemoteRunCleanupOptions(),
             );
+            break;
           }
         }
         const liveTitle = readChatEventTitle(event);
@@ -5159,12 +5191,6 @@ export default function GatewayApp() {
         }
       };
 
-      void hydrateEditPrefix().catch((error) => {
-        if (isCurrentEditTransaction()) {
-          console.warn("edit resend history prefix hydration failed", error);
-        }
-      });
-
       try {
         const resendPromise =
           sendChatRef.current?.(normalized, {
@@ -5175,6 +5201,16 @@ export default function GatewayApp() {
             optimisticUserEntryId: optimisticEditUserEntryId,
             skipOptimisticUserEntry: true,
           }) ?? Promise.resolve();
+        // Start prefix hydration AFTER sendChat so the chat.command WebSocket
+        // message is queued before history.prefix.  The desktop agent processes
+        // inbound gRPC envelopes sequentially — sending history.prefix first
+        // would block the lightweight chat.edit_resend dispatch behind a heavy
+        // DB read, adding unnecessary "Preparing request…" latency.
+        void hydrateEditPrefix().catch((error) => {
+          if (isCurrentEditTransaction()) {
+            console.warn("edit resend history prefix hydration failed", error);
+          }
+        });
         await resendPromise;
         if (isCurrentEditTransaction()) {
           await refreshVisibleConversationHistorySnapshot(activeConversationId, api, {

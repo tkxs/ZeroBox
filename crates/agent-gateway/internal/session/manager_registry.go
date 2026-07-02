@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -52,6 +53,9 @@ func (m *Manager) SetSession(s *AgentSession) {
 	}
 	if previous != nil && previous != s {
 		previous.Close()
+	}
+	if s != nil && sessionChanged {
+		m.cmdQueue.DrainTo(s)
 	}
 }
 
@@ -241,6 +245,14 @@ func (m *Manager) SendToAgentContext(ctx context.Context, env *gatewayv1.Gateway
 
 	err := session.SendToAgentContext(ctx, env)
 	m.clearSessionAfterSendError(session, err)
+	return err
+}
+
+func (m *Manager) SendToAgentOrQueue(ctx context.Context, env *gatewayv1.GatewayEnvelope) error {
+	err := m.SendToAgentContext(ctx, env)
+	if errors.Is(err, ErrAgentOffline) {
+		return m.cmdQueue.Enqueue(ctx, env)
+	}
 	return err
 }
 

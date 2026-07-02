@@ -26,19 +26,7 @@ const grpcShutdownTimeout = 3 * time.Second
 
 func main() {
 	cfg := config.Load()
-	chatEventStore, err := session.OpenSQLiteChatEventStore(cfg.ChatEventStorePath)
-	if err != nil {
-		log.Fatalf("open chat event store: %v", err)
-	}
-	defer func() {
-		if err := chatEventStore.Close(); err != nil {
-			log.Printf("close chat event store: %v", err)
-		}
-	}()
-	sm, err := session.NewManagerWithChatEventStore(chatEventStore)
-	if err != nil {
-		log.Fatalf("initialize session manager: %v", err)
-	}
+	sm := session.NewManager()
 
 	grpcServer, err := newGRPCServer(cfg, sm)
 	if err != nil {

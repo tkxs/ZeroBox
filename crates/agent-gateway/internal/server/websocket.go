@@ -125,6 +125,9 @@ type websocketConnection struct {
 	heartbeatOnce          sync.Once
 
 	terminalInterest *websocketTerminalInterestTracker
+
+	chatSubsMu sync.Mutex
+	chatSubs   map[string]*chatSubscription
 }
 
 const maxHistoryListLimit = 200
@@ -235,6 +238,7 @@ func (c *websocketConnection) close() {
 			c.chatQueueEventsCleanup()
 			c.chatQueueEventsCleanup = nil
 		}
+		c.cleanupChatSubscriptions()
 		_ = c.conn.Close()
 	})
 }

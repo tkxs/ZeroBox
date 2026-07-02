@@ -33,22 +33,11 @@ import type {
   SftpTransferResponse,
 } from "@/lib/sftp/types";
 import { BrowserGatewayTerminalStreamClient } from "@/lib/terminal/gatewayTerminalStreamClient";
-const RECOVERABLE_TRANSPORT_STATUS_CODES = new Set([408, 425, 429, 502, 503, 504, 520, 521, 522, 523, 524]);
-const RECOVERABLE_TRANSPORT_MESSAGE_RE =
-  /\b(?:502\s+bad\s+gateway|503\s+service\s+unavailable|504\s+gateway\s+timeout|bad\s+gateway|gateway\s+timeout|service\s+unavailable|temporarily\s+unavailable|failed\s+to\s+fetch|networkerror|network\s+error|load\s+failed|connection\s+(?:reset|closed|lost)|socket\s+hang\s+up|err_(?:network|internet_disconnected|connection_(?:reset|closed|refused)))\b/i;
-function isRecoverableChatStreamTransportStatus(status: number) {
-  return Number.isInteger(status) && RECOVERABLE_TRANSPORT_STATUS_CODES.has(status);
-}
-function isRecoverableChatStreamTransportMessage(value: unknown) {
-  const message = value instanceof Error ? value.message : typeof value === "string" ? value : String(value ?? "");
-  return RECOVERABLE_TRANSPORT_MESSAGE_RE.test(message.trim());
-}
 
 import type {
   AgentStatus,
   ChatQueueResponse,
   ChatQueueSnapshot,
-  ChatControlEvent,
   ChatEvent,
   ConversationSummary,
   GatewayHistoryEvent,
@@ -512,18 +501,6 @@ function buildWebSocketUrl() {
   return url.toString();
 }
 
-function buildGatewayApiUrl(pathname: string) {
-  const origin = getRuntimeOrigin();
-  if (!origin) {
-    throw new Error("Gateway API origin is unavailable");
-  }
-  const url = new URL(origin);
-  url.pathname = pathname;
-  url.search = "";
-  url.hash = "";
-  return url;
-}
-
 function createChatClientRequestId(input: GatewayChatCommandInput) {
   const commandType = input.type.trim() || "chat.command";
   const conversationId = input.conversationId?.trim() || "new";
@@ -672,293 +649,23 @@ function normalizeChatQueueEvent(
   );
 }
 
-function parseChatSseBlock(block: string): ChatEvent | null {
-  const dataLines: string[] = [];
-  for (const rawLine of block.split(/\r?\n/)) {
-    if (rawLine.startsWith("data:")) {
-      dataLines.push(rawLine.slice(5).trimStart());
-    }
+// Consumers (sendChat's preserveRemoteRunOnMismatch cleanup guards) read the
+// originating run id from non-enumerable event metadata so it never leaks into
+// persisted transcript entries. The gateway includes `run_id` on every
+// forwarded chat event; without this attachment a webui-initiated run's
+// cleanup cannot tell its own run apart from a newer run (e.g. a GUI queue
+// auto-send) and wipes the new run's remote-running state.
+function attachChatEventRunMetadata(event: ChatEvent) {
+  const runId = (event as ChatEvent & { run_id?: unknown }).run_id;
+  if (typeof runId !== "string" || !runId.trim()) {
+    return event;
   }
-  const data = dataLines.join("\n").trim();
-  if (!data) {
-    return null;
-  }
-  const decoded = JSON.parse(data) as {
-    payload?: unknown;
-    seq?: number;
-    run_id?: string;
-    snapshot_run_id?: string;
-    conversation_id?: string;
-  };
-  const payload =
-    decoded.payload && typeof decoded.payload === "object"
-      ? ({ ...(decoded.payload as Record<string, unknown>) } as ChatEvent)
-      : ({ ...(decoded as Record<string, unknown>) } as ChatEvent);
-  if (typeof payload.seq !== "number" && typeof decoded.seq === "number") {
-    payload.seq = decoded.seq;
-  }
-  if (
-    !("conversation_id" in payload) &&
-    typeof decoded.conversation_id === "string" &&
-    decoded.conversation_id.trim()
-  ) {
-    (payload as ChatEvent & { conversation_id?: string }).conversation_id =
-      decoded.conversation_id;
-  }
-  attachChatEventMetadata(payload, {
-    runId: decoded.run_id,
-    snapshotRunId: decoded.snapshot_run_id,
+  Object.defineProperty(event, "__gatewayRunId", {
+    value: runId.trim(),
+    enumerable: false,
+    configurable: true,
   });
-  return typeof payload.type === "string" ? payload : null;
-}
-
-function attachChatEventMetadata(
-  event: ChatEvent,
-  metadata: { runId?: string; snapshotRunId?: string },
-) {
-  const runId = metadata.runId?.trim() ?? "";
-  const snapshotRunId = metadata.snapshotRunId?.trim() ?? "";
-  if (runId) {
-    Object.defineProperty(event, "__gatewayRunId", {
-      value: runId,
-      enumerable: false,
-      configurable: true,
-    });
-  }
-  if (snapshotRunId) {
-    Object.defineProperty(event, "__gatewaySnapshotRunId", {
-      value: snapshotRunId,
-      enumerable: false,
-      configurable: true,
-    });
-  }
-}
-
-async function readGatewayHTTPError(response: Response, fallback: string) {
-  let raw = "";
-  try {
-    raw = await response.text();
-  } catch {
-    raw = "";
-  }
-  if (raw.trim()) {
-    try {
-      const decoded = JSON.parse(raw) as { error?: unknown; message?: unknown };
-      const message = String(decoded.error ?? decoded.message ?? "").trim();
-      if (message) {
-        return message;
-      }
-    } catch {
-      return raw.trim();
-    }
-  }
-  return `${fallback} (${response.status})`;
-}
-
-async function postGatewayChatCommand<T = unknown>(
-  tokenInput: string,
-  payload: unknown,
-  signal?: AbortSignal,
-): Promise<T> {
-  const token = tokenInput.trim();
-  if (!token) {
-    throw new Error("Gateway token is required");
-  }
-  const response = await fetch(buildGatewayApiUrl("/api/chat/commands").toString(), {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      "X-LiveAgent-CSRF": "1",
-    },
-    body: JSON.stringify(payload),
-    signal,
-  });
-  if (!response.ok) {
-    throw new Error(await readGatewayHTTPError(response, "Gateway chat command failed"));
-  }
-  return (await response.json()) as T;
-}
-
-async function* readChatEventStream(body: ReadableStream<Uint8Array>): AsyncGenerator<ChatEvent> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      let boundary = buffer.search(/\r?\n\r?\n/);
-      while (boundary >= 0) {
-        const block = buffer.slice(0, boundary);
-        const match = buffer.slice(boundary).match(/^\r?\n\r?\n/);
-        buffer = buffer.slice(boundary + (match?.[0].length ?? 2));
-        const event = parseChatSseBlock(block);
-        if (event) {
-          yield event;
-        }
-        boundary = buffer.search(/\r?\n\r?\n/);
-      }
-    }
-    const tail = buffer + decoder.decode();
-    const event = parseChatSseBlock(tail);
-    if (event) {
-      yield event;
-    }
-  } finally {
-    try {
-      await reader.cancel();
-    } catch {
-      // The stream may already be closed by the server.
-    }
-    reader.releaseLock();
-  }
-}
-
-function waitForChatReconnect(delayMs: number, signal?: AbortSignal) {
-  if (signal?.aborted || delayMs <= 0) {
-    return Promise.resolve();
-  }
-  return new Promise<void>((resolve) => {
-    const host = getRuntimeHost();
-    const timeoutId = host.setTimeout(() => {
-      signal?.removeEventListener("abort", handleAbort);
-      resolve();
-    }, delayMs);
-    const handleAbort = () => {
-      host.clearTimeout(timeoutId);
-      signal?.removeEventListener("abort", handleAbort);
-      resolve();
-    };
-    signal?.addEventListener("abort", handleAbort, { once: true });
-  });
-}
-
-function nextChatReconnectDelay(reconnectAttempt: number) {
-  const baseDelay = Math.min(
-    RECONNECT_MAX_DELAY_MS,
-    RECONNECT_INITIAL_DELAY_MS * 2 ** Math.min(reconnectAttempt, 5),
-  );
-  const jitter = Math.floor(Math.random() * Math.min(500, Math.max(1, baseDelay)));
-  return baseDelay + jitter;
-}
-
-async function* streamGatewayChatEvents(params: {
-  token: string;
-  runId?: string;
-  conversationId?: string;
-  afterSeq?: number;
-  signal?: AbortSignal;
-}): AsyncGenerator<ChatEvent> {
-  const token = params.token.trim();
-  if (!token) {
-    throw new Error("Gateway token is required");
-  }
-  const runId = params.runId?.trim() ?? "";
-  let conversationId = params.conversationId?.trim() ?? "";
-  if (!runId && !conversationId) {
-    throw new Error("run_id or conversation_id is required");
-  }
-
-  let lastSeq = normalizeAfterSeq(params.afterSeq);
-  let reconnectAttempt = 0;
-  let terminalSeen = false;
-  while (!terminalSeen && !params.signal?.aborted) {
-    const eventsUrl = buildGatewayApiUrl("/api/chat/events");
-    if (runId) {
-      eventsUrl.searchParams.set("run_id", runId);
-    }
-    if (conversationId) {
-      eventsUrl.searchParams.set("conversation_id", conversationId);
-    }
-    eventsUrl.searchParams.set("after_seq", String(lastSeq));
-
-    let response: Response;
-    try {
-      const headers: Record<string, string> = {
-        Accept: "text/event-stream",
-        Authorization: `Bearer ${token}`,
-      };
-      if (lastSeq > 0) {
-        headers["Last-Event-ID"] = String(lastSeq);
-      }
-      response = await fetch(eventsUrl.toString(), {
-        method: "GET",
-        headers,
-        signal: params.signal,
-      });
-    } catch {
-      if (params.signal?.aborted) {
-        return;
-      }
-      const delay = nextChatReconnectDelay(reconnectAttempt);
-      reconnectAttempt += 1;
-      await waitForChatReconnect(delay, params.signal);
-      continue;
-    }
-
-    if (!response.ok) {
-      const message = await readGatewayHTTPError(response, "Gateway chat event stream failed");
-      if (
-        isRecoverableChatStreamTransportStatus(response.status) ||
-        isRecoverableChatStreamTransportMessage(message)
-      ) {
-        const delay = nextChatReconnectDelay(reconnectAttempt);
-        reconnectAttempt += 1;
-        await waitForChatReconnect(delay, params.signal);
-        continue;
-      }
-      throw new Error(message);
-    }
-
-    if (!response.body) {
-      throw new Error(await readGatewayHTTPError(response, "Gateway chat event stream failed"));
-    }
-
-    try {
-      for await (const event of readChatEventStream(response.body)) {
-        if (runId) {
-          const eventRunId = readChatEventRunId(event);
-          if (eventRunId && eventRunId !== runId) {
-            continue;
-          }
-        }
-        const seq = readChatEventSeq(event);
-        if (seq > 0 && seq <= lastSeq) {
-          continue;
-        }
-        if (seq > lastSeq) {
-          lastSeq = seq;
-        }
-        if (event.conversation_id?.trim()) {
-          conversationId = event.conversation_id.trim();
-        }
-        terminalSeen = isTerminalChatEventForStream(event, runId);
-        if (isTerminalChatEvent(event) && !terminalSeen) {
-          continue;
-        }
-        reconnectAttempt = 0;
-        yield event;
-        if (terminalSeen || params.signal?.aborted) {
-          break;
-        }
-      }
-    } catch {
-      if (params.signal?.aborted) {
-        return;
-      }
-    }
-
-    if (!terminalSeen && !params.signal?.aborted) {
-      const delay = nextChatReconnectDelay(reconnectAttempt);
-      reconnectAttempt += 1;
-      await waitForChatReconnect(delay, params.signal);
-    }
-  }
+  return event;
 }
 
 const RECONNECT_INITIAL_DELAY_MS = 500;
@@ -1019,77 +726,6 @@ function isForegroundWakeupEvent(event?: Event) {
     return false;
   }
   return true;
-}
-
-function readChatEventSeq(event: ChatEvent) {
-  const seq = event.seq;
-  return typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? Math.floor(seq) : 0;
-}
-
-function readChatEventRunId(event: ChatEvent) {
-  const runId = (event as ChatEvent & { __gatewayRunId?: unknown }).__gatewayRunId;
-  return typeof runId === "string" ? runId.trim() : "";
-}
-
-function readChatEventSnapshotRunId(event: ChatEvent) {
-  const runId = (event as ChatEvent & { __gatewaySnapshotRunId?: unknown })
-    .__gatewaySnapshotRunId;
-  return typeof runId === "string" ? runId.trim() : "";
-}
-
-function isChatControlEvent(
-  event: ChatEvent | null | undefined,
-): event is ChatControlEvent {
-  switch (event?.type) {
-    case "accepted":
-    case "user_message":
-    case "rebased":
-    case "projection_updated":
-    case "delivered":
-    case "claimed":
-    case "starting":
-    case "queued_in_gui":
-    case "started":
-    case "progress":
-    case "completed":
-    case "failed":
-    case "cancelled":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function isTerminalChatControlEvent(event: ChatEvent | null | undefined) {
-  if (!isChatControlEvent(event)) {
-    return false;
-  }
-  return event?.state === "completed" || event?.state === "failed" || event?.state === "cancelled";
-}
-
-function isTerminalChatEvent(event: ChatEvent | null | undefined) {
-  if (event?.type === "runtime_snapshot") {
-    return (
-      event.state === "completed" || event.state === "failed" || event.state === "cancelled"
-    );
-  }
-  return event?.type === "done" || event?.type === "error" || isTerminalChatControlEvent(event);
-}
-
-function isTerminalChatEventForStream(event: ChatEvent, runId: string) {
-  if (!isTerminalChatEvent(event)) {
-    return false;
-  }
-  const eventRunId = readChatEventRunId(event);
-  const targetRunId = runId.trim() || readChatEventSnapshotRunId(event);
-  if (!targetRunId) {
-    return true;
-  }
-  return eventRunId === "" || eventRunId === targetRunId;
-}
-
-function normalizeAfterSeq(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
 function normalizePositiveInteger(value: number, fallback: number) {
@@ -1501,6 +1137,7 @@ export class GatewayWebSocketClient {
   private terminalListeners = new Set<TerminalListener>();
   private sftpTransferListeners = new Set<SftpTransferListener>();
   private chatQueueListeners = new Set<ChatQueueListener>();
+  private chatSubscriptions = new Map<string, { callback: (event: ChatEvent) => void; done: () => void }>();
   private terminalSessionSnapshot = new Map<string, TerminalSession>();
   private statusPollTimer: number | null = null;
   private lastStatus: AgentStatus | null = null;
@@ -1707,11 +1344,8 @@ export class GatewayWebSocketClient {
       throw new Error("Gateway token is required");
     }
 
-    const commandResponse = await postGatewayChatCommand<ChatCommandResponse>(
-      this.token,
-      buildChatCommandPayload(input),
-      signal,
-    );
+    // Submit command via WebSocket
+    const commandResponse = await this.request<ChatCommandResponse>("chat.command", buildChatCommandPayload(input));
     const runId = String(commandResponse.run_id ?? "").trim();
     if (!runId) {
       throw new Error("Gateway chat command returned no run_id");
@@ -1719,18 +1353,12 @@ export class GatewayWebSocketClient {
     let conversationId =
       String(commandResponse.conversation_id ?? "").trim() || input.conversationId?.trim() || "";
 
+    // Set up abort handler
     const handleAbort = () => {
-      void postGatewayChatCommand(
-        this.token,
-        {
-          type: "chat.cancel",
-          payload: {
-            run_id: runId,
-            conversation_id: conversationId,
-          },
-        },
-        undefined,
-      ).catch(() => undefined);
+      void this.request("chat.cancel", {
+        conversation_id: conversationId,
+        run_id: runId,
+      }).catch(() => undefined);
     };
     if (signal) {
       if (signal.aborted) {
@@ -1741,18 +1369,7 @@ export class GatewayWebSocketClient {
     }
 
     try {
-      for await (const event of streamGatewayChatEvents({
-        token: this.token,
-        runId,
-        conversationId,
-        afterSeq: 0,
-        signal,
-      })) {
-        if (event.conversation_id?.trim()) {
-          conversationId = event.conversation_id.trim();
-        }
-        yield event;
-      }
+      yield* this.subscribeChatRunEvents(runId, conversationId, 0, signal);
     } finally {
       signal?.removeEventListener("abort", handleAbort);
     }
@@ -1766,21 +1383,12 @@ export class GatewayWebSocketClient {
     if (!normalizedConversationId) {
       throw new Error("conversation_id is required");
     }
-
     const signal = options?.signal;
     if (signal?.aborted) {
       return;
     }
     const normalizedRunId = options?.runId?.trim() ?? "";
-    for await (const event of streamGatewayChatEvents({
-      token: this.token,
-      runId: normalizedRunId || undefined,
-      conversationId: normalizedConversationId,
-      afterSeq: options?.afterSeq,
-      signal,
-    })) {
-      yield event;
-    }
+    yield* this.subscribeChatRunEvents(normalizedRunId, normalizedConversationId, options?.afterSeq ?? 0, signal);
   }
 
   async cancelChat(conversationId: string, runId?: string): Promise<void> {
@@ -1788,14 +1396,83 @@ export class GatewayWebSocketClient {
     if (!normalized) {
       return;
     }
-    const normalizedRunId = runId?.trim() ?? "";
-    await postGatewayChatCommand(this.token, {
-      type: "chat.cancel",
-      payload: {
-        run_id: normalizedRunId || undefined,
-        conversation_id: normalized,
-      },
+    await this.request("chat.cancel", {
+      conversation_id: normalized,
+      run_id: runId?.trim() || undefined,
     });
+  }
+
+  private async *subscribeChatRunEvents(
+    runId: string,
+    conversationId: string,
+    afterSeq: number,
+    signal?: AbortSignal,
+  ): AsyncGenerator<ChatEvent> {
+    const subResponse = await this.request<{
+      subscription_id: string;
+      snapshot: { run_id: string; conversation_id: string; state: string; latest_seq: number };
+      gap?: boolean;
+    }>("chat.subscribe", {
+      run_id: runId || undefined,
+      conversation_id: conversationId || undefined,
+      after_seq: afterSeq,
+    });
+
+    const subscriptionId = subResponse.subscription_id;
+    if (!subscriptionId) {
+      throw new Error("No subscription_id from chat.subscribe");
+    }
+
+    // Create event queue
+    const eventQueue: ChatEvent[] = [];
+    let resolve: (() => void) | null = null;
+    let done = false;
+
+    const onEvent = (event: ChatEvent) => {
+      eventQueue.push(event);
+      if (resolve) {
+        resolve();
+        resolve = null;
+      }
+    };
+    const onDone = () => {
+      done = true;
+      if (resolve) {
+        resolve();
+        resolve = null;
+      }
+    };
+
+    this.chatSubscriptions.set(subscriptionId, { callback: onEvent, done: onDone });
+
+    try {
+      while (!done && !signal?.aborted) {
+        if (eventQueue.length === 0) {
+          await new Promise<void>((r) => {
+            resolve = r;
+          });
+          continue;
+        }
+        const event = eventQueue.shift()!;
+        if (event.conversation_id?.trim()) {
+          conversationId = event.conversation_id.trim();
+        }
+        yield event;
+        const eventType = typeof event.type === "string" ? event.type.trim() : "";
+        if (
+          eventType === "done" ||
+          eventType === "completed" ||
+          eventType === "error" ||
+          eventType === "failed" ||
+          eventType === "cancelled"
+        ) {
+          return;
+        }
+      }
+    } finally {
+      this.chatSubscriptions.delete(subscriptionId);
+      void this.request("chat.unsubscribe", { subscription_id: subscriptionId }).catch(() => {});
+    }
   }
 
   async cronManage(payload: CronManagePayload): Promise<CronManageResponse> {
@@ -2864,6 +2541,26 @@ export class GatewayWebSocketClient {
       return;
     }
 
+    if (envelope.type === "chat.event") {
+      const payload = envelope.payload as any;
+      const subId = typeof payload?.subscription_id === "string" ? payload.subscription_id : "";
+      const sub = subId ? this.chatSubscriptions.get(subId) : undefined;
+      if (sub) {
+        sub.callback(attachChatEventRunMetadata(payload as ChatEvent));
+      }
+      return;
+    }
+
+    if (envelope.type === "chat.subscription_end") {
+      const payload = envelope.payload as any;
+      const subId = typeof payload?.subscription_id === "string" ? payload.subscription_id : "";
+      const sub = subId ? this.chatSubscriptions.get(subId) : undefined;
+      if (sub) {
+        sub.done();
+      }
+      return;
+    }
+
     const pending = requestId ? this.pending.get(requestId) : null;
     if (!pending) {
       return;
@@ -2904,6 +2601,12 @@ export class GatewayWebSocketClient {
       const host = getRuntimeHost();
       host.clearTimeout(entry.timeoutId);
       entry.reject(error);
+    }
+
+    const chatSubs = [...this.chatSubscriptions.values()];
+    this.chatSubscriptions.clear();
+    for (const sub of chatSubs) {
+      sub.done();
     }
 
     if (!this.disposed && this.statusListeners.size > 0) {
@@ -3175,1631 +2878,16 @@ export type GatewayWebSocketClientLike = {
   dispose(): void;
 };
 
-type SharedWorkerClientReadyMessage = {
-  type: "ready";
-  connection_id: string;
-  payload: {
-    status: AgentStatus | null;
-    error: string | null;
-  };
-};
-
-type SharedWorkerClientResponseMessage = {
-  type: "response";
-  connection_id: string;
-  request_id: string;
-  payload?: unknown;
-  error?: string;
-};
-
-type SharedWorkerClientEventMessage = {
-  type: "event";
-  connection_id: string;
-  event_type: "status" | "history" | "settings" | "terminal" | "sftp" | "chat_queue";
-  payload: unknown;
-};
-
-type SharedWorkerTerminalStreamSnapshotMessage = {
-  type: "terminal_stream_snapshot";
-  connection_id: string;
-  stream_id: string;
-  payload: TerminalStreamSnapshot;
-};
-
-type SharedWorkerTerminalStreamOutputMessage = {
-  type: "terminal_stream_output";
-  connection_id: string;
-  stream_id: string;
-  payload: TerminalStreamChunk;
-};
-
-type SharedWorkerTerminalStreamInputStateMessage = {
-  type: "terminal_stream_input_state";
-  connection_id: string;
-  stream_id: string;
-  payload: TerminalStreamInputState;
-};
-
-type SharedWorkerTerminalStreamErrorMessage = {
-  type: "terminal_stream_error";
-  connection_id: string;
-  stream_id: string;
-  error?: string;
-};
-
-type SharedWorkerClientMessage =
-  | SharedWorkerClientReadyMessage
-  | SharedWorkerClientResponseMessage
-  | SharedWorkerClientEventMessage
-  | SharedWorkerTerminalStreamSnapshotMessage
-  | SharedWorkerTerminalStreamOutputMessage
-  | SharedWorkerTerminalStreamInputStateMessage
-  | SharedWorkerTerminalStreamErrorMessage;
-
-type SharedWorkerClientRequestMessage =
-  | {
-      type: "connect";
-      connection_id: string;
-      token: string;
-    }
-  | {
-      type: "request";
-      connection_id: string;
-      request_id: string;
-      method: string;
-      payload?: unknown;
-    }
-  | {
-      type: "wakeup";
-      connection_id: string;
-    }
-  | {
-      type: "terminal_stream_attach";
-      connection_id: string;
-      stream_id: string;
-      session: TerminalSession;
-      max_bytes?: number;
-    }
-  | {
-      type: "terminal_stream_write";
-      connection_id: string;
-      stream_id: string;
-      session_id: string;
-      bytes: Uint8Array<ArrayBufferLike>;
-    }
-  | {
-      type: "terminal_stream_resize";
-      connection_id: string;
-      stream_id: string;
-      session_id: string;
-      cols: number;
-      rows: number;
-    }
-  | {
-      type: "terminal_stream_detach";
-      connection_id: string;
-      stream_id: string;
-      session_id: string;
-    }
-  | {
-      type: "dispose";
-      connection_id: string;
-    };
-
-type SharedWorkerTerminalAttachPending = {
-  handle: SharedWorkerTerminalStreamHandle;
-  resolve: (handle: SharedWorkerTerminalStreamHandle) => void;
-  reject: (reason?: unknown) => void;
-  timeoutId: number;
-};
-
-class SharedWorkerTerminalStreamHandle implements TerminalStreamHandle {
-  private disposed = false;
-  private readonly listeners = new Set<(chunk: TerminalStreamChunk) => void>();
-  private readonly inputStateListeners = new Set<(state: TerminalStreamInputState) => void>();
-  private readonly queuedChunks: TerminalStreamChunk[] = [];
-  private inputState: TerminalStreamInputState = {
-    paused: false,
-    queuedBytes: 0,
-    highWaterBytes: 256 * 1024,
-  };
-
-  constructor(
-    private readonly owner: SharedWorkerTerminalStreamClient,
-    private readonly streamID: string,
-    public snapshot: TerminalStreamSnapshot,
-  ) {}
-
-  accept(chunk: TerminalStreamChunk) {
-    if (this.disposed || chunk.sessionId !== this.snapshot.session.id) {
-      return;
-    }
-    if (this.listeners.size === 0) {
-      this.queuedChunks.push(chunk);
-      return;
-    }
-    for (const listener of this.listeners) {
-      listener(chunk);
-    }
-  }
-
-  write(data: Uint8Array) {
-    if (this.disposed || data.byteLength === 0) {
-      return false;
-    }
-    if (this.inputState.paused) {
-      return false;
-    }
-    this.owner.write(this.streamID, this.snapshot.session.id, data);
-    return true;
-  }
-
-  resize(cols: number, rows: number) {
-    if (this.disposed) {
-      return;
-    }
-    this.owner.resize(this.streamID, this.snapshot.session.id, cols, rows);
-  }
-
-  subscribeOutput(listener: (chunk: TerminalStreamChunk) => void) {
-    this.listeners.add(listener);
-    const queued = this.queuedChunks.splice(0);
-    for (const chunk of queued) {
-      listener(chunk);
-    }
-    return () => {
-      this.listeners.delete(listener);
-    };
-  }
-
-  subscribeInputState(listener: (state: TerminalStreamInputState) => void) {
-    this.inputStateListeners.add(listener);
-    listener(this.inputState);
-    return () => {
-      this.inputStateListeners.delete(listener);
-    };
-  }
-
-  acceptInputState(state: TerminalStreamInputState) {
-    if (this.disposed) {
-      return;
-    }
-    this.inputState = state;
-    for (const listener of this.inputStateListeners) {
-      listener(state);
-    }
-  }
-
-  dispose() {
-    if (this.disposed) {
-      return;
-    }
-    this.disposed = true;
-    this.listeners.clear();
-    this.inputStateListeners.clear();
-    this.queuedChunks.length = 0;
-    this.owner.detach(this.streamID, this.snapshot.session.id);
-  }
-
-  disposeLocalOnly() {
-    this.disposed = true;
-    this.listeners.clear();
-    this.inputStateListeners.clear();
-    this.queuedChunks.length = 0;
-  }
-}
-
-class SharedWorkerTerminalStreamClient implements TerminalStreamClient {
-  private readonly pending = new Map<string, SharedWorkerTerminalAttachPending>();
-  private readonly handles = new Map<string, SharedWorkerTerminalStreamHandle>();
-
-  constructor(
-    private readonly ensureConnected: () => Promise<void>,
-    private readonly postMessage: (message: SharedWorkerClientRequestMessage) => void,
-    private readonly connectionID: () => string,
-    private readonly nextID: (prefix: string) => string,
-  ) {}
-
-  async attach(
-    session: TerminalSession,
-    options?: { maxBytes?: number },
-  ): Promise<TerminalStreamHandle> {
-    await this.ensureConnected();
-    const streamID = this.nextID("terminal-stream");
-    const handle = new SharedWorkerTerminalStreamHandle(this, streamID, {
-      session,
-      bytes: new Uint8Array(),
-      truncated: false,
-      outputStartOffset: 0,
-      outputEndOffset: 0,
-    });
-    this.handles.set(streamID, handle);
-
-    return new Promise((resolve, reject) => {
-      const host = getRuntimeHost();
-      const timeoutId = host.setTimeout(() => {
-        this.failAttach(streamID, new Error("Terminal stream attach timed out"));
-      }, 15_000);
-
-      this.pending.set(streamID, { handle, resolve, reject, timeoutId });
-      try {
-        this.postMessage({
-          type: "terminal_stream_attach",
-          connection_id: this.connectionID(),
-          stream_id: streamID,
-          session,
-          max_bytes: options?.maxBytes,
-        });
-      } catch (error) {
-        this.failAttach(streamID, error);
-      }
-    });
-  }
-
-  write(streamID: string, sessionID: string, data: Uint8Array) {
-    if (data.byteLength === 0 || !this.handles.has(streamID)) {
-      return;
-    }
-    try {
-      this.postMessage({
-        type: "terminal_stream_write",
-        connection_id: this.connectionID(),
-        stream_id: streamID,
-        session_id: sessionID,
-        bytes: data.slice(),
-      });
-    } catch {
-      this.handleError({
-        type: "terminal_stream_error",
-        connection_id: this.connectionID(),
-        stream_id: streamID,
-        error: "Terminal stream port is closed",
-      });
-    }
-  }
-
-  resize(streamID: string, sessionID: string, cols: number, rows: number) {
-    if (!this.handles.has(streamID)) {
-      return;
-    }
-    try {
-      this.postMessage({
-        type: "terminal_stream_resize",
-        connection_id: this.connectionID(),
-        stream_id: streamID,
-        session_id: sessionID,
-        cols,
-        rows,
-      });
-    } catch {
-      this.handleError({
-        type: "terminal_stream_error",
-        connection_id: this.connectionID(),
-        stream_id: streamID,
-        error: "Terminal stream port is closed",
-      });
-    }
-  }
-
-  detach(streamID: string, sessionID: string) {
-    const handle = this.handles.get(streamID);
-    this.handles.delete(streamID);
-    const pending = this.pending.get(streamID);
-    if (pending) {
-      const host = getRuntimeHost();
-      host.clearTimeout(pending.timeoutId);
-      this.pending.delete(streamID);
-      pending.reject(new Error("Terminal stream detached"));
-    }
-    handle?.disposeLocalOnly();
-    try {
-      this.postMessage({
-        type: "terminal_stream_detach",
-        connection_id: this.connectionID(),
-        stream_id: streamID,
-        session_id: sessionID,
-      });
-    } catch {
-      // The SharedWorker port may already be closed during disposal.
-    }
-  }
-
-  handleSnapshot(message: SharedWorkerTerminalStreamSnapshotMessage) {
-    const pending = this.pending.get(message.stream_id);
-    if (!pending) {
-      return;
-    }
-    const host = getRuntimeHost();
-    host.clearTimeout(pending.timeoutId);
-    this.pending.delete(message.stream_id);
-    pending.handle.snapshot = message.payload;
-    pending.resolve(pending.handle);
-  }
-
-  handleOutput(message: SharedWorkerTerminalStreamOutputMessage) {
-    this.handles.get(message.stream_id)?.accept(message.payload);
-  }
-
-  handleInputState(message: SharedWorkerTerminalStreamInputStateMessage) {
-    this.handles.get(message.stream_id)?.acceptInputState(message.payload);
-  }
-
-  handleError(message: SharedWorkerTerminalStreamErrorMessage) {
-    const error = new Error(message.error || "Terminal stream failed");
-    if (this.pending.has(message.stream_id)) {
-      this.failAttach(message.stream_id, error);
-      return;
-    }
-    const handle = this.handles.get(message.stream_id);
-    if (handle) {
-      this.handles.delete(message.stream_id);
-      handle.disposeLocalOnly();
-    }
-  }
-
-  disposeAll(error: Error) {
-    const host = getRuntimeHost();
-    for (const [streamID, pending] of this.pending) {
-      host.clearTimeout(pending.timeoutId);
-      pending.reject(error);
-      pending.handle.disposeLocalOnly();
-      this.handles.delete(streamID);
-    }
-    this.pending.clear();
-    for (const handle of this.handles.values()) {
-      handle.disposeLocalOnly();
-    }
-    this.handles.clear();
-  }
-
-  private failAttach(streamID: string, reason: unknown) {
-    const pending = this.pending.get(streamID);
-    if (!pending) {
-      return;
-    }
-    const host = getRuntimeHost();
-    host.clearTimeout(pending.timeoutId);
-    this.pending.delete(streamID);
-    this.handles.delete(streamID);
-    pending.handle.disposeLocalOnly();
-    pending.reject(reason);
-    try {
-      this.postMessage({
-        type: "terminal_stream_detach",
-        connection_id: this.connectionID(),
-        stream_id: streamID,
-        session_id: pending.handle.snapshot.session.id,
-      });
-    } catch {
-      // The SharedWorker port may already be closed.
-    }
-  }
-}
-
-function canUseSharedWorker() {
-  return typeof window !== "undefined" && typeof SharedWorker === "function";
-}
-
-class SharedWorkerGatewayWebSocketClient implements GatewayWebSocketClientLike {
-  readonly terminalStream: SharedWorkerTerminalStreamClient;
-  private readonly worker: SharedWorker;
-  private readonly port: MessagePort;
-  private readonly connectionID: string;
-  private connectPromise: Promise<void>;
-  private resolveConnect!: () => void;
-  private rejectConnect!: (reason?: unknown) => void;
-  private readyTimeoutId: ReturnType<typeof setTimeout> | null = null;
-  private connectSettled = false;
-  private requestSeq = 0;
-  private disposed = false;
-  private statusRefreshRequested = false;
-  private pending = new Map<string, PendingRequest>();
-  private statusListeners = new Set<StatusListener>();
-  private historyListeners = new Set<HistoryListener>();
-  private settingsListeners = new Set<SettingsListener>();
-  private terminalListeners = new Set<TerminalListener>();
-  private sftpTransferListeners = new Set<SftpTransferListener>();
-  private chatQueueListeners = new Set<ChatQueueListener>();
-  private terminalSessionSnapshot = new Map<string, TerminalSession>();
-  private lastStatus: AgentStatus | null = null;
-  private lastStatusError: string | null = null;
-  private readonly workerWakeup = (event?: Event) => {
-    this.postWorkerWakeup(event);
-  };
-
-  constructor(private readonly token: string) {
-    this.connectionID = this.nextRequestId("connection");
-    this.connectPromise = new Promise<void>((resolve, reject) => {
-      this.resolveConnect = resolve;
-      this.rejectConnect = reject;
-    });
-
-    this.worker = new SharedWorker(new URL("./gatewaySocket.worker.ts", import.meta.url), {
-      name: "liveagent-gateway-websocket",
-      type: "module",
-    });
-    this.port = this.worker.port;
-    this.terminalStream = new SharedWorkerTerminalStreamClient(
-      () => this.ensureConnected(),
-      (message) => this.postMessage(message),
-      () => this.connectionID,
-      (prefix) => this.nextRequestId(prefix),
-    );
-    this.port.onmessage = (event) => {
-      this.handleMessage(event.data);
-    };
-    this.port.onmessageerror = () => {
-      this.handleDisconnect(new Error("Gateway SharedWorker message failed"));
-    };
-    this.port.start();
-    this.installWorkerWakeups();
-    const host = getRuntimeHost();
-    this.readyTimeoutId = host.setTimeout(() => {
-      this.handleDisconnect(new Error("Gateway SharedWorker connection timed out"));
-    }, 15_000);
-    try {
-      this.postMessage({
-        type: "connect",
-        connection_id: this.connectionID,
-        token: this.token,
-      });
-    } catch (error) {
-      this.clearReadyTimeout();
-      throw error;
-    }
-  }
-
-  async getStatus(): Promise<AgentStatus> {
-    const status = await this.request<AgentStatus>("status.get", {});
-    this.statusRefreshRequested = false;
-    this.emitStatus(status, null);
-    return status;
-  }
-
-  async prepareChatRuntime(reason?: string): Promise<AgentStatus> {
-    const status = await this.request<AgentStatus>("chat.prepare", { reason: reason ?? "" });
-    this.statusRefreshRequested = false;
-    this.emitStatus(status, null);
-    return status;
-  }
-
-  subscribeStatus(listener: StatusListener): () => void {
-    this.statusListeners.add(listener);
-    if (this.lastStatus || this.lastStatusError) {
-      listener(this.lastStatus, this.lastStatusError);
-    } else if (!this.statusRefreshRequested) {
-      this.statusRefreshRequested = true;
-      void this.refreshStatus();
-    }
-    return () => {
-      this.statusListeners.delete(listener);
-    };
-  }
-
-  subscribeHistory(listener: HistoryListener): () => void {
-    this.historyListeners.add(listener);
-    return () => {
-      this.historyListeners.delete(listener);
-    };
-  }
-
-  subscribeSettings(listener: SettingsListener): () => void {
-    this.settingsListeners.add(listener);
-    return () => {
-      this.settingsListeners.delete(listener);
-    };
-  }
-
-  subscribeTerminal(listener: TerminalListener): () => void {
-    this.terminalListeners.add(listener);
-    replayTerminalSnapshot(this.terminalSessionSnapshot, listener);
-    return () => {
-      this.terminalListeners.delete(listener);
-    };
-  }
-
-  subscribeSftpTransfers(listener: SftpTransferListener): () => void {
-    this.sftpTransferListeners.add(listener);
-    return () => {
-      this.sftpTransferListeners.delete(listener);
-    };
-  }
-
-  subscribeChatQueue(listener: ChatQueueListener): () => void {
-    this.chatQueueListeners.add(listener);
-    return () => {
-      this.chatQueueListeners.delete(listener);
-    };
-  }
-
-  async chatQueueGet(conversationId: string): Promise<ChatQueueResponse> {
-    return normalizeChatQueueResponse(
-      await this.request<RawChatQueueResponse>("chat_queue.get", {
-        conversation_id: conversationId,
-      }),
-    );
-  }
-
-  async chatQueueGetItem(conversationId: string, itemId: string): Promise<ChatQueueResponse> {
-    return normalizeChatQueueResponse(
-      await this.request<RawChatQueueResponse>("chat_queue.get_item", {
-        conversation_id: conversationId,
-        item_id: itemId,
-      }),
-    );
-  }
-
-  async chatQueueRunNow(conversationId: string, itemId: string): Promise<ChatQueueResponse> {
-    return normalizeChatQueueResponse(
-      await this.request<RawChatQueueResponse>("chat_queue.run_now", {
-        conversation_id: conversationId,
-        item_id: itemId,
-      }),
-    );
-  }
-
-  async chatQueueMove(
-    conversationId: string,
-    itemId: string,
-    direction: "up" | "down",
-  ): Promise<ChatQueueResponse> {
-    return normalizeChatQueueResponse(
-      await this.request<RawChatQueueResponse>("chat_queue.move", {
-        conversation_id: conversationId,
-        item_id: itemId,
-        direction,
-      }),
-    );
-  }
-
-  async chatQueueRemove(conversationId: string, itemId: string): Promise<ChatQueueResponse> {
-    return normalizeChatQueueResponse(
-      await this.request<RawChatQueueResponse>("chat_queue.remove", {
-        conversation_id: conversationId,
-        item_id: itemId,
-      }),
-    );
-  }
-
-  async chatQueueEditBegin(conversationId: string, itemId: string): Promise<ChatQueueResponse> {
-    return normalizeChatQueueResponse(
-      await this.request<RawChatQueueResponse>("chat_queue.edit_begin", {
-        conversation_id: conversationId,
-        item_id: itemId,
-      }),
-    );
-  }
-
-  async chatQueueEditCommit(input: {
-    conversationId: string;
-    itemId: string;
-    revision: number;
-    draftJson: string;
-    uploadedFilesJson: string;
-  }): Promise<ChatQueueResponse> {
-    return normalizeChatQueueResponse(
-      await this.request<RawChatQueueResponse>("chat_queue.edit_commit", {
-        conversation_id: input.conversationId,
-        item_id: input.itemId,
-        revision: input.revision,
-        draft_json: input.draftJson,
-        uploaded_files_json: input.uploadedFilesJson,
-      }),
-    );
-  }
-
-  async chatQueueEditCancel(conversationId: string, itemId: string): Promise<ChatQueueResponse> {
-    return normalizeChatQueueResponse(
-      await this.request<RawChatQueueResponse>("chat_queue.edit_cancel", {
-        conversation_id: conversationId,
-        item_id: itemId,
-      }),
-    );
-  }
-
-  async *commandChat(input: GatewayChatCommandInput): AsyncGenerator<ChatEvent> {
-    const signal = input.signal;
-    if (signal?.aborted) {
-      return;
-    }
-    if (this.token.trim() === "") {
-      throw new Error("Gateway token is required");
-    }
-
-    const commandResponse = await postGatewayChatCommand<ChatCommandResponse>(
-      this.token,
-      buildChatCommandPayload(input),
-      signal,
-    );
-    const runId = String(commandResponse.run_id ?? "").trim();
-    if (!runId) {
-      throw new Error("Gateway chat command returned no run_id");
-    }
-    let conversationId =
-      String(commandResponse.conversation_id ?? "").trim() || input.conversationId?.trim() || "";
-
-    const handleAbort = () => {
-      void postGatewayChatCommand(
-        this.token,
-        {
-          type: "chat.cancel",
-          payload: {
-            run_id: runId,
-            conversation_id: conversationId,
-          },
-        },
-        undefined,
-      ).catch(() => undefined);
-    };
-    if (signal) {
-      if (signal.aborted) {
-        handleAbort();
-        return;
-      }
-      signal.addEventListener("abort", handleAbort, { once: true });
-    }
-
-    try {
-      for await (const event of streamGatewayChatEvents({
-        token: this.token,
-        runId,
-        conversationId,
-        afterSeq: 0,
-        signal,
-      })) {
-        if (event.conversation_id?.trim()) {
-          conversationId = event.conversation_id.trim();
-        }
-        yield event;
-      }
-    } finally {
-      signal?.removeEventListener("abort", handleAbort);
-    }
-  }
-
-  async *streamChatEvents(
-    conversationId: string,
-    options?: ChatEventStreamOptions,
-  ): AsyncGenerator<ChatEvent> {
-    const normalizedConversationId = conversationId.trim();
-    if (!normalizedConversationId) {
-      throw new Error("conversation_id is required");
-    }
-    const signal = options?.signal;
-    if (signal?.aborted) {
-      return;
-    }
-    const normalizedRunId = options?.runId?.trim() ?? "";
-    for await (const event of streamGatewayChatEvents({
-      token: this.token,
-      runId: normalizedRunId || undefined,
-      conversationId: normalizedConversationId,
-      afterSeq: options?.afterSeq,
-      signal,
-    })) {
-      yield event;
-    }
-  }
-
-  async cancelChat(conversationId: string, runId?: string): Promise<void> {
-    const normalized = conversationId.trim();
-    if (!normalized) {
-      return;
-    }
-    const normalizedRunId = runId?.trim() ?? "";
-    await postGatewayChatCommand(this.token, {
-      type: "chat.cancel",
-      payload: {
-        run_id: normalizedRunId || undefined,
-        conversation_id: normalized,
-      },
-    });
-  }
-
-  async cronManage(payload: CronManagePayload): Promise<CronManageResponse> {
-    return this.request<CronManageResponse>("cron.manage", payload);
-  }
-
-  async memoryManage<T = unknown>(payload: MemoryManagePayload): Promise<T> {
-    return this.request<T>("memory.manage", payload);
-  }
-
-  async gitRequest<T = unknown>(
-    action: string,
-    workdir: string,
-    args: Record<string, unknown> = {},
-  ): Promise<T> {
-    return this.request<T>(`git.${action}`, { workdir, args });
-  }
-
-  async sftpList(params: {
-    sessionId: string;
-    projectPathKey: string;
-    workdir: string;
-    side: "local" | "remote";
-    path?: string;
-  }): Promise<SftpListResponse> {
-    return normalizeSftpListResponse(
-      await this.request<RawSftpResponse>("sftp.list", {
-        session_id: params.sessionId,
-        project_path_key: params.projectPathKey,
-        workdir: params.workdir,
-        side: params.side,
-        direction: params.side,
-        local_path: params.side === "local" ? (params.path ?? "") : "",
-        remote_path: params.side === "remote" ? (params.path ?? "") : "",
-      }),
-    );
-  }
-
-  async sftpStat(params: {
-    sessionId: string;
-    projectPathKey: string;
-    workdir: string;
-    side: "local" | "remote";
-    path?: string;
-  }): Promise<SftpStatResponse> {
-    return normalizeSftpStatResponse(
-      await this.request<RawSftpResponse>("sftp.stat", {
-        session_id: params.sessionId,
-        project_path_key: params.projectPathKey,
-        workdir: params.workdir,
-        side: params.side,
-        direction: params.side,
-        local_path: params.side === "local" ? (params.path ?? "") : "",
-        remote_path: params.side === "remote" ? (params.path ?? "") : "",
-      }),
-    );
-  }
-
-  async sftpMkdir(params: {
-    sessionId: string;
-    projectPathKey: string;
-    workdir: string;
-    side: "local" | "remote";
-    path: string;
-  }): Promise<SftpActionResponse> {
-    return normalizeSftpActionResponse(
-      await this.request<RawSftpResponse>("sftp.mkdir", {
-        session_id: params.sessionId,
-        project_path_key: params.projectPathKey,
-        workdir: params.workdir,
-        side: params.side,
-        direction: params.side,
-        local_path: params.side === "local" ? params.path : "",
-        remote_path: params.side === "remote" ? params.path : "",
-      }),
-    );
-  }
-
-  async sftpRename(params: {
-    sessionId: string;
-    projectPathKey: string;
-    workdir: string;
-    side: "local" | "remote";
-    fromPath: string;
-    toPath: string;
-  }): Promise<SftpActionResponse> {
-    return normalizeSftpActionResponse(
-      await this.request<RawSftpResponse>("sftp.rename", {
-        session_id: params.sessionId,
-        project_path_key: params.projectPathKey,
-        workdir: params.workdir,
-        side: params.side,
-        direction: params.side,
-        from_path: params.fromPath,
-        to_path: params.toPath,
-      }),
-    );
-  }
-
-  async sftpDelete(params: {
-    sessionId: string;
-    projectPathKey: string;
-    workdir: string;
-    side: "local" | "remote";
-    path: string;
-    recursive?: boolean;
-  }): Promise<SftpActionResponse> {
-    return normalizeSftpActionResponse(
-      await this.request<RawSftpResponse>("sftp.delete", {
-        session_id: params.sessionId,
-        project_path_key: params.projectPathKey,
-        workdir: params.workdir,
-        side: params.side,
-        direction: params.side,
-        local_path: params.side === "local" ? params.path : "",
-        remote_path: params.side === "remote" ? params.path : "",
-        recursive: params.recursive ?? false,
-      }),
-    );
-  }
-
-  async sftpTransfer(params: {
-    sessionId: string;
-    projectPathKey: string;
-    workdir: string;
-    direction: "upload" | "download";
-    sourcePath: string;
-    targetPath: string;
-    recursive?: boolean;
-    overwrite?: boolean;
-  }): Promise<SftpTransferResponse> {
-    return normalizeSftpTransferResponse(
-      await this.request<RawSftpResponse>("sftp.transfer", {
-        session_id: params.sessionId,
-        project_path_key: params.projectPathKey,
-        workdir: params.workdir,
-        direction: params.direction,
-        from_path: params.sourcePath,
-        target_path: params.targetPath,
-        recursive: params.recursive ?? false,
-        overwrite: params.overwrite ?? false,
-      }),
-    );
-  }
-
-  async sftpCancelTransfer(params: { sessionId: string; transferId: string }): Promise<void> {
-    await this.request("sftp.cancel", {
-      session_id: params.sessionId,
-      from_path: params.transferId,
-    });
-  }
-
-  async terminalShellOptions(): Promise<TerminalShellOptions> {
-    return normalizeTerminalShellOptions(
-      await this.request<RawTerminalResponse>("terminal.shell_options", {}),
-    );
-  }
-
-  async listTerminals(projectPathKey?: string): Promise<TerminalSession[]> {
-    const projectKey = projectPathKey?.trim() ?? "";
-    const response = await this.request<RawTerminalResponse>(
-      "terminal.list",
-      projectKey ? { project_path_key: projectKey } : {},
-    );
-    return (response.sessions ?? []).map(normalizeTerminalSession);
-  }
-
-  async createTerminal(params: {
-    cwd: string;
-    projectPathKey: string;
-    shell?: string;
-    title?: string;
-    cols?: number;
-    rows?: number;
-  }): Promise<TerminalSnapshot> {
-    return normalizeTerminalSnapshot(
-      await this.request<RawTerminalResponse>("terminal.create", {
-        cwd: params.cwd,
-        project_path_key: params.projectPathKey,
-        shell: params.shell,
-        title: params.title,
-        cols: params.cols,
-        rows: params.rows,
-      }),
-    );
-  }
-
-  async createSshTerminal(params: {
-    cwd: string;
-    projectPathKey: string;
-    hostId: string;
-    title?: string;
-    cols?: number;
-    rows?: number;
-    sftpEnabled?: boolean;
-  }): Promise<TerminalSshCreateResult> {
-    return normalizeTerminalSshCreateResult(
-      await this.request<RawTerminalResponse>("terminal.create_ssh", {
-        cwd: params.cwd,
-        project_path_key: params.projectPathKey,
-        ssh_host_id: params.hostId,
-        title: params.title,
-        cols: params.cols,
-        rows: params.rows,
-        sftp_enabled: params.sftpEnabled ?? false,
-      }),
-    );
-  }
-
-  async answerSshTerminalPrompt(params: {
-    promptId: string;
-    answer?: string;
-    trustHostKey?: boolean;
-  }): Promise<TerminalSshCreateResult> {
-    return normalizeTerminalSshCreateResult(
-      await this.request<RawTerminalResponse>("terminal.answer_ssh_prompt", {
-        prompt_id: params.promptId,
-        prompt_answer: params.answer,
-        trust_host_key: params.trustHostKey,
-      }),
-    );
-  }
-
-  async cancelSshTerminalPrompt(promptId: string): Promise<void> {
-    await this.request("terminal.cancel_ssh_prompt", {
-      prompt_id: promptId,
-    });
-  }
-
-  async sshTerminalLatency(
-    sessionId: string,
-    projectPathKey?: string,
-  ): Promise<TerminalSshLatency> {
-    const latency = normalizeTerminalSshLatency(
-      await this.request<RawTerminalResponse>("terminal.ssh_latency", {
-        session_id: sessionId,
-        project_path_key: projectPathKey,
-      }),
-    );
-    return { ...latency, sessionId };
-  }
-
-  async listSshTerminalTabs(projectPathKey: string): Promise<SshTerminalTabsSnapshot> {
-    const response = await this.request<RawTerminalResponse>("terminal.ssh_tabs_list", {
-      project_path_key: projectPathKey,
-    });
-    return normalizeSshTerminalTabsSnapshot(response.sshTabs ?? response.ssh_tabs);
-  }
-
-  async openSshTerminalTab(params: {
-    sessionId: string;
-    kind: SshTerminalTabKind;
-  }): Promise<SshTerminalTabsSnapshot> {
-    const response = await this.request<RawTerminalResponse>("terminal.ssh_tab_open", {
-      session_id: params.sessionId,
-      tab_kind: params.kind,
-    });
-    return normalizeSshTerminalTabsSnapshot(response.sshTabs ?? response.ssh_tabs);
-  }
-
-  async closeSshTerminalTab(tabId: string): Promise<SshTerminalTabsSnapshot> {
-    const response = await this.request<RawTerminalResponse>("terminal.ssh_tab_close", {
-      tab_id: tabId,
-    });
-    return normalizeSshTerminalTabsSnapshot(response.sshTabs ?? response.ssh_tabs);
-  }
-
-  async renameTerminal(
-    sessionId: string,
-    title: string,
-    projectPathKey?: string,
-  ): Promise<TerminalSession> {
-    const response = await this.request<RawTerminalResponse>("terminal.rename", {
-      session_id: sessionId,
-      project_path_key: projectPathKey,
-      title,
-    });
-    if (!response.session) {
-      throw new Error("Terminal response did not include a session");
-    }
-    return normalizeTerminalSession(response.session);
-  }
-
-  async closeTerminal(sessionId: string, projectPathKey?: string): Promise<TerminalSession> {
-    const response = await this.request<RawTerminalResponse>("terminal.close", {
-      session_id: sessionId,
-      project_path_key: projectPathKey,
-    });
-    if (!response.session) {
-      throw new Error("Terminal response did not include a session");
-    }
-    return normalizeTerminalSession(response.session);
-  }
-
-  async closeProjectTerminals(projectPathKey: string): Promise<TerminalSession[]> {
-    const response = await this.request<RawTerminalResponse>("terminal.close_project", {
-      project_path_key: projectPathKey,
-    });
-    return (response.sessions ?? []).map(normalizeTerminalSession);
-  }
-
-  async listTunnels(): Promise<TunnelSummary[]> {
-    return normalizeTunnelListResponse(await this.request<RawTunnelResponse>("tunnel.list", {}));
-  }
-
-  async createTunnel(input: TunnelCreateInput): Promise<TunnelSummary> {
-    const payload: Record<string, unknown> = {
-      targetUrl: input.targetUrl,
-      ttlSeconds: input.ttlSeconds,
-      name: input.name,
-    };
-    if (input.projectPathKey?.trim()) {
-      payload.projectPathKey = input.projectPathKey.trim();
-    }
-    return normalizeTunnelResponse(
-      await this.request<RawTunnelResponse>("tunnel.create", payload),
-    );
-  }
-
-  async updateTunnel(input: TunnelUpdateInput): Promise<TunnelSummary> {
-    const payload: Record<string, unknown> = {
-      id: input.id,
-      targetUrl: input.targetUrl,
-      ttlSeconds: input.ttlSeconds,
-      name: input.name,
-    };
-    if (input.projectPathKey?.trim()) {
-      payload.projectPathKey = input.projectPathKey.trim();
-    }
-    return normalizeTunnelResponse(
-      await this.request<RawTunnelResponse>("tunnel.update", payload),
-    );
-  }
-
-  async closeTunnel(id: string): Promise<TunnelSummary> {
-    return normalizeTunnelResponse(
-      await this.request<RawTunnelResponse>("tunnel.close", {
-        id,
-      }),
-    );
-  }
-
-  async probeTunnel(id: string): Promise<TunnelSummary> {
-    return normalizeTunnelResponse(
-      await this.request<RawTunnelResponse>("tunnel.probe", {
-        id,
-      }),
-    );
-  }
-
-  async listHistory(
-    page: number,
-    pageSize: number,
-    filter?: HistoryListFilter,
-  ): Promise<HistoryList> {
-    const payload: { page: number; page_size: number; cwd?: string; cwd_empty?: boolean } = {
-      page: normalizeHistoryListPage(page),
-      page_size: normalizeHistoryListPageSize(pageSize),
-    };
-    const cwd = filter?.cwd?.trim();
-    if (cwd) {
-      payload.cwd = cwd;
-    }
-    if (filter?.cwdEmpty === true) {
-      payload.cwd_empty = true;
-    }
-    return this.request<HistoryList>("history.list", payload);
-  }
-
-  async listHistoryWorkdirs(): Promise<HistoryWorkdirsResponse> {
-    const response = await this.request<{
-      workdirs?: Array<{ path?: string; conversation_count?: number; updated_at?: number }>;
-    }>("history.workdirs", {});
-    return {
-      workdirs: (response.workdirs ?? []).map((item) => ({
-        path: item.path ?? "",
-        conversationCount: item.conversation_count ?? 0,
-        updatedAt: item.updated_at ?? 0,
-      })),
-    };
-  }
-
-  async listSharedHistory(page: number, pageSize: number): Promise<HistoryList> {
-    return this.request<HistoryList>("history.shared_list", {
-      page: normalizeHistoryListPage(page),
-      page_size: normalizeHistoryListPageSize(pageSize),
-    });
-  }
-
-  async getHistory(conversationId: string, options?: HistoryGetOptions): Promise<HistoryDetail> {
-    return this.request<HistoryDetail>("history.get", {
-      conversation_id: conversationId,
-      max_messages: options?.maxMessages,
-    });
-  }
-
-  async getHistoryPrefix(
-    conversationId: string,
-    baseMessageRef: HistoryMessageRef,
-    options?: HistoryGetOptions,
-  ): Promise<HistoryDetail> {
-    return this.request<HistoryDetail>("history.prefix", {
-      conversation_id: conversationId,
-      max_messages: options?.maxMessages,
-      base_message_ref: buildHistoryMessageRefPayload(baseMessageRef),
-    });
-  }
-
-  async renameHistory(conversationId: string, title: string): Promise<ConversationSummary> {
-    return this.request<ConversationSummary>("history.rename", {
-      conversation_id: conversationId,
-      title,
-    });
-  }
-
-  async pinHistory(conversationId: string, isPinned: boolean): Promise<ConversationSummary> {
-    return this.request<ConversationSummary>("history.pin", {
-      conversation_id: conversationId,
-      is_pinned: isPinned,
-    });
-  }
-
-  async getHistoryShare(conversationId: string): Promise<HistoryShareStatus> {
-    return this.request<HistoryShareStatus>("history.share.get", {
-      conversation_id: conversationId,
-    });
-  }
-
-  async setHistoryShare(
-    conversationId: string,
-    enabled: boolean,
-    options?: { redactToolContent?: boolean },
-  ): Promise<HistoryShareStatus> {
-    const payload: Record<string, unknown> = {
-      conversation_id: conversationId,
-      enabled,
-    };
-    if (typeof options?.redactToolContent === "boolean") {
-      payload.redact_tool_content = options.redactToolContent;
-    }
-    return this.request<HistoryShareStatus>("history.share.set", payload);
-  }
-
-  async deleteHistory(conversationId: string): Promise<void> {
-    await this.request("history.delete", {
-      conversation_id: conversationId,
-    });
-  }
-
-  async listProviders(): Promise<GatewayProviderSummary[]> {
-    return this.request<GatewayProviderSummary[]>("providers.list", {});
-  }
-
-  async getSettings(): Promise<GatewaySettingsSyncPayload> {
-    return this.request<GatewaySettingsSyncPayload>("settings.get", {});
-  }
-
-  async updateSettings(payload: GatewaySettingsSyncUpdatePayload): Promise<void> {
-    const response = await this.request<GatewaySettingsUpdateResponse>("settings.update", payload);
-    if (response?.accepted === false) {
-      throw new Error(response.message?.trim() || "SSH 设置已在另一端更新，已刷新为最新状态，请重新提交。");
-    }
-  }
-
-  async resetSshKnownHost(params: { host: string; port: number }): Promise<SshKnownHostResetResult> {
-    return this.request<SshKnownHostResetResult>("settings.ssh_known_host.reset", {
-      host: params.host,
-      port: params.port,
-    });
-  }
-
-  async listSkillFiles(): Promise<SkillListResponse> {
-    return this.request<SkillListResponse>("skills.list", {});
-  }
-
-  async manageSkill<T = unknown>(payload: SkillManagePayload): Promise<T> {
-    return this.request<T>("skills.manage", payload);
-  }
-
-  async listMentionFiles(
-    workdir: string,
-    maxResults?: number,
-    query?: string,
-  ): Promise<MentionListResponse> {
-    return this.request<MentionListResponse>("mentions.list", {
-      workdir,
-      max_results: maxResults,
-      query,
-    });
-  }
-
-  async listFsRoots(): Promise<FsRootsResponse> {
-    return this.request<FsRootsResponse>("fs.roots", {});
-  }
-
-  async listDirs(path: string, maxResults?: number): Promise<FsListDirsResponse> {
-    return this.request<FsListDirsResponse>("fs.list_dirs", {
-      path,
-      max_results: maxResults,
-    });
-  }
-
-  async createProjectFolder(parent: string, name: string): Promise<CreateProjectFolderResponse> {
-    return this.request<CreateProjectFolderResponse>("fs.create_project_folder", {
-      parent,
-      name,
-    });
-  }
-
-  async listFiles(
-    workdir: string,
-    path?: string,
-    depth?: number,
-    offset?: number,
-    maxResults?: number,
-  ): Promise<FsListResponse> {
-    return this.request<FsListResponse>("fs.list", {
-      workdir,
-      path,
-      depth,
-      offset,
-      max_results: maxResults,
-    });
-  }
-
-  async writeTextFile(params: {
-    workdir: string;
-    path: string;
-    content: string;
-    mode?: string;
-    expectedMtimeMs?: number;
-    expectedContentHash?: string;
-  }): Promise<FsWriteTextResponse> {
-    return this.request<FsWriteTextResponse>("fs.write_text", {
-      workdir: params.workdir,
-      path: params.path,
-      content: params.content,
-      mode: params.mode ?? "rewrite",
-      expected_mtime_ms: params.expectedMtimeMs,
-      expected_content_hash: params.expectedContentHash,
-    });
-  }
-
-  async readEditableTextFile(workdir: string, path: string): Promise<FsReadEditableTextResponse> {
-    return this.request<FsReadEditableTextResponse>("fs.read_editable_text", {
-      workdir,
-      path,
-    });
-  }
-
-  async readWorkspaceImageFile(
-    workdir: string,
-    path: string,
-  ): Promise<FsReadWorkspaceImageResponse> {
-    return this.request<FsReadWorkspaceImageResponse>("fs.read_workspace_image", {
-      workdir,
-      path,
-    });
-  }
-
-  async createDir(workdir: string, path: string): Promise<FsCreateDirResponse> {
-    return this.request<FsCreateDirResponse>("fs.create_dir", { workdir, path });
-  }
-
-  async renamePath(workdir: string, fromPath: string, toPath: string): Promise<FsRenameResponse> {
-    return this.request<FsRenameResponse>("fs.rename", {
-      workdir,
-      from_path: fromPath,
-      to_path: toPath,
-    });
-  }
-
-  async deletePath(workdir: string, path: string): Promise<FsDeleteResponse> {
-    return this.request<FsDeleteResponse>("fs.delete", { workdir, path });
-  }
-
-  async readUploadedImagePreview(
-    workdir: string,
-    absolutePath: string,
-  ): Promise<UploadedImagePreviewResponse> {
-    return this.request<UploadedImagePreviewResponse>("files.preview", {
-      workdir,
-      absolute_path: absolutePath,
-    });
-  }
-
-  async readSkillMetadata(path: string): Promise<SkillMetadataResponse> {
-    return this.request<SkillMetadataResponse>("skills.read-metadata", { path });
-  }
-
-  async readSkillText(path: string, offset?: number, length?: number): Promise<SkillTextResponse> {
-    return this.request<SkillTextResponse>("skills.read-text", {
-      path,
-      offset,
-      length,
-    });
-  }
-
-  async getProviderModels(type: string, baseUrl: string, apiKey: string): Promise<unknown> {
-    return this.request("provider.models", {
-      type,
-      base_url: baseUrl,
-      api_key: apiKey,
-    });
-  }
-
-  dispose() {
-    if (this.disposed) {
-      return;
-    }
-    this.disposed = true;
-    this.uninstallWorkerWakeups();
-    try {
-      this.postMessage({ type: "dispose", connection_id: this.connectionID });
-    } catch {
-      // The worker connection may already be gone.
-    }
-    this.port.onmessage = null;
-    this.port.onmessageerror = null;
-    this.port.close();
-    this.handleDisconnect(new Error("Gateway SharedWorker client disposed"));
-  }
-
-  private async refreshStatus() {
-    try {
-      await this.getStatus();
-    } catch (error) {
-      this.statusRefreshRequested = false;
-      const message = asErrorMessage(error, "status request failed");
-      const offlineStatus =
-        this.lastStatus !== null
-          ? {
-              ...this.lastStatus,
-              online: false,
-            }
-          : null;
-      this.emitStatus(offlineStatus, message);
-    }
-  }
-
-  private async request<T>(method: string, payload: unknown): Promise<T> {
-    await this.ensureConnected();
-    if (this.disposed) {
-      throw new Error("Gateway SharedWorker client has been disposed");
-    }
-
-    const requestId = this.nextRequestId(method);
-    return new Promise<T>((resolve, reject) => {
-      const host = getRuntimeHost();
-      const timeoutId = host.setTimeout(() => {
-        this.pending.delete(requestId);
-        reject(new Error(`Gateway SharedWorker request timed out: ${method}`));
-      }, 30_000);
-
-      this.pending.set(requestId, { resolve, reject, timeoutId });
-      try {
-        this.postMessage({
-          type: "request",
-          connection_id: this.connectionID,
-          request_id: requestId,
-          method,
-          payload,
-        });
-      } catch (error) {
-        host.clearTimeout(timeoutId);
-        this.pending.delete(requestId);
-        reject(error);
-      }
-    });
-  }
-
-  private async ensureConnected() {
-    if (this.disposed) {
-      throw new Error("Gateway SharedWorker client has been disposed");
-    }
-    if (this.token.trim() === "") {
-      throw new Error("Gateway token is required");
-    }
-    await this.connectPromise;
-  }
-
-  private installWorkerWakeups() {
-    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-      window.addEventListener("online", this.workerWakeup);
-      window.addEventListener("focus", this.workerWakeup);
-      window.addEventListener("pageshow", this.workerWakeup);
-      window.addEventListener("pagehide", this.workerWakeup);
-    }
-    if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
-      document.addEventListener("visibilitychange", this.workerWakeup);
-      document.addEventListener("freeze", this.workerWakeup as EventListener);
-      document.addEventListener("resume", this.workerWakeup as EventListener);
-    }
-  }
-
-  private uninstallWorkerWakeups() {
-    if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
-      window.removeEventListener("online", this.workerWakeup);
-      window.removeEventListener("focus", this.workerWakeup);
-      window.removeEventListener("pageshow", this.workerWakeup);
-      window.removeEventListener("pagehide", this.workerWakeup);
-    }
-    if (typeof document !== "undefined" && typeof document.removeEventListener === "function") {
-      document.removeEventListener("visibilitychange", this.workerWakeup);
-      document.removeEventListener("freeze", this.workerWakeup as EventListener);
-      document.removeEventListener("resume", this.workerWakeup as EventListener);
-    }
-  }
-
-  private postWorkerWakeup(event?: Event) {
-    if (this.disposed || !isForegroundWakeupEvent(event)) {
-      return;
-    }
-    try {
-      this.postMessage({
-        type: "wakeup",
-        connection_id: this.connectionID,
-      });
-    } catch {
-      this.handleDisconnect(new Error("Gateway SharedWorker wakeup failed"));
-    }
-  }
-
-  private postMessage(message: SharedWorkerClientRequestMessage) {
-    this.port.postMessage(message);
-  }
-
-  private handleMessage(raw: unknown) {
-    const message = raw as SharedWorkerClientMessage;
-    if (!message || typeof message !== "object" || message.connection_id !== this.connectionID) {
-      return;
-    }
-
-    switch (message.type) {
-      case "ready":
-        this.clearReadyTimeout();
-        this.connectSettled = true;
-        this.resolveConnect();
-        this.emitStatus(message.payload.status, message.payload.error);
-        return;
-      case "response":
-        this.handleResponse(message);
-        return;
-      case "event":
-        this.handleWorkerEvent(message);
-        return;
-      case "terminal_stream_snapshot":
-        this.terminalStream.handleSnapshot(message);
-        return;
-      case "terminal_stream_output":
-        this.terminalStream.handleOutput(message);
-        return;
-      case "terminal_stream_input_state":
-        this.terminalStream.handleInputState(message);
-        return;
-      case "terminal_stream_error":
-        this.terminalStream.handleError(message);
-        return;
-    }
-  }
-
-  private handleResponse(message: SharedWorkerClientResponseMessage) {
-    const pending = this.pending.get(message.request_id);
-    if (!pending) {
-      return;
-    }
-    const host = getRuntimeHost();
-    host.clearTimeout(pending.timeoutId);
-    this.pending.delete(message.request_id);
-    if (message.error) {
-      pending.reject(new Error(message.error));
-      return;
-    }
-    pending.resolve(message.payload);
-  }
-
-  private handleWorkerEvent(message: SharedWorkerClientEventMessage) {
-    switch (message.event_type) {
-      case "status": {
-        const payload = message.payload as { status?: AgentStatus | null; error?: string | null };
-        this.emitStatus(payload.status ?? null, payload.error ?? null);
-        return;
-      }
-      case "history":
-        this.emitHistory(message.payload as GatewayHistoryEvent);
-        return;
-      case "settings":
-        this.emitSettings(message.payload as GatewaySettingsSyncPayload);
-        return;
-      case "terminal": {
-        const event = normalizeTerminalEvent(message.payload as RawTerminalEvent);
-        if (event) {
-          this.emitTerminal(event);
-        }
-        return;
-      }
-      case "sftp": {
-        const event = normalizeSftpTransferEvent(message.payload as RawSftpEvent);
-        if (event) {
-          this.emitSftpTransfer(event);
-        }
-        return;
-      }
-      case "chat_queue": {
-        const snapshot = normalizeChatQueueEvent(message.payload as RawChatQueueEvent);
-        if (snapshot) {
-          this.emitChatQueue(snapshot);
-        }
-        return;
-      }
-    }
-  }
-
-  private emitStatus(status: AgentStatus | null, error: string | null) {
-    this.lastStatus = status;
-    this.lastStatusError = error;
-    if (status?.online === false) {
-      this.terminalSessionSnapshot.clear();
-    }
-    for (const listener of this.statusListeners) {
-      listener(status, error);
-    }
-  }
-
-  private emitHistory(event: GatewayHistoryEvent) {
-    for (const listener of this.historyListeners) {
-      listener(event);
-    }
-  }
-
-  private emitSettings(event: GatewaySettingsSyncPayload) {
-    for (const listener of this.settingsListeners) {
-      listener(event);
-    }
-  }
-
-  private emitTerminal(event: TerminalEvent) {
-    applyTerminalSnapshotEvent(this.terminalSessionSnapshot, event);
-    for (const listener of this.terminalListeners) {
-      listener(event);
-    }
-  }
-
-  private emitSftpTransfer(event: SftpTransferEvent) {
-    for (const listener of this.sftpTransferListeners) {
-      listener(event);
-    }
-  }
-
-  private emitChatQueue(snapshot: ChatQueueSnapshot) {
-    for (const listener of this.chatQueueListeners) {
-      listener(snapshot);
-    }
-  }
-
-  private handleDisconnect(error: Error) {
-    this.clearReadyTimeout();
-    if (!this.connectSettled) {
-      this.connectSettled = true;
-      this.rejectConnect(error);
-    }
-
-    const host = getRuntimeHost();
-    const pending = [...this.pending.values()];
-    this.pending.clear();
-    for (const entry of pending) {
-      host.clearTimeout(entry.timeoutId);
-      entry.reject(error);
-    }
-
-    this.terminalStream.disposeAll(error);
-  }
-
-  private nextRequestId(prefix: string) {
-    this.requestSeq += 1;
-    return `${prefix}-${Date.now()}-${this.requestSeq}`;
-  }
-
-  private clearReadyTimeout() {
-    if (this.readyTimeoutId === null) {
-      return;
-    }
-    const host = getRuntimeHost();
-    host.clearTimeout(this.readyTimeoutId);
-    this.readyTimeoutId = null;
-  }
-}
-
-let activeClient: GatewayWebSocketClientLike | null = null;
+let activeClient: GatewayWebSocketClient | null = null;
 let activeToken = "";
 
-export function getGatewayWebSocketClient(token: string) {
+export function getGatewayWebSocketClient(token: string): GatewayWebSocketClient {
   const normalizedToken = token.trim();
   if (activeClient && activeToken === normalizedToken) {
     return activeClient;
   }
   activeClient?.dispose();
   activeToken = normalizedToken;
-  if (canUseSharedWorker() && normalizedToken) {
-    try {
-      activeClient = new SharedWorkerGatewayWebSocketClient(normalizedToken);
-      return activeClient;
-    } catch {
-      // Fall back to the page-owned socket in browsers that expose but reject SharedWorker.
-    }
-  }
   activeClient = new GatewayWebSocketClient(normalizedToken);
   return activeClient;
 }

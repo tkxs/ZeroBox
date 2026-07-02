@@ -47,18 +47,14 @@ import {
 
 import {
   buildTranscriptItems,
+  chatEntryDedupKey,
   type ChatEntry,
   type GatewayTranscriptItem,
   type GatewayTranscriptRound,
 } from "../lib/chatUi";
 function entryMatchesForDedup(a: ChatEntry, b: ChatEntry): boolean {
   if (a.kind !== b.kind) return false;
-  if (a.kind === "user" && b.kind === "user") {
-    return a.text === b.text;
-  }
-  const { id: _a, ...restA } = a;
-  const { id: _b, ...restB } = b;
-  return JSON.stringify(restA) === JSON.stringify(restB);
+  return chatEntryDedupKey(a) === chatEntryDedupKey(b);
 }
 
 function omitEquivalentTailEntries(existing: ChatEntry[], live: ChatEntry[]) {

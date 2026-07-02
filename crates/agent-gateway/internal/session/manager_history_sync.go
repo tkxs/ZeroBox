@@ -152,5 +152,5 @@ func (m *Manager) releaseCompletedChatRunAfterHistoryUpsert(event *gatewayv1.His
 	if run == nil || !run.done {
 		return
 	}
-	m.releaseCompletedChatRunLocked(requestID, run)
+	m.removeChatRunLocked(requestID, run)
 }

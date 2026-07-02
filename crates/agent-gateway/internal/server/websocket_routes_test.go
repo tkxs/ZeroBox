@@ -90,6 +90,11 @@ func TestWebsocketRequestHandlersCoverKnownProtocolTypes(t *testing.T) {
 		"git.push",
 		"cron.manage",
 		"provider.models",
+		"chat.subscribe",
+		"chat.unsubscribe",
+		"chat.command",
+		"chat.cancel",
+		"chat.replay",
 		"chat_queue.get",
 		"chat_queue.get_item",
 		"chat_queue.run_now",
@@ -115,14 +120,13 @@ func TestWebsocketRequestHandlersCoverKnownProtocolTypes(t *testing.T) {
 		"chat.resume",
 		"chat.attach",
 		"chat.detach",
-		"chat.cancel",
 		"terminal.attach",
 		"terminal.input",
 		"terminal.resize",
 		"terminal.detach",
 	} {
 		if websocketRequestHandlers[removedType] != nil {
-			t.Fatalf("websocketRequestHandlers[%q] should be removed; chat uses HTTP/SSE and terminal bytes use /ws/terminal", removedType)
+			t.Fatalf("websocketRequestHandlers[%q] should be removed; terminal bytes use /ws/terminal", removedType)
 		}
 	}
 }

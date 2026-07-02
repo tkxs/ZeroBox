@@ -24,7 +24,8 @@ type Config struct {
 	WebSocketWriteTimeout    time.Duration
 	WebSocketWriteQueueSize  int
 	GRPCMaxMessageBytes      int
-	ChatEventStorePath       string
+	RelayBufferSeconds       int
+	CommandQueueTimeout      time.Duration
 }
 
 func Load() *Config {
@@ -43,13 +44,13 @@ func Load() *Config {
 	flag.DurationVar(&cfg.WebSocketWriteTimeout, "websocket-write-timeout", getenvDuration("LIVEAGENT_GATEWAY_WS_WRITE_TIMEOUT", 10*time.Second), "write timeout for browser WebSocket connections")
 	flag.IntVar(&cfg.WebSocketWriteQueueSize, "websocket-write-queue-size", getenvInt("LIVEAGENT_GATEWAY_WS_WRITE_QUEUE_SIZE", 512), "write queue buffer size for browser WebSocket connections")
 	flag.IntVar(&cfg.GRPCMaxMessageBytes, "grpc-max-message-bytes", getenvInt("LIVEAGENT_GATEWAY_GRPC_MAX_MESSAGE_BYTES", DefaultGRPCMaxMessageBytes), "maximum gRPC message size in bytes")
-	flag.StringVar(&cfg.ChatEventStorePath, "chat-event-store", getenv("LIVEAGENT_GATEWAY_CHAT_EVENT_STORE", defaultChatEventStorePath()), "SQLite path for durable chat command/event replay state")
+	flag.IntVar(&cfg.RelayBufferSeconds, "relay-buffer-seconds", getenvInt("LIVEAGENT_GATEWAY_RELAY_BUFFER_SECONDS", 30), "seconds of chat events to buffer for brief reconnections")
+	flag.DurationVar(&cfg.CommandQueueTimeout, "command-queue-timeout", getenvDuration("LIVEAGENT_GATEWAY_COMMAND_QUEUE_TIMEOUT", 30*time.Second), "timeout for queuing commands when agent is temporarily offline")
 	flag.Parse()
 
 	cfg.Token = strings.TrimSpace(cfg.Token)
 	cfg.TLSCert = strings.TrimSpace(cfg.TLSCert)
 	cfg.TLSKey = strings.TrimSpace(cfg.TLSKey)
-	cfg.ChatEventStorePath = strings.TrimSpace(cfg.ChatEventStorePath)
 
 	if cfg.Token == "" {
 		flag.Usage()
@@ -73,16 +74,14 @@ func Load() *Config {
 	if cfg.WebSocketWriteQueueSize <= 0 {
 		cfg.WebSocketWriteQueueSize = 512
 	}
+	if cfg.RelayBufferSeconds <= 0 {
+		cfg.RelayBufferSeconds = 30
+	}
+	if cfg.CommandQueueTimeout <= 0 {
+		cfg.CommandQueueTimeout = 30 * time.Second
+	}
 
 	return cfg
-}
-
-func defaultChatEventStorePath() string {
-	configDir, err := os.UserConfigDir()
-	if err != nil || strings.TrimSpace(configDir) == "" {
-		return "liveagent-gateway-chat.sqlite3"
-	}
-	return configDir + string(os.PathSeparator) + "LiveAgent" + string(os.PathSeparator) + "gateway-chat.sqlite3"
 }
 
 func getenv(key, fallback string) string {

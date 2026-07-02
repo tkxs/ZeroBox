@@ -2,9 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -21,7 +18,6 @@ import (
 
 const maxChatCommandBytes = 2 * 1024 * 1024
 const maxChatCommandsPerMinute = 120
-const maxChatEventStreamsPerMinute = 240
 
 func chatCommandsHTTP(cfg *config.Config, sm *session.Manager, limiter *chatRateLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -165,126 +161,6 @@ func handleChatCancelCommandHTTP(
 	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true, "run_id": runID, "conversation_id": conversationID})
 }
 
-func chatEventsHTTP(_ *config.Config, sm *session.Manager, limiter *chatRateLimiter) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !originAllowed(r) {
-			writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden origin"})
-			return
-		}
-		if limiter != nil && !limiter.allow(chatRateLimitKey(r, "chat.events"), maxChatEventStreamsPerMinute, time.Minute, time.Now()) {
-			writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "chat event stream rate limit exceeded"})
-			return
-		}
-
-		requestID := strings.TrimSpace(r.URL.Query().Get("run_id"))
-		conversationID := strings.TrimSpace(r.URL.Query().Get("conversation_id"))
-		afterSeq := parseAfterSeq(r.URL.Query().Get("after_seq"))
-		if afterSeq <= 0 {
-			afterSeq = parseAfterSeq(r.Header.Get("Last-Event-ID"))
-		}
-		if requestID == "" && conversationID == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "run_id or conversation_id is required"})
-			return
-		}
-
-		eventCh, eventDone, cleanup, snapshot, err := sm.SubscribeChatRun(requestID, conversationID, afterSeq)
-		if err != nil {
-			status := http.StatusNotFound
-			if !errors.Is(err, session.ErrChatRunNotFound) {
-				status = http.StatusBadGateway
-			}
-			writeJSON(w, status, map[string]any{"error": websocketErrorMessage(err)})
-			return
-		}
-		defer cleanup()
-
-		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("X-Accel-Buffering", "no")
-		flusher, _ := w.(http.Flusher)
-		if flusher != nil {
-			flusher.Flush()
-		}
-
-		heartbeat := time.NewTicker(15 * time.Second)
-		defer heartbeat.Stop()
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case <-eventDone:
-				return
-			case <-heartbeat.C:
-				if _, err := io.WriteString(w, ": keep-alive\n\n"); err != nil {
-					return
-				}
-				if flusher != nil {
-					flusher.Flush()
-				}
-			case event, ok := <-eventCh:
-				if !ok {
-					return
-				}
-				terminal, err := writeChatSSE(w, flusher, snapshot.RequestID, event)
-				if err != nil {
-					return
-				}
-				if terminal && strings.TrimSpace(event.RequestID) == strings.TrimSpace(snapshot.RequestID) {
-					return
-				}
-			}
-		}
-	}
-}
-
-func writeChatSSE(
-	w io.Writer,
-	flusher http.Flusher,
-	snapshotRunID string,
-	event *session.ChatBroadcastEvent,
-) (bool, error) {
-	if event == nil {
-		return false, nil
-	}
-	payload, terminal := chatBroadcastPayload(event)
-	if payload == nil {
-		return false, nil
-	}
-	seq := event.Seq
-	runID := strings.TrimSpace(event.RequestID)
-	if runID == "" {
-		runID = strings.TrimSpace(snapshotRunID)
-	}
-	conversationID, _ := payload["conversation_id"].(string)
-	envelope := map[string]any{
-		"specversion":     "1.0",
-		"id":              fmt.Sprintf("%s/%d", runID, seq),
-		"source":          "liveagent.gateway.chat",
-		"type":            cloudChatEventType(payload),
-		"time":            time.Now().UTC().Format(time.RFC3339Nano),
-		"run_id":          runID,
-		"snapshot_run_id": strings.TrimSpace(snapshotRunID),
-		"conversation_id": strings.TrimSpace(conversationID),
-		"seq":             seq,
-		"payload":         payload,
-	}
-	data, err := json.Marshal(envelope)
-	if err != nil {
-		return terminal, err
-	}
-	eventName := "chat.event"
-	if isChatControlPayload(payload) {
-		eventName = "chat.control"
-	}
-	if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", seq, eventName, data); err != nil {
-		return terminal, err
-	}
-	if flusher != nil {
-		flusher.Flush()
-	}
-	return terminal, nil
-}
 
 func chatBroadcastPayload(event *session.ChatBroadcastEvent) (map[string]any, bool) {
 	if len(event.Payload) > 0 {
@@ -325,54 +201,6 @@ func isTerminalChatPayload(payload map[string]any) bool {
 		default:
 			return false
 		}
-	default:
-		return false
-	}
-}
-
-func cloudChatEventType(payload map[string]any) string {
-	eventType, _ := payload["type"].(string)
-	switch strings.TrimSpace(eventType) {
-	case "accepted":
-		return "run.accepted"
-	case "runtime_snapshot":
-		return "runtime.snapshot"
-	case "user_message":
-		return "user.message.appended"
-	case "rebased":
-		return "conversation.rebased"
-	case "projection_updated":
-		return "projection.updated"
-	case "delivered", "claimed", "starting", "progress":
-		return "context.preparing"
-	case "started":
-		return "runtime.started"
-	case "token":
-		return "assistant.delta"
-	case "thinking":
-		return "thinking.delta"
-	case "tool_call":
-		return "tool.call"
-	case "tool_call_delta":
-		return "tool.call.delta"
-	case "tool_result":
-		return "tool.result"
-	case "done", "completed":
-		return "run.completed"
-	case "error", "failed":
-		return "run.failed"
-	case "cancelled":
-		return "run.cancelled"
-	default:
-		return "chat.event"
-	}
-}
-
-func isChatControlPayload(payload map[string]any) bool {
-	eventType, _ := payload["type"].(string)
-	switch strings.TrimSpace(eventType) {
-	case "accepted", "user_message", "rebased", "projection_updated", "delivered", "claimed", "starting", "queued_in_gui", "started", "progress", "completed", "failed", "cancelled":
-		return true
 	default:
 		return false
 	}

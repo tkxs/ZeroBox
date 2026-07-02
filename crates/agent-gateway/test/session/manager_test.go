@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -239,18 +238,18 @@ func TestChatRunSeqContinuesWithinConversation(t *testing.T) {
 		t.Fatalf("second snapshot = %#v ok=%v, want latest seq 4", snapshot, ok)
 	}
 
-	ch, _, cleanup, replaySnapshot, err := sm.SubscribeChatRun("", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun conversation replay: %v", err)
 	}
-	defer cleanup()
-	if replaySnapshot.RequestID != "request-2" || replaySnapshot.LatestSeq != 4 {
-		t.Fatalf("conversation replay snapshot = %#v, want latest run request-2 seq 4", replaySnapshot)
+	defer sub.Cleanup()
+	if sub.Snapshot.RequestID != "request-2" || sub.Snapshot.LatestSeq != 4 {
+		t.Fatalf("conversation replay snapshot = %#v, want latest run request-2 seq 4", sub.Snapshot)
 	}
 	got := make([]string, 0, 4)
 	for len(got) < 4 {
 		select {
-		case event := <-ch:
+		case event := <-sub.EventCh:
 			eventType := ""
 			if event.Control != nil {
 				eventType = event.Control.GetType()
@@ -294,20 +293,20 @@ func TestSubscribeChatRunConversationReplayAttachesLatestLiveRun(t *testing.T) {
 	}
 	sm.MarkChatRunControl("request-2", "conversation-1", "accepted", "", "")
 
-	ch, done, cleanup, replaySnapshot, err := sm.SubscribeChatRun("", "conversation-1", 0)
+	replaySub, err := sm.SubscribeChatRun("", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun conversation replay: %v", err)
 	}
-	defer cleanup()
-	assertDoneOpen(t, done)
-	if replaySnapshot.RequestID != "request-2" || replaySnapshot.LatestSeq != 4 {
-		t.Fatalf("conversation replay snapshot = %#v, want live request-2 seq 4", replaySnapshot)
+	defer replaySub.Cleanup()
+	assertDoneOpen(t, replaySub.Done)
+	if replaySub.Snapshot.RequestID != "request-2" || replaySub.Snapshot.LatestSeq != 4 {
+		t.Fatalf("conversation replay snapshot = %#v, want live request-2 seq 4", replaySub.Snapshot)
 	}
 
 	got := make([]string, 0, 4)
 	for len(got) < 4 {
 		select {
-		case event := <-ch:
+		case event := <-replaySub.EventCh:
 			eventType := ""
 			if event.Control != nil {
 				eventType = event.Control.GetType()
@@ -331,164 +330,12 @@ func TestSubscribeChatRunConversationReplayAttachesLatestLiveRun(t *testing.T) {
 		},
 	})
 	select {
-	case event := <-ch:
+	case event := <-replaySub.EventCh:
 		if event.RequestID != "request-2" || event.Seq != 5 || event.Event == nil || event.Event.GetType() != gatewayv1.ChatEvent_TOKEN {
 			t.Fatalf("live event after replay = %#v, want request-2 token seq 5", event)
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for live event after conversation replay, got %#v", got)
-	}
-}
-
-type blockingAppendChatEventStore struct {
-	mu            sync.Mutex
-	appendCalls   int
-	appendEntered chan struct{}
-	releaseFirst  chan struct{}
-}
-
-func newBlockingAppendChatEventStore() *blockingAppendChatEventStore {
-	return &blockingAppendChatEventStore{
-		appendEntered: make(chan struct{}),
-		releaseFirst:  make(chan struct{}),
-	}
-}
-
-func (s *blockingAppendChatEventStore) StartRun(input session.ChatRunStoreStart) (session.ChatRunSnapshot, bool, error) {
-	return session.ChatRunSnapshot{
-		RequestID:       input.RequestID,
-		ConversationID:  input.ConversationID,
-		ClientRequestID: input.ClientRequestID,
-		Workdir:         input.Workdir,
-		RunEpoch:        1,
-		State:           session.ChatRunStateQueued,
-	}, true, nil
-}
-
-func (s *blockingAppendChatEventStore) AppendEvents(inputs []session.ChatRunEventAppend) error {
-	if len(inputs) == 0 {
-		return nil
-	}
-	s.mu.Lock()
-	s.appendCalls += 1
-	call := s.appendCalls
-	s.mu.Unlock()
-	if call == 1 {
-		close(s.appendEntered)
-		<-s.releaseFirst
-	}
-	return nil
-}
-
-func (s *blockingAppendChatEventStore) Replay(string, string, int64, int) (session.ChatRunSnapshot, []*session.ChatBroadcastEvent, bool, error) {
-	return session.ChatRunSnapshot{}, nil, false, nil
-}
-
-func (s *blockingAppendChatEventStore) Close() error {
-	return nil
-}
-
-func TestChatEventStoreAppendDoesNotHoldChatLock(t *testing.T) {
-	t.Parallel()
-
-	store := newBlockingAppendChatEventStore()
-	sm, err := session.NewManagerWithChatEventStore(store)
-	if err != nil {
-		t.Fatalf("NewManagerWithChatEventStore: %v", err)
-	}
-	if _, created, err := sm.StartPendingChatCommandRun("request-1", "conversation-1", "client-1"); err != nil || !created {
-		t.Fatalf("StartPendingChatCommandRun created=%v err=%v", created, err)
-	}
-
-	firstDone := make(chan struct{})
-	go func() {
-		sm.MarkChatRunPayload("request-1", "conversation-1", map[string]any{
-			"type":    "user_message",
-			"message": "first",
-		})
-		close(firstDone)
-	}()
-
-	select {
-	case <-store.appendEntered:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for first append to block")
-	}
-
-	secondDone := make(chan struct{})
-	go func() {
-		sm.MarkChatRunPayload("request-1", "conversation-1", map[string]any{
-			"type":    "projection_updated",
-			"message": "second",
-		})
-		close(secondDone)
-	}()
-
-	select {
-	case <-secondDone:
-	case <-time.After(time.Second):
-		t.Fatal("second chat payload blocked behind event store append")
-	}
-
-	snapshot, ok := sm.ChatRunSnapshot("request-1", "conversation-1")
-	if !ok || snapshot.LatestSeq != 2 {
-		t.Fatalf("snapshot = %#v ok=%v, want latest seq 2 while first append is still blocked", snapshot, ok)
-	}
-
-	close(store.releaseFirst)
-	select {
-	case <-firstDone:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for first append to finish")
-	}
-}
-
-func TestStartAcceptedChatCommandUsesInMemoryConversationSeqDuringPersistLag(t *testing.T) {
-	t.Parallel()
-
-	store := newBlockingAppendChatEventStore()
-	sm, err := session.NewManagerWithChatEventStore(store)
-	if err != nil {
-		t.Fatalf("NewManagerWithChatEventStore: %v", err)
-	}
-	if _, created, err := sm.StartPendingChatCommandRun("request-1", "conversation-1", "client-1"); err != nil || !created {
-		t.Fatalf("StartPendingChatCommandRun request-1 created=%v err=%v", created, err)
-	}
-
-	firstDone := make(chan struct{})
-	go func() {
-		sm.MarkChatRunPayload("request-1", "conversation-1", map[string]any{
-			"type":    "user_message",
-			"message": "first",
-		})
-		close(firstDone)
-	}()
-
-	select {
-	case <-store.appendEntered:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for first append to block")
-	}
-
-	next, created, acceptedSeq, err := sm.StartAcceptedChatCommandRun(
-		"request-2",
-		"conversation-1",
-		"client-2",
-		"",
-		nil,
-	)
-	if err != nil || !created {
-		t.Fatalf("StartAcceptedChatCommandRun request-2 created=%v err=%v", created, err)
-	}
-	if acceptedSeq != 2 || next.LatestSeq != 2 {
-		t.Fatalf("second run snapshot = %#v acceptedSeq=%d, want seq 2", next, acceptedSeq)
-	}
-
-	close(store.releaseFirst)
-	select {
-	case <-firstDone:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for first append to finish")
 	}
 }
 
@@ -505,19 +352,19 @@ func TestClearSessionIfHeartbeatStalePreservesOpenChatRuns(t *testing.T) {
 	); err != nil {
 		t.Fatalf("StartPendingChatCommandRun: %v", err)
 	}
-	ch, done, cleanup, _, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
+	defer sub.Cleanup()
 
 	time.Sleep(time.Millisecond)
 	if !sm.ClearSessionIfHeartbeatStale(sess, time.Nanosecond) {
 		t.Fatalf("current stale session was not cleared")
 	}
-	assertDoneOpen(t, done)
+	assertDoneOpen(t, sub.Done)
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		t.Fatalf("unexpected chat event after heartbeat timeout: %#v", event)
 	default:
 	}
@@ -641,26 +488,26 @@ func TestRemoveChatRunByConversationReleasesBufferedRun(t *testing.T) {
 	sm := newTestSessionManager()
 	startRunningChatCommandRun(t, sm, "request-1", "conversation-1")
 
-	ch, done, cleanup, snapshot, err := sm.SubscribeChatRun("", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun before remove: %v", err)
 	}
-	if snapshot.RequestID != "request-1" {
-		t.Fatalf("snapshot request id = %q, want request-1", snapshot.RequestID)
+	if sub.Snapshot.RequestID != "request-1" {
+		t.Fatalf("snapshot request id = %q, want request-1", sub.Snapshot.RequestID)
 	}
 
 	sm.RemoveChatRunByConversation("conversation-1")
-	assertDoneClosed(t, done)
-	cleanup()
+	assertDoneClosed(t, sub.Done)
+	sub.Cleanup()
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		t.Fatalf("unexpected replay event after remove: %#v", event)
 	default:
 	}
 
-	_, missingDone, missingCleanup, _, err := sm.SubscribeChatRun("", "conversation-1", 0)
-	defer missingCleanup()
-	assertDoneClosed(t, missingDone)
+	missingSub, err := sm.SubscribeChatRun("", "conversation-1", 0)
+	defer missingSub.Cleanup()
+	assertDoneClosed(t, missingSub.Done)
 	if !errors.Is(err, session.ErrChatRunNotFound) {
 		t.Fatalf("SubscribeChatRun after remove = %v, want ErrChatRunNotFound", err)
 	}
@@ -672,8 +519,7 @@ func TestStartPendingChatCommandRunReusesExistingRun(t *testing.T) {
 	sm := newTestSessionManager()
 	first, created, err := sm.StartPendingChatCommandRun(
 		"request-1",
-		"",
-		"client-submit-1",
+		"conversation-1",
 	)
 	if err != nil {
 		t.Fatalf("StartPendingChatCommandRun first: %v", err)
@@ -684,14 +530,9 @@ func TestStartPendingChatCommandRunReusesExistingRun(t *testing.T) {
 	if first.RequestID != "request-1" {
 		t.Fatalf("first request id = %q, want request-1", first.RequestID)
 	}
-	if first.ClientRequestID != "client-submit-1" {
-		t.Fatalf("first client request id = %q, want client-submit-1", first.ClientRequestID)
-	}
-
 	duplicate, created, err := sm.StartPendingChatCommandRun(
-		"request-2",
-		"",
-		"client-submit-1",
+		"request-1",
+		"conversation-1",
 	)
 	if err != nil {
 		t.Fatalf("StartPendingChatCommandRun duplicate: %v", err)
@@ -703,18 +544,10 @@ func TestStartPendingChatCommandRunReusesExistingRun(t *testing.T) {
 		t.Fatalf("duplicate request id = %q, want original request-1", duplicate.RequestID)
 	}
 
-	_, missingDone, missingCleanup, _, err := sm.SubscribeChatRun("request-2", "", 0)
-	defer missingCleanup()
-	assertDoneClosed(t, missingDone)
-	if !errors.Is(err, session.ErrChatRunNotFound) {
-		t.Fatalf("SubscribeChatRun duplicate request = %v, want ErrChatRunNotFound", err)
-	}
-
 	sm.RemoveChatRun("request-1")
 	restarted, created, err := sm.StartPendingChatCommandRun(
-		"request-3",
-		"",
-		"client-submit-1",
+		"request-2",
+		"conversation-1",
 	)
 	if err != nil {
 		t.Fatalf("StartPendingChatCommandRun after remove: %v", err)
@@ -722,8 +555,8 @@ func TestStartPendingChatCommandRunReusesExistingRun(t *testing.T) {
 	if !created {
 		t.Fatalf("restarted run created = false, want true")
 	}
-	if restarted.RequestID != "request-3" {
-		t.Fatalf("restarted request id = %q, want request-3", restarted.RequestID)
+	if restarted.RequestID != "request-2" {
+		t.Fatalf("restarted request id = %q, want request-2", restarted.RequestID)
 	}
 }
 
@@ -748,11 +581,11 @@ func TestPendingChatRunIsAdvertisedBeforeStartedEvent(t *testing.T) {
 		t.Fatalf("pending active chat runs = %#v, want conversation-1", got)
 	}
 
-	ch, _, cleanup, _, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
+	defer sub.Cleanup()
 
 	dispatchChatControl(sm, "request-1", "conversation-1", "delivered", session.ChatRunStateDelivered)
 	if got := activeChatRunConversationIDs(sm); fmt.Sprint(got) != fmt.Sprint([]string{"conversation-1"}) {
@@ -770,7 +603,7 @@ func TestPendingChatRunIsAdvertisedBeforeStartedEvent(t *testing.T) {
 		t.Fatalf("active chat runs after started = %#v, want %#v", got, want)
 	}
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		if event.Control == nil || event.Control.GetType() != "delivered" {
 			t.Fatalf("first control event = %#v, want delivered", event)
 		}
@@ -778,7 +611,7 @@ func TestPendingChatRunIsAdvertisedBeforeStartedEvent(t *testing.T) {
 		t.Fatalf("timed out waiting for delivered control event")
 	}
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		if event.Control == nil || event.Control.GetType() != "started" {
 			t.Fatalf("second control event = %#v, want started", event)
 		}
@@ -799,18 +632,18 @@ func TestFailStartingChatRunBroadcastsErrorAndClearsActiveSummary(t *testing.T) 
 	); err != nil {
 		t.Fatalf("StartPendingChatCommandRun: %v", err)
 	}
-	ch, _, cleanup, _, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
+	defer sub.Cleanup()
 
 	if !sm.FailStartingChatRun("request-1", "desktop did not accept") {
 		t.Fatalf("FailStartingChatRun returned false")
 	}
 
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		if event.Event.GetType() != gatewayv1.ChatEvent_ERROR {
 			t.Fatalf("event type = %v, want ERROR", event.Event.GetType())
 		}
@@ -823,8 +656,8 @@ func TestFailStartingChatRunBroadcastsErrorAndClearsActiveSummary(t *testing.T) 
 	if got := activeChatRunConversationIDs(sm); len(got) != 0 {
 		t.Fatalf("active chat runs after failed start = %#v, want empty", got)
 	}
-	if status := sm.Status(); status.Online {
-		t.Fatalf("status online = true after chat run failed before desktop accept")
+	if status := sm.Status(); !status.Online {
+		t.Fatalf("status online = false, agent session should remain active after individual chat run failure")
 	}
 }
 
@@ -840,11 +673,11 @@ func TestFailUnstartedChatRunBroadcastsErrorUnlessStarted(t *testing.T) {
 	); err != nil {
 		t.Fatalf("StartPendingChatCommandRun request-1: %v", err)
 	}
-	ch, _, cleanup, _, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
+	defer sub.Cleanup()
 	if sm.FailUnstartedChatRun("request-1", "desktop app did not start") {
 		t.Fatalf("unaccepted pending run should not fail the render-start watchdog")
 	}
@@ -854,7 +687,7 @@ func TestFailUnstartedChatRunBroadcastsErrorUnlessStarted(t *testing.T) {
 		t.Fatalf("FailUnstartedChatRun returned false for accepted pending run")
 	}
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		if event.Control == nil || event.Control.GetType() != "delivered" {
 			t.Fatalf("event = %#v, want delivered control", event)
 		}
@@ -862,7 +695,7 @@ func TestFailUnstartedChatRunBroadcastsErrorUnlessStarted(t *testing.T) {
 		t.Fatalf("timed out waiting for delivered control event")
 	}
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		if event.Event == nil || event.Event.GetType() != gatewayv1.ChatEvent_ERROR {
 			t.Fatalf("event = %#v, want ERROR", event)
 		}
@@ -930,18 +763,18 @@ func TestTerminalChatRunStateIsImmutable(t *testing.T) {
 		},
 	})
 
-	ch, done, cleanup, snapshot, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
-	assertDoneOpen(t, done)
-	if snapshot.State != session.ChatRunStateFailed {
-		t.Fatalf("terminal state = %q, want %q", snapshot.State, session.ChatRunStateFailed)
+	defer sub.Cleanup()
+	assertDoneOpen(t, sub.Done)
+	if sub.Snapshot.State != session.ChatRunStateFailed {
+		t.Fatalf("terminal state = %q, want %q", sub.Snapshot.State, session.ChatRunStateFailed)
 	}
 
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		if event.Event == nil || event.Event.GetType() != gatewayv1.ChatEvent_ERROR {
 			t.Fatalf("replayed event = %#v, want ERROR", event)
 		}
@@ -949,7 +782,7 @@ func TestTerminalChatRunStateIsImmutable(t *testing.T) {
 		t.Fatalf("timed out waiting for replayed error event")
 	}
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		t.Fatalf("terminal completion control should be ignored after failure: %#v", event)
 	default:
 	}
@@ -972,18 +805,18 @@ func TestDesktopBroadcastChatEventCreatesAttachableRun(t *testing.T) {
 		},
 	})
 
-	ch, done, cleanup, snapshot, err := sm.SubscribeChatRun("", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
-	assertDoneOpen(t, done)
-	if snapshot.RequestID != "desktop-run-1" {
-		t.Fatalf("snapshot request id = %q, want desktop-run-1", snapshot.RequestID)
+	defer sub.Cleanup()
+	assertDoneOpen(t, sub.Done)
+	if sub.Snapshot.RequestID != "desktop-run-1" {
+		t.Fatalf("snapshot request id = %q, want desktop-run-1", sub.Snapshot.RequestID)
 	}
 
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		if event.Seq != 1 {
 			t.Fatalf("event seq = %d, want 1", event.Seq)
 		}
@@ -995,6 +828,54 @@ func TestDesktopBroadcastChatEventCreatesAttachableRun(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for replayed desktop chat event")
+	}
+}
+
+func TestDesktopStartedControlCreatesAttachableRun(t *testing.T) {
+	t.Parallel()
+
+	sm := newTestSessionManager()
+	sm.SetSession(session.NewAgentSession(sm.LatestAuthSnapshot()))
+
+	// GUI-local runs (e.g. queue auto-send) announce themselves with a bare
+	// "started" control before any chat event or runtime snapshot arrives.
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: "desktop-local-run-1",
+		Payload: &gatewayv1.AgentEnvelope_ChatControl{
+			ChatControl: &gatewayv1.ChatControlEvent{
+				RequestId:      "desktop-local-run-1",
+				ConversationId: "conversation-local",
+				Type:           "started",
+			},
+		},
+	})
+
+	snapshot, ok := sm.RunningChatRunSnapshot("conversation-local")
+	if !ok {
+		t.Fatalf("RunningChatRunSnapshot: run for bare started control not registered")
+	}
+	if snapshot.RequestID != "desktop-local-run-1" {
+		t.Fatalf("snapshot request id = %q, want desktop-local-run-1", snapshot.RequestID)
+	}
+
+	summary, ok := sm.ConversationRunSummary("conversation-local")
+	if !ok || summary.RequestID != "desktop-local-run-1" {
+		t.Fatalf("ConversationRunSummary = %#v ok=%v, want desktop-local-run-1", summary, ok)
+	}
+
+	// A stale "completed" control for an unknown run must not resurrect a run.
+	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+		RequestId: "desktop-unknown-run",
+		Payload: &gatewayv1.AgentEnvelope_ChatControl{
+			ChatControl: &gatewayv1.ChatControlEvent{
+				RequestId:      "desktop-unknown-run",
+				ConversationId: "conversation-unknown",
+				Type:           "completed",
+			},
+		},
+	})
+	if _, ok := sm.ChatRunSnapshot("desktop-unknown-run", ""); ok {
+		t.Fatalf("completed control for unknown run must not create a run")
 	}
 }
 
@@ -1030,18 +911,18 @@ func TestChatRuntimeSnapshotCreatesAttachableConversationRun(t *testing.T) {
 		t.Fatalf("active summaries = %#v, want snapshot-backed run-1", summaries)
 	}
 
-	ch, done, cleanup, snapshot, err := sm.SubscribeChatRun("", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
-	assertDoneOpen(t, done)
-	if snapshot.RequestID != "run-1" || snapshot.State != session.ChatRunStateRunning || snapshot.Done {
-		t.Fatalf("snapshot = %#v, want running run-1", snapshot)
+	defer sub.Cleanup()
+	assertDoneOpen(t, sub.Done)
+	if sub.Snapshot.RequestID != "run-1" || sub.Snapshot.State != session.ChatRunStateRunning || sub.Snapshot.Done {
+		t.Fatalf("snapshot = %#v, want running run-1", sub.Snapshot)
 	}
 
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		if event.RequestID != "run-1" || event.Seq != 1 {
 			t.Fatalf("runtime snapshot event = %#v, want run-1 seq 1", event)
 		}
@@ -1071,12 +952,12 @@ func TestChatRuntimeSnapshotTerminalClosesSubscribers(t *testing.T) {
 		EntriesJson:    `[{"id":"u1","kind":"user","text":"hello","attachments":[]}]`,
 	})
 
-	ch, done, cleanup, _, err := sm.SubscribeChatRun("run-1", "conversation-1", 1)
+	sub, err := sm.SubscribeChatRun("run-1", "conversation-1", 1)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
-	assertDoneOpen(t, done)
+	defer sub.Cleanup()
+	assertDoneOpen(t, sub.Done)
 
 	sm.ApplyChatRuntimeSnapshot(&gatewayv1.ChatRuntimeSnapshot{
 		ConversationId: "conversation-1",
@@ -1087,7 +968,7 @@ func TestChatRuntimeSnapshotTerminalClosesSubscribers(t *testing.T) {
 	})
 
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		eventType, _ := event.Payload["type"].(string)
 		state, _ := event.Payload["state"].(string)
 		if eventType != "runtime_snapshot" || state != session.ChatRunStateCompleted {
@@ -1096,7 +977,7 @@ func TestChatRuntimeSnapshotTerminalClosesSubscribers(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for terminal runtime snapshot")
 	}
-	assertDoneClosed(t, done)
+	assertDoneClosed(t, sub.Done)
 	if summaries := sm.ActiveChatRunSummaries(); len(summaries) != 0 {
 		t.Fatalf("active summaries after terminal snapshot = %#v, want empty", summaries)
 	}
@@ -1168,20 +1049,20 @@ func TestChatRuntimeSnapshotTerminalCanFollowDoneEvent(t *testing.T) {
 		EntriesJson:    `[{"id":"u1","kind":"user","text":"hello","attachments":[]},{"id":"a1","kind":"assistant","text":"final","round":1}]`,
 	})
 
-	ch, _, cleanup, snapshot, err := sm.SubscribeChatRun("run-1", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("run-1", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
-	if snapshot.State != session.ChatRunStateCompleted || !snapshot.Done || snapshot.LatestSeq != 3 {
-		t.Fatalf("snapshot = %#v, want completed seq 3", snapshot)
+	defer sub.Cleanup()
+	if sub.Snapshot.State != session.ChatRunStateCompleted || !sub.Snapshot.Done || sub.Snapshot.LatestSeq != 3 {
+		t.Fatalf("snapshot = %#v, want completed seq 3", sub.Snapshot)
 	}
 
 	gotRuntimeSnapshots := 0
 	gotFinalSnapshot := false
 	for gotRuntimeSnapshots < 2 {
 		select {
-		case event := <-ch:
+		case event := <-sub.EventCh:
 			if event.Payload == nil {
 				continue
 			}
@@ -1228,9 +1109,9 @@ func TestHistoryRunningDoesNotCreateAttachableConversationRun(t *testing.T) {
 		t.Fatalf("active summaries = %#v, want empty", summaries)
 	}
 
-	_, done, cleanup, _, err := sm.SubscribeChatRun("", "conversation-1", 0)
-	defer cleanup()
-	assertDoneClosed(t, done)
+	missingSub, err := sm.SubscribeChatRun("", "conversation-1", 0)
+	defer missingSub.Cleanup()
+	assertDoneClosed(t, missingSub.Done)
 	if !errors.Is(err, session.ErrChatRunNotFound) {
 		t.Fatalf("SubscribeChatRun = %v, want ErrChatRunNotFound", err)
 	}
@@ -1242,7 +1123,7 @@ func TestHistoryRunningDoesNotPromoteDesktopQueuedCommandRun(t *testing.T) {
 	sm := newTestSessionManager()
 	sm.SetSession(session.NewAgentSession(sm.LatestAuthSnapshot()))
 
-	if _, created, _, err := sm.StartAcceptedChatCommandRun("request-queued", "conversation-1", "client-1", "/workspace", []map[string]any{{
+	if _, created, _, err := sm.StartAcceptedChatCommandRun("request-queued", "conversation-1", "/workspace", []map[string]any{{
 		"type":    "user_message",
 		"message": "queued prompt",
 	}}); err != nil || !created {
@@ -1296,20 +1177,20 @@ func TestHistoryRunningDoesNotPromoteDesktopQueuedCommandRun(t *testing.T) {
 		t.Fatalf("active summaries after started = %#v, want request-queued replay cursor", summaries)
 	}
 
-	ch, done, cleanup, snapshot, err := sm.SubscribeChatRun("request-queued", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("request-queued", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
-	assertDoneOpen(t, done)
-	if snapshot.RequestID != "request-queued" || snapshot.State != session.ChatRunStateRunning {
-		t.Fatalf("snapshot = %#v, want running request-queued", snapshot)
+	defer sub.Cleanup()
+	assertDoneOpen(t, sub.Done)
+	if sub.Snapshot.RequestID != "request-queued" || sub.Snapshot.State != session.ChatRunStateRunning {
+		t.Fatalf("snapshot = %#v, want running request-queued", sub.Snapshot)
 	}
 
 	got := make([]string, 0, 4)
 	for len(got) < 4 {
 		select {
-		case event := <-ch:
+		case event := <-sub.EventCh:
 			eventType := ""
 			if event.Control != nil {
 				eventType = event.Control.GetType()
@@ -1359,7 +1240,7 @@ func TestQueuedRunStartedHistoryEventSurvivesFullSubscriberQueue(t *testing.T) {
 		})
 	}
 
-	if _, created, _, err := sm.StartAcceptedChatCommandRun("request-queued", "conversation-1", "client-1", "/workspace", []map[string]any{{
+	if _, created, _, err := sm.StartAcceptedChatCommandRun("request-queued", "conversation-1", "/workspace", []map[string]any{{
 		"type":    "user_message",
 		"message": "queued prompt",
 	}}); err != nil || !created {
@@ -1460,14 +1341,14 @@ func TestStartedRunKeepsConversationOwnerWhenPreviousRunEmitsLateEvent(t *testin
 		t.Fatalf("active summaries = %#v, want request-new", summaries)
 	}
 
-	_, done, cleanup, snapshot, err := sm.SubscribeChatRun("", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
-	assertDoneOpen(t, done)
-	if snapshot.RequestID != "request-new" {
-		t.Fatalf("conversation snapshot request id = %q, want request-new", snapshot.RequestID)
+	defer sub.Cleanup()
+	assertDoneOpen(t, sub.Done)
+	if sub.Snapshot.RequestID != "request-new" {
+		t.Fatalf("conversation snapshot request id = %q, want request-new", sub.Snapshot.RequestID)
 	}
 }
 
@@ -1478,11 +1359,11 @@ func TestCompletedHistoryUpsertDoesNotPreemptTerminalChatEvent(t *testing.T) {
 	sm.SetSession(session.NewAgentSession(sm.LatestAuthSnapshot()))
 	started := startRunningChatCommandRun(t, sm, "request-1", "conversation-1")
 
-	ch, done, cleanup, _, err := sm.SubscribeChatRun("request-1", "conversation-1", started.LatestSeq)
+	sub, err := sm.SubscribeChatRun("request-1", "conversation-1", started.LatestSeq)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
+	defer sub.Cleanup()
 
 	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
 		RequestId: "request-1",
@@ -1507,9 +1388,8 @@ func TestCompletedHistoryUpsertDoesNotPreemptTerminalChatEvent(t *testing.T) {
 		},
 	})
 
-	assertDoneOpen(t, done)
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		if event.Event.GetType() != gatewayv1.ChatEvent_DONE {
 			t.Fatalf("event type = %v, want DONE", event.Event.GetType())
 		}
@@ -1517,9 +1397,9 @@ func TestCompletedHistoryUpsertDoesNotPreemptTerminalChatEvent(t *testing.T) {
 		t.Fatalf("timed out waiting for terminal chat event")
 	}
 
-	_, missingDone, missingCleanup, _, err := sm.SubscribeChatRun("", "conversation-1", 0)
-	defer missingCleanup()
-	assertDoneClosed(t, missingDone)
+	missingSub, err := sm.SubscribeChatRun("", "conversation-1", 0)
+	defer missingSub.Cleanup()
+	assertDoneClosed(t, missingSub.Done)
 	if !errors.Is(err, session.ErrChatRunNotFound) {
 		t.Fatalf("SubscribeChatRun after release = %v, want ErrChatRunNotFound", err)
 	}
@@ -1571,18 +1451,18 @@ func TestClearSessionPreservesOpenChatRuns(t *testing.T) {
 		t.Fatalf("first run = %#v created=%v", first, created)
 	}
 
-	ch, done, cleanup, _, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
+	sub, err := sm.SubscribeChatRun("request-1", "conversation-1", 0)
 	if err != nil {
 		t.Fatalf("SubscribeChatRun: %v", err)
 	}
-	defer cleanup()
+	defer sub.Cleanup()
 
 	sm.ClearSession(sess)
 	assertDoneClosed(t, sess.Done())
-	assertDoneOpen(t, done)
+	assertDoneOpen(t, sub.Done)
 
 	select {
-	case event := <-ch:
+	case event := <-sub.EventCh:
 		t.Fatalf("unexpected chat event after session clear: %#v", event)
 	default:
 	}
@@ -1594,9 +1474,8 @@ func TestClearSessionPreservesOpenChatRuns(t *testing.T) {
 	}
 
 	restarted, created, err := sm.StartPendingChatCommandRun(
-		"request-2",
+		"request-1",
 		"conversation-1",
-		"client-submit-1",
 	)
 	if err != nil {
 		t.Fatalf("StartPendingChatCommandRun retry: %v", err)

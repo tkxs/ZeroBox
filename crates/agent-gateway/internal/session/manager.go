@@ -14,11 +14,13 @@ var ErrTunnelNotFound = errors.New("tunnel not found")
 var ErrTunnelExpired = errors.New("tunnel expired")
 var ErrTunnelOverLimit = errors.New("tunnel connection limit exceeded")
 var ErrTunnelLimitExceeded = errors.New("tunnel limit exceeded")
+var ErrCommandQueueFull = errors.New("command queue full")
+var ErrCommandQueueTimeout = errors.New("command queue timeout: agent did not reconnect")
 
 const (
-	maxBufferedChatRunEvents = 50000
-	chatRunDoneRetention  = time.Hour
-	chatRunStaleRetention = 12 * time.Hour
+	defaultRelayBufferRetention = 30 * time.Second
+	chatRunDoneRetention        = 5 * time.Minute
+	chatRunStaleRetention       = 30 * time.Minute
 
 	chatRuntimeReadyTTL      = 15 * time.Second
 	agentSessionHeartbeatTTL = 90 * time.Second
@@ -36,6 +38,7 @@ type Manager struct {
 	syncHub   *syncHub
 	chatStore *chatRunStore
 	tunnels   *tunnelStore
+	cmdQueue  *commandQueue
 }
 
 type AgentSession struct {
@@ -62,25 +65,24 @@ type agentStream struct {
 }
 
 type ChatBroadcastEvent struct {
-	RequestID string
-	Event     *gatewayv1.ChatEvent
-	Control   *gatewayv1.ChatControlEvent
-	Payload   map[string]any
-	Seq       int64
-	Workdir   string
+	RequestID  string
+	Event      *gatewayv1.ChatEvent
+	Control    *gatewayv1.ChatControlEvent
+	Payload    map[string]any
+	Seq        int64
+	Workdir    string
+	ReceivedAt time.Time
 }
 
 type ChatRunSnapshot struct {
-	RequestID       string
-	ConversationID  string
-	ClientRequestID string
-	Workdir         string
-	FirstSeq        int64
-	LatestSeq       int64
-	RunEpoch        int64
-	State           string
-	ErrorCode       string
-	Done            bool
+	RequestID      string
+	ConversationID string
+	Workdir        string
+	FirstSeq       int64
+	LatestSeq      int64
+	RunEpoch       int64
+	State          string
+	Done           bool
 }
 
 type ActiveChatRunSummary struct {
@@ -106,24 +108,19 @@ const (
 )
 
 type chatRun struct {
-	requestID               string
-	conversationID          string
-	clientRequestID         string
-	workdir                 string
-	sessionEpoch            uint64
-	runEpoch                int64
-	events                  []*ChatBroadcastEvent
-	nextSeq                 int64
-	state                   string
-	errorCode               string
-	accepted                bool
-	started                 bool
-	firstDeltaLogged        bool
-	done                    bool
-	runtimeSnapshotRevision int64
-	updatedAt               time.Time
-	expiresAt               time.Time
-	subscribers             map[int]*chatRunSubscriber
+	requestID      string
+	conversationID string
+	workdir        string
+	runEpoch       int64
+	events         []*ChatBroadcastEvent
+	nextSeq        int64
+	state          string
+	done           bool
+	updatedAt      time.Time
+	expiresAt      time.Time
+	subscribers    map[int]*chatRunSubscriber
+
+	relayBufferRetention time.Duration
 }
 
 type chatRunSubscriber struct {
@@ -154,11 +151,7 @@ func NewManager() *Manager {
 		syncHub:   newSyncHub(),
 		chatStore: newChatRunStore(),
 		tunnels:   newTunnelStore(),
+		cmdQueue:  newCommandQueue(defaultCommandQueueTimeout),
 	}
 }
 
-func NewManagerWithChatEventStore(store ChatEventStore) (*Manager, error) {
-	manager := NewManager()
-	manager.chatStore.eventStore = store
-	return manager, nil
-}

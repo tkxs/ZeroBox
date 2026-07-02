@@ -134,30 +134,11 @@ func TestTerminalSessionSnapshotPreservesSshMetadataAndSorts(t *testing.T) {
 	}
 }
 
-func TestAppendCappedChatRunEventKeepsLatestEvents(t *testing.T) {
-	var events []*ChatBroadcastEvent
-	for seq := int64(1); seq <= 5; seq++ {
-		events = appendCappedChatRunEvent(events, &ChatBroadcastEvent{Seq: seq}, 3)
-	}
-
-	if len(events) != 3 {
-		t.Fatalf("events len = %d, want 3", len(events))
-	}
-	if got := []int64{events[0].Seq, events[1].Seq, events[2].Seq}; got[0] != 3 || got[1] != 4 || got[2] != 5 {
-		t.Fatalf("events seqs = %#v, want [3 4 5]", got)
-	}
-
-	events = appendCappedChatRunEvent(events, nil, 3)
-	if got := []int64{events[0].Seq, events[1].Seq, events[2].Seq}; got[0] != 3 || got[1] != 4 || got[2] != 5 {
-		t.Fatalf("nil event changed buffered seqs to %#v, want [3 4 5]", got)
-	}
-}
-
 func TestChatRunShouldPruneRetainsRunningUntilStale(t *testing.T) {
 	now := time.Now()
 	running := &chatRun{
 		state:     ChatRunStateRunning,
-		updatedAt: now.Add(-time.Hour),
+		updatedAt: now.Add(-15 * time.Minute),
 	}
 	if running.shouldPrune(now) {
 		t.Fatal("running chat should survive well before stale retention")
@@ -196,7 +177,7 @@ func TestPruneExpiredChatRunsDropsNilEntries(t *testing.T) {
 func TestConversationRunSummaryReturnsCompletedRun(t *testing.T) {
 	manager := NewManager()
 
-	snapshot, created, _, err := manager.StartAcceptedChatCommandRun("run-1", "conv-1", "client-1", "/workspace", nil)
+	snapshot, created, _, err := manager.StartAcceptedChatCommandRun("run-1", "conv-1", "/workspace", nil)
 	if err != nil || !created {
 		t.Fatalf("StartAcceptedChatCommandRun failed: err=%v created=%v", err, created)
 	}

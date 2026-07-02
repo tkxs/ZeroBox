@@ -103,7 +103,6 @@ func startAcceptedChatCommand(
 	snapshot, created, acceptedSeq, err := sm.StartAcceptedChatCommandRun(
 		requestID,
 		body.ConversationID,
-		body.ClientRequestID,
 		body.Workdir,
 		initialPayloads,
 	)

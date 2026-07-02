@@ -117,6 +117,41 @@ export type ChatEntry =
     }
   | { id: string; kind: "error"; text: string };
 
+// Stable content identity for deduplicating the same logical entry across the
+// three transcript sources (live stream, committed runtime messages, parsed
+// history). Tool entries are compared by identity rather than content: the
+// gateway trims large tool arguments/results on the live path and tool result
+// timestamps differ per parse, so content comparison would classify every
+// live entry as different from its persisted twin — forcing a full transcript
+// replacement (and a visible flash) whenever history is refreshed.
+export function chatEntryDedupKey(entry: ChatEntry): string {
+  switch (entry.kind) {
+    case "user":
+      return JSON.stringify({ kind: entry.kind, text: entry.text });
+    case "assistant":
+      return JSON.stringify({ kind: entry.kind, text: entry.text, round: entry.round ?? 0 });
+    case "thinking":
+      return JSON.stringify({ kind: entry.kind, text: entry.text, round: entry.round ?? 0 });
+    case "tool_call":
+      return JSON.stringify({
+        kind: entry.kind,
+        identity: entry.toolCall.id.trim() || entry.toolCall.name,
+        round: entry.round ?? 0,
+      });
+    case "tool_result":
+      return JSON.stringify({
+        kind: entry.kind,
+        identity: entry.toolResult.toolCallId.trim() || entry.toolResult.toolName,
+        isError: Boolean(entry.toolResult.isError),
+        round: entry.round ?? 0,
+      });
+    default: {
+      const { id: _id, ...rest } = entry;
+      return JSON.stringify(rest);
+    }
+  }
+}
+
 type StoredMessage = {
   role?: unknown;
   id?: unknown;
