@@ -1619,6 +1619,34 @@ export default function GatewayApp() {
   });
   displayedConversationBusyRef.current = displayedConversationBusy;
 
+  // Deterministic messageRef attachment: when the displayed conversation
+  // transitions busy → idle (run finished), run the quiet enrich refresh so
+  // the settled tail's user bubbles gain their persisted messageRef (edit
+  // affordance) without waiting for a history upsert to race the idle gate.
+  // The upsert-while-idle path below stays as the backstop for the
+  // persist-after-done ordering.
+  const previousDisplayedBusyRef = useRef({ id: "", busy: false });
+  useEffect(() => {
+    const prev = previousDisplayedBusyRef.current;
+    previousDisplayedBusyRef.current = {
+      id: displayedConversationId,
+      busy: displayedConversationBusy,
+    };
+    if (
+      prev.id === displayedConversationId &&
+      prev.busy &&
+      !displayedConversationBusy &&
+      displayedConversationId
+    ) {
+      void refreshDisplayedConversationHistorySnapshot(displayedConversationId, api);
+    }
+  }, [
+    api,
+    displayedConversationBusy,
+    displayedConversationId,
+    refreshDisplayedConversationHistorySnapshot,
+  ]);
+
   useEffect(() => {
     if (!api) {
       return;

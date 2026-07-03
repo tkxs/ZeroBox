@@ -70,6 +70,29 @@ func (m *Manager) ingestChatEvent(requestID string, event *gatewayv1.ChatEvent) 
 		return
 	}
 
+	if event.GetType() == gatewayv1.ChatEvent_USER_MESSAGE {
+		// A GUI-local edit-resend: the desktop truncated its own history and
+		// stamped the truncation base onto its user_message. Broadcast the
+		// same rebased event the webui edit path seeds, so every subscriber
+		// truncates before the new user message renders (webui commands never
+		// reach here — their echo was swallowed above).
+		if ref, ok := payload["base_message_ref"].(map[string]any); ok {
+			messageID, _ := ref["message_id"].(string)
+			contentHash, _ := ref["content_hash"].(string)
+			if strings.TrimSpace(messageID) != "" || strings.TrimSpace(contentHash) != "" {
+				record := s.runRecordLocked(runID, conversationID)
+				if !record.rebaseSeeded {
+					record.rebaseSeeded = true
+					s.appendSeededPayloadsLocked(stream, runID, record.clientRequestID, []map[string]any{{
+						"type":             StreamEventRebased,
+						"base_message_ref": ref,
+						"reason":           "edit_resend",
+					}}, now)
+				}
+			}
+		}
+	}
+
 	workdir, _ := payload["workdir"].(string)
 	s.runStartedLocked(stream, runID, strings.TrimSpace(workdir), now)
 	if stream.activity == nil || stream.activity.RunID != runID {

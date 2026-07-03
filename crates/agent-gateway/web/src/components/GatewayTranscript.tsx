@@ -6,6 +6,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Check, CheckCircle2, ChevronDown, Copy, File, FileText, Loader2, Pencil, Settings, X } from "./icons";
@@ -796,6 +798,121 @@ function useGatewayCommitDetailsLoader(
   );
 }
 
+// Shared user-row body: the bubble plus hover actions (copy / edit), or the
+// inline editor while this row is being edited. Both transcript regions
+// render it; the per-row copied/editing state lives in the owning region so
+// folds and conversation switches reset it there.
+function GatewayUserMessageRowBody(props: {
+  row: Extract<TranscriptRow, { kind: "user" }>;
+  isStreaming: boolean;
+  readOnly?: boolean;
+  copiedMessageId: string | null;
+  editingMessageId: string | null;
+  setCopiedMessageId: Dispatch<SetStateAction<string | null>>;
+  setEditingMessageId: Dispatch<SetStateAction<string | null>>;
+  workspaceRoot?: string;
+  onLoadUploadedImagePreview?: UploadedImagePreviewLoader;
+  loadCommitDetails?: CommitDetailsLoader;
+  onResendFromEdit?: (
+    messageRef: HistoryMessageRef,
+    text: string,
+    uploadedFiles: PendingUploadedFile[],
+  ) => void;
+}) {
+  const {
+    row,
+    isStreaming,
+    readOnly = false,
+    copiedMessageId,
+    editingMessageId,
+    setCopiedMessageId,
+    setEditingMessageId,
+    workspaceRoot,
+    onLoadUploadedImagePreview,
+    loadCommitDetails,
+    onResendFromEdit,
+  } = props;
+  const { locale, t } = useLocale();
+  const isCopied = copiedMessageId === row.key;
+  const isEditing = editingMessageId === row.key;
+  const effectiveMessageRef = row.messageRef;
+  const missingStableRef = !effectiveMessageRef;
+  const editDisabled = readOnly || isStreaming || !onResendFromEdit || missingStableRef;
+  const editTitle = missingStableRef
+    ? locale === "en-US"
+      ? "This older message cannot be edited because it has no stable message identifier."
+      : "旧历史缺少稳定消息标识，无法编辑重发"
+    : t("chat.edit");
+
+  if (isEditing && effectiveMessageRef) {
+    return (
+      <EditableUserMessageBubble
+        initialText={row.text}
+        attachments={row.attachments}
+        workspaceRoot={workspaceRoot}
+        onLoadUploadedImagePreview={onLoadUploadedImagePreview}
+        onCancel={() => setEditingMessageId(null)}
+        onSubmit={(text, attachments) => {
+          setEditingMessageId(null);
+          onResendFromEdit?.(effectiveMessageRef, text, attachments);
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="chat-user-bubble-wrap group relative ml-auto max-w-[min(85%,calc(50em+2rem))]">
+      <GatewayUserMessageBubbleBody
+        text={row.text}
+        attachments={row.attachments}
+        workspaceRoot={workspaceRoot}
+        onLoadUploadedImagePreview={onLoadUploadedImagePreview}
+        loadCommitDetails={loadCommitDetails}
+      />
+      {!readOnly ? (
+        <div className="chat-user-bubble-actions mt-1 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+          <button
+            type="button"
+            className="chat-user-bubble-action rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+            title={t("chat.copy")}
+            aria-label={t("chat.copy")}
+            onClick={() => {
+              void navigator.clipboard.writeText(row.text).then(() => {
+                setCopiedMessageId(row.key);
+                window.setTimeout(() => {
+                  setCopiedMessageId((current) =>
+                    current === row.key ? null : current,
+                  );
+                }, 1500);
+              });
+            }}
+          >
+            {isCopied ? (
+              <Check className="h-3.5 w-3.5" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+          </button>
+          <button
+            type="button"
+            className="chat-user-bubble-action rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            title={editTitle}
+            aria-label={editTitle}
+            disabled={editDisabled}
+            onClick={() => {
+              if (effectiveMessageRef) {
+                setEditingMessageId(row.key);
+              }
+            }}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const GatewayTranscriptFoldedRegion = memo(function GatewayTranscriptFoldedRegion(props: {
   conversationId?: string;
   rows: readonly TranscriptRow[];
@@ -834,7 +951,7 @@ const GatewayTranscriptFoldedRegion = memo(function GatewayTranscriptFoldedRegio
     readOnly = false,
     redactToolContent = false,
   } = props;
-  const { locale, t } = useLocale();
+  const { locale } = useLocale();
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const historyIdentityKey = `${conversationId ?? ""}\n${rows[0]?.key ?? ""}`;
@@ -928,16 +1045,6 @@ const GatewayTranscriptFoldedRegion = memo(function GatewayTranscriptFoldedRegio
 
         const row = virtualItem.row;
         if (row.kind === "user") {
-          const isCopied = copiedMessageId === row.key;
-          const isEditing = editingMessageId === row.key;
-          const effectiveMessageRef = row.messageRef;
-          const missingStableRef = !effectiveMessageRef;
-          const editDisabled = readOnly || isStreaming || !onResendFromEdit || missingStableRef;
-          const editTitle = missingStableRef
-            ? locale === "en-US"
-              ? "This older message cannot be edited because it has no stable message identifier."
-              : "旧历史缺少稳定消息标识，无法编辑重发"
-            : t("chat.edit");
           return (
             <article
               key={virtualRow.key}
@@ -946,69 +1053,19 @@ const GatewayTranscriptFoldedRegion = memo(function GatewayTranscriptFoldedRegio
               className="gateway-transcript-row gateway-transcript-row-user absolute left-0 right-0 top-0"
               style={{ transform: `translateY(${virtualRow.start}px)` }}
             >
-              {isEditing && effectiveMessageRef ? (
-                <EditableUserMessageBubble
-                  initialText={row.text}
-                  attachments={row.attachments}
-                  workspaceRoot={workspaceRoot}
-                  onLoadUploadedImagePreview={onLoadUploadedImagePreview}
-                  onCancel={() => setEditingMessageId(null)}
-                  onSubmit={(text, attachments) => {
-                    setEditingMessageId(null);
-                    onResendFromEdit?.(effectiveMessageRef, text, attachments);
-                  }}
-                />
-              ) : (
-                <div className="chat-user-bubble-wrap group relative ml-auto max-w-[min(85%,calc(50em+2rem))]">
-                  <GatewayUserMessageBubbleBody
-                    text={row.text}
-                    attachments={row.attachments}
-                    workspaceRoot={workspaceRoot}
-                    onLoadUploadedImagePreview={onLoadUploadedImagePreview}
-                    loadCommitDetails={loadCommitDetails}
-                  />
-                  {!readOnly ? (
-                    <div className="chat-user-bubble-actions mt-1 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                      <button
-                        type="button"
-                        className="chat-user-bubble-action rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-                        title={t("chat.copy")}
-                        aria-label={t("chat.copy")}
-                        onClick={() => {
-                          void navigator.clipboard.writeText(row.text).then(() => {
-                            setCopiedMessageId(row.key);
-                            window.setTimeout(() => {
-                              setCopiedMessageId((current) =>
-                                current === row.key ? null : current,
-                              );
-                            }, 1500);
-                          });
-                        }}
-                      >
-                        {isCopied ? (
-                          <Check className="h-3.5 w-3.5" />
-                        ) : (
-                          <Copy className="h-3.5 w-3.5" />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        className="chat-user-bubble-action rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                        title={editTitle}
-                        aria-label={editTitle}
-                        disabled={editDisabled}
-                        onClick={() => {
-                          if (effectiveMessageRef) {
-                            setEditingMessageId(row.key);
-                          }
-                        }}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              )}
+              <GatewayUserMessageRowBody
+                row={row}
+                isStreaming={isStreaming}
+                readOnly={readOnly}
+                copiedMessageId={copiedMessageId}
+                editingMessageId={editingMessageId}
+                setCopiedMessageId={setCopiedMessageId}
+                setEditingMessageId={setEditingMessageId}
+                workspaceRoot={workspaceRoot}
+                onLoadUploadedImagePreview={onLoadUploadedImagePreview}
+                loadCommitDetails={loadCommitDetails}
+                onResendFromEdit={onResendFromEdit}
+              />
             </article>
           );
         }
@@ -1084,6 +1141,11 @@ const GatewayTranscriptLiveRegion = memo(function GatewayTranscriptLiveRegion(pr
   workspaceRoot?: string;
   gitClient?: GitClient | null;
   onLoadUploadedImagePreview?: UploadedImagePreviewLoader;
+  onResendFromEdit?: (
+    messageRef: HistoryMessageRef,
+    text: string,
+    uploadedFiles: PendingUploadedFile[],
+  ) => void;
   toolStatus?: string | null;
   toolStatusIsCompaction: boolean;
 }) {
@@ -1098,10 +1160,25 @@ const GatewayTranscriptLiveRegion = memo(function GatewayTranscriptLiveRegion(pr
     workspaceRoot,
     gitClient,
     onLoadUploadedImagePreview,
+    onResendFromEdit,
     toolStatus,
     toolStatusIsCompaction,
   } = props;
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const loadCommitDetails = useGatewayCommitDetailsLoader(workspaceRoot, gitClient);
+
+  useEffect(() => {
+    if (!editingMessageId) {
+      return;
+    }
+    const hasEditingRow = rows.some(
+      (row) => row.kind === "user" && row.key === editingMessageId,
+    );
+    if (!hasEditingRow) {
+      setEditingMessageId(null);
+    }
+  }, [editingMessageId, rows]);
   // The live article: the streaming turn's trailing assistant row while a
   // run is active, else the trailing assistant row of the flow. It keeps its
   // in-flight structural state regardless of `isStreaming`: it stays in the
@@ -1150,15 +1227,18 @@ const GatewayTranscriptLiveRegion = memo(function GatewayTranscriptLiveRegion(pr
         if (row.kind === "user") {
           return (
             <article key={row.key} className="gateway-transcript-row gateway-transcript-row-user">
-              <div className="chat-user-bubble-wrap group relative ml-auto max-w-[min(85%,calc(50em+2rem))]">
-                <GatewayUserMessageBubbleBody
-                  text={row.text}
-                  attachments={row.attachments}
-                  workspaceRoot={workspaceRoot}
-                  onLoadUploadedImagePreview={onLoadUploadedImagePreview}
-                  loadCommitDetails={loadCommitDetails}
-                />
-              </div>
+              <GatewayUserMessageRowBody
+                row={row}
+                isStreaming={isStreaming}
+                copiedMessageId={copiedMessageId}
+                editingMessageId={editingMessageId}
+                setCopiedMessageId={setCopiedMessageId}
+                setEditingMessageId={setEditingMessageId}
+                workspaceRoot={workspaceRoot}
+                onLoadUploadedImagePreview={onLoadUploadedImagePreview}
+                loadCommitDetails={loadCommitDetails}
+                onResendFromEdit={onResendFromEdit}
+              />
             </article>
           );
         }
@@ -1390,6 +1470,7 @@ export function GatewayTranscript({
             workspaceRoot={workspaceRoot}
             gitClient={gitClient}
             onLoadUploadedImagePreview={onLoadUploadedImagePreview}
+            onResendFromEdit={onResendFromEdit}
             toolStatus={toolStatus}
             toolStatusIsCompaction={toolStatusIsCompaction}
           />

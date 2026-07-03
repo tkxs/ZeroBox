@@ -3638,6 +3638,7 @@ export function ChatPage(props: ChatPageProps) {
     preserveComposerOnStart?: boolean;
     beforeRuntimeStart?: () => Promise<void>;
     afterInitialHistoryPersist?: () => Promise<void>;
+    editResendBaseMessageRef?: HistoryMessageRef;
   }) {
     const overrideConversationId = overrides?.conversationIdOverride?.trim() ?? "";
     const conversationId = overrideConversationId || currentConversationIdRef.current;
@@ -4106,7 +4107,9 @@ export function ChatPage(props: ChatPageProps) {
         console.warn("gateway stream started before initial user turn was persisted");
       }
     }
-    await gatewayBridgeEvents.queueUserMessage(text, uploadedFiles);
+    await gatewayBridgeEvents.queueUserMessage(text, uploadedFiles, {
+      baseMessageRef: overrides?.editResendBaseMessageRef,
+    });
     acknowledgeGatewayRunStarted();
     let activeCompactionRollback: {
       state: ConversationViewState;

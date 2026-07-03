@@ -89,6 +89,10 @@ export type SendChatAction = (overrides?: {
   preserveComposerOnStart?: boolean;
   beforeRuntimeStart?: () => Promise<void>;
   afterInitialHistoryPersist?: () => Promise<void>;
+  // Edit-resend: the edited (truncation-base) user message. Forwarded on the
+  // mirrored user_message event so the gateway can broadcast the truncation
+  // (`rebased`) to every other connected client.
+  editResendBaseMessageRef?: HistoryMessageRef;
 }) => Promise<boolean>;
 
 export type GatewayBridgeRuntimeRefs = {

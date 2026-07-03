@@ -47,6 +47,11 @@ const (
 	StreamEventRunFinished = "run_finished"
 	StreamEventRunQueued   = "run_queued"
 	StreamEventSnapshot    = "snapshot"
+	// StreamEventRebased signals an edit-resend truncation: subscribers drop
+	// the edited user message and everything after it before the new
+	// user_message arrives. Seeded by the gateway for webui edit_resend
+	// commands and synthesized on ingress for GUI-local edits.
+	StreamEventRebased = "rebased"
 )
 
 // RunActivity describes the current run of a conversation. A nil activity
@@ -165,6 +170,10 @@ type chatRunRecord struct {
 	// queuedInGUI marks commands the desktop app parked in its prompt queue;
 	// the startup watchdog must leave them alone.
 	queuedInGUI bool
+	// rebaseSeeded marks runs whose rebased event was already appended from
+	// the agent's ref-bearing user_message, so a reconnect replay of the same
+	// event cannot seed a second truncation.
+	rebaseSeeded bool
 }
 
 type pendingChatRun struct {

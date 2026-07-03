@@ -769,3 +769,164 @@ func TestDeferredSeedsFlushWhenRunStartsDirectly(t *testing.T) {
 		t.Fatalf("user_message count = %d, want 1 (echo swallowed)", userMessages)
 	}
 }
+
+func editResendUserMessageEvent(conversationID string, message string, ref map[string]any) *gatewayv1.ChatEvent {
+	payload := map[string]any{"message": message}
+	if ref != nil {
+		payload["base_message_ref"] = ref
+		payload["reason"] = "edit_resend"
+	}
+	data, _ := json.Marshal(payload)
+	return &gatewayv1.ChatEvent{
+		Type:           gatewayv1.ChatEvent_USER_MESSAGE,
+		ConversationId: conversationID,
+		Data:           string(data),
+	}
+}
+
+func testBaseMessageRef() map[string]any {
+	return map[string]any{
+		"segment_index": 0,
+		"message_index": 2,
+		"segment_id":    "seg-1",
+		"message_id":    "msg-2",
+		"role":          "user",
+		"content_hash":  "hash-2",
+	}
+}
+
+func countEventType(events []*ConversationEvent, eventType string) int {
+	count := 0
+	for _, event := range events {
+		if event.Type == eventType {
+			count++
+		}
+	}
+	return count
+}
+
+// GUI-local edit-resend, "started" control first (the usual desktop order):
+// the ref-bearing user_message seeds one rebased event after run_started.
+func TestGUIEditResendSeedsRebasedAfterRunStarted(t *testing.T) {
+	m := NewManager()
+	m.ingestChatControl("run-1", startedControl("run-1", "conv-1"))
+	m.ingestChatEvent("run-1", editResendUserMessageEvent("conv-1", "edited prompt", testBaseMessageRef()))
+	m.ingestChatEvent("run-1", tokenEvent("conv-1", "reply"))
+
+	sub := m.SubscribeConversationStream("conv-1", 0, "")
+	defer sub.Cleanup()
+	types := eventTypes(sub.Events)
+	want := []string{StreamEventRunStarted, StreamEventRebased, "user_message", "token"}
+	if len(types) != len(want) {
+		t.Fatalf("replay = %v, want %v", types, want)
+	}
+	for i := range want {
+		if types[i] != want[i] {
+			t.Fatalf("replay = %v, want %v", types, want)
+		}
+	}
+	rebased := sub.Events[1]
+	ref, ok := rebased.Payload["base_message_ref"].(map[string]any)
+	if !ok || ref["message_id"] != "msg-2" || ref["content_hash"] != "hash-2" {
+		t.Fatalf("rebased base_message_ref = %#v", rebased.Payload["base_message_ref"])
+	}
+	if rebased.Payload["reason"] != "edit_resend" {
+		t.Fatalf("rebased reason = %#v, want edit_resend", rebased.Payload["reason"])
+	}
+}
+
+// No prior control signal: the rebased seed still lands, before the
+// synthesized run_started.
+func TestGUIEditResendSeedsRebasedBeforeRunStarted(t *testing.T) {
+	m := NewManager()
+	m.ingestChatEvent("run-1", editResendUserMessageEvent("conv-1", "edited prompt", testBaseMessageRef()))
+
+	sub := m.SubscribeConversationStream("conv-1", 0, "")
+	defer sub.Cleanup()
+	types := eventTypes(sub.Events)
+	want := []string{StreamEventRebased, StreamEventRunStarted, "user_message"}
+	if len(types) != len(want) {
+		t.Fatalf("replay = %v, want %v", types, want)
+	}
+	for i := range want {
+		if types[i] != want[i] {
+			t.Fatalf("replay = %v, want %v", types, want)
+		}
+	}
+}
+
+// A reconnect replay redelivers the same ref-bearing user_message: exactly
+// one rebased event is seeded for the run.
+func TestGUIEditResendRebasedSeededOnce(t *testing.T) {
+	m := NewManager()
+	m.ingestChatControl("run-1", startedControl("run-1", "conv-1"))
+	m.ingestChatEvent("run-1", editResendUserMessageEvent("conv-1", "edited prompt", testBaseMessageRef()))
+	m.ingestChatEvent("run-1", editResendUserMessageEvent("conv-1", "edited prompt", testBaseMessageRef()))
+
+	sub := m.SubscribeConversationStream("conv-1", 0, "")
+	defer sub.Cleanup()
+	if got := countEventType(sub.Events, StreamEventRebased); got != 1 {
+		t.Fatalf("rebased count = %d (types %v), want 1", got, eventTypes(sub.Events))
+	}
+}
+
+// Plain sends (no ref, a null ref — the desktop bridge always serializes the
+// key, as null when unset — or an empty ref) must not seed a truncation.
+func TestUserMessageWithoutRefSeedsNoRebased(t *testing.T) {
+	m := NewManager()
+	m.ingestChatControl("run-1", startedControl("run-1", "conv-1"))
+	m.ingestChatEvent("run-1", editResendUserMessageEvent("conv-1", "plain prompt", nil))
+
+	nullRef, _ := json.Marshal(map[string]any{
+		"message":          "null ref prompt",
+		"base_message_ref": nil,
+	})
+	m.ingestChatControl("run-1", completedControl("run-1", "conv-1"))
+	m.ingestChatControl("run-2", startedControl("run-2", "conv-1"))
+	m.ingestChatEvent("run-2", &gatewayv1.ChatEvent{
+		Type:           gatewayv1.ChatEvent_USER_MESSAGE,
+		ConversationId: "conv-1",
+		Data:           string(nullRef),
+	})
+
+	emptyRef, _ := json.Marshal(map[string]any{
+		"message":          "empty ref prompt",
+		"base_message_ref": map[string]any{"message_id": "", "content_hash": "  "},
+	})
+	m.ingestChatControl("run-2", completedControl("run-2", "conv-1"))
+	m.ingestChatControl("run-3", startedControl("run-3", "conv-1"))
+	m.ingestChatEvent("run-3", &gatewayv1.ChatEvent{
+		Type:           gatewayv1.ChatEvent_USER_MESSAGE,
+		ConversationId: "conv-1",
+		Data:           string(emptyRef),
+	})
+
+	sub := m.SubscribeConversationStream("conv-1", 0, "")
+	defer sub.Cleanup()
+	if got := countEventType(sub.Events, StreamEventRebased); got != 0 {
+		t.Fatalf("rebased count = %d (types %v), want 0", got, eventTypes(sub.Events))
+	}
+}
+
+// A webui-initiated edit_resend already seeds its rebased at accept time;
+// the agent's ref-bearing echo is swallowed and must not seed a second one.
+func TestWebuiEditResendEchoSeedsNoSecondRebased(t *testing.T) {
+	m := NewManager()
+	ref := testBaseMessageRef()
+	m.StartChatCommand("run-1", "conv-1", "/workspace", "client-1", []map[string]any{
+		{"type": StreamEventRebased, "base_message_ref": ref, "reason": "edit_resend"},
+		{"type": "user_message", "message": "edited prompt", "base_message_ref": ref, "reason": "edit_resend"},
+	})
+	m.ingestChatControl("run-1", startedControl("run-1", "conv-1"))
+	m.ingestChatEvent("run-1", editResendUserMessageEvent("conv-1", "edited prompt", ref))
+	m.ingestChatEvent("run-1", tokenEvent("conv-1", "reply"))
+
+	sub := m.SubscribeConversationStream("conv-1", 0, "")
+	defer sub.Cleanup()
+	if got := countEventType(sub.Events, StreamEventRebased); got != 1 {
+		t.Fatalf("rebased count = %d (types %v), want 1", got, eventTypes(sub.Events))
+	}
+	if got := countEventType(sub.Events, "user_message"); got != 1 {
+		t.Fatalf("user_message count = %d (types %v), want 1 (echo swallowed)", got, eventTypes(sub.Events))
+	}
+}

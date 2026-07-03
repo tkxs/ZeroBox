@@ -184,7 +184,7 @@ func buildAcceptedChatCommandPayloads(
 	payloads := make([]map[string]any, 0, 2)
 	if baseMessageRef != nil {
 		payloads = append(payloads, map[string]any{
-			"type":             "rebased",
+			"type":             session.StreamEventRebased,
 			"base_message_ref": baseMessageRef,
 			"reason":           "edit_resend",
 		})
