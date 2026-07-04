@@ -111,6 +111,7 @@ macro_rules! app_invoke_handler {
             commands::memory::memory_recent_rejections,
             commands::memory::memory_today_local_date,
             commands::memory::memory_today_daily,
+            commands::memory::memory_quota_summary,
             commands::memory::memory_wipe_all,
             // Settings
             commands::settings::settings_load_all,

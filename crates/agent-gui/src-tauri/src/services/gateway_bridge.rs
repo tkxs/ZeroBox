@@ -24,8 +24,9 @@ use crate::services::gateway::proto;
 use crate::services::memory::{
     MemoryAcceptArgs, MemoryBatchArgs, MemoryDeleteArgs, MemoryDeleteProjectArgs, MemoryListArgs,
     MemoryOrganizeDueClaimArgs, MemoryOrganizeRunCreateArgs, MemoryOrganizeRunListArgs,
-    MemoryOrganizeRunReadArgs, MemoryOrganizeRunUpdateArgs, MemoryReadArgs,
-    MemoryRecentRejectionsArgs, MemorySearchArgs, MemoryStore, MemoryUpdateArgs, MemoryWriteArgs,
+    MemoryOrganizeRunReadArgs, MemoryOrganizeRunUpdateArgs, MemoryQuotaSummaryArgs,
+    MemoryReadArgs, MemoryRecentRejectionsArgs, MemorySearchArgs, MemoryStore, MemoryUpdateArgs,
+    MemoryWriteArgs,
 };
 use crate::services::skills::system_manage_skill_sync;
 
@@ -759,6 +760,14 @@ fn handle_memory_manage_sync(
                 .and_then(Value::as_u64)
                 .and_then(|value| u32::try_from(value).ok());
             serde_json::to_value(memory_store.today_daily(rollover_hour)?)
+        }
+        "memory_quota_summary" => {
+            let args = if request.args_json.trim().is_empty() {
+                MemoryQuotaSummaryArgs::default()
+            } else {
+                parse_memory_args::<MemoryQuotaSummaryArgs>(&request.args_json, command)?
+            };
+            serde_json::to_value(memory_store.quota_summary(args)?)
         }
         "memory_wipe_all" => serde_json::to_value(memory_store.wipe_all()?),
         _ => return Err(format!("unsupported memory command: {command}")),
