@@ -1,3 +1,5 @@
+import { AGENT_TOOL_NAME } from "./types";
+
 export const DEFAULT_SUBAGENT_MAX_PARALLEL_RUNS = 8;
 export const DEFAULT_AGENT_TOOL_MAX_PARALLEL_CALLS = DEFAULT_SUBAGENT_MAX_PARALLEL_RUNS;
 export const DEFAULT_BASH_MAX_PARALLEL_EXECUTIONS = 4;
@@ -114,7 +116,7 @@ export class SubagentScheduler {
   }
 
   getParallelToolLimit(toolName: string) {
-    if (toolName === "Agent") return this.maxParallelAgentToolCalls;
+    if (toolName === AGENT_TOOL_NAME) return this.maxParallelAgentToolCalls;
     if (toolName === "Bash") return this.maxParallelBash;
     return 2;
   }

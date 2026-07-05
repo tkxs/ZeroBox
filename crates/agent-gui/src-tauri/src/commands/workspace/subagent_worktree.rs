@@ -21,7 +21,8 @@ const MAX_DIFF_CHARS: usize = 80_000;
 const CREATE_WORKTREE_MAX_ATTEMPTS: usize = 8;
 
 #[derive(Debug, Serialize)]
-pub struct DelegateWorktreeCreateResponse {
+#[serde(rename_all = "camelCase")]
+pub struct SubagentWorktreeCreateResponse {
     repo_root: String,
     worktree_root: String,
     workdir: String,
@@ -29,7 +30,8 @@ pub struct DelegateWorktreeCreateResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct DelegateWorktreeStatusResponse {
+#[serde(rename_all = "camelCase")]
+pub struct SubagentWorktreeStatusResponse {
     changed: bool,
     status: String,
     diff_stat: String,
@@ -39,7 +41,8 @@ pub struct DelegateWorktreeStatusResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct DelegateWorktreeApplyResponse {
+#[serde(rename_all = "camelCase")]
+pub struct SubagentWorktreeApplyResponse {
     applied: bool,
     changed: bool,
     status: String,
@@ -60,9 +63,40 @@ struct FileCopyFallbackResult {
     already_applied_count: usize,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentWorktreeCreateInput {
+    pub workdir: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentWorktreeStatusInput {
+    pub worktree_root: String,
+    pub max_diff_chars: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentWorktreeApplyInput {
+    pub parent_workdir: String,
+    pub worktree_root: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentWorktreeCleanupInput {
+    pub worktree_root: String,
+    pub branch_name: Option<String>,
+    pub dry_run: Option<bool>,
+    pub force: Option<bool>,
+    pub delete_branch: Option<bool>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DelegateWorktreeCleanupTarget {
+pub struct SubagentWorktreeCleanupTarget {
     pub run_id: Option<String>,
     pub worktree_root: String,
     pub branch_name: Option<String>,
@@ -70,7 +104,7 @@ pub struct DelegateWorktreeCleanupTarget {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DelegateWorktreeCleanupItem {
+pub struct SubagentWorktreeCleanupItem {
     pub run_id: Option<String>,
     pub worktree_root: String,
     pub branch_name: Option<String>,
@@ -82,12 +116,12 @@ pub struct DelegateWorktreeCleanupItem {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DelegateWorktreeCleanupBatchResponse {
+pub struct SubagentWorktreeCleanupBatchResponse {
     pub cleaned_count: usize,
     pub branch_deleted_count: usize,
     pub skipped_count: usize,
     pub failed_count: usize,
-    pub items: Vec<DelegateWorktreeCleanupItem>,
+    pub items: Vec<SubagentWorktreeCleanupItem>,
 }
 
 fn run_git(cwd: &Path, args: &[&str]) -> Result<String, String> {
@@ -448,8 +482,8 @@ fn collect_nul_git_paths(cwd: &Path, args: &[&str]) -> Result<Vec<String>, Strin
 fn worktree_status_blocking(
     worktree_root: String,
     max_diff_chars: Option<usize>,
-) -> Result<DelegateWorktreeStatusResponse, String> {
-    let worktree_root = canonicalize_existing_dir(&worktree_root, "worktree_root")?;
+) -> Result<SubagentWorktreeStatusResponse, String> {
+    let worktree_root = canonicalize_existing_dir(&worktree_root, "worktreeRoot")?;
     let max_diff_chars = max_diff_chars
         .unwrap_or(DEFAULT_MAX_DIFF_CHARS)
         .clamp(1_000, MAX_DIFF_CHARS);
@@ -473,7 +507,7 @@ fn worktree_status_blocking(
     )?;
     let changed = !status.trim().is_empty();
 
-    Ok(DelegateWorktreeStatusResponse {
+    Ok(SubagentWorktreeStatusResponse {
         changed,
         status,
         diff_stat,
@@ -688,9 +722,9 @@ fn run_git_apply_3way(cwd: &Path, patch: &str) -> Result<(), String> {
 fn apply_worktree_changes_blocking(
     parent_workdir: String,
     worktree_root: String,
-) -> Result<DelegateWorktreeApplyResponse, String> {
-    let parent_workdir = canonicalize_existing_dir(&parent_workdir, "parent_workdir")?;
-    let worktree_root = canonicalize_existing_dir(&worktree_root, "worktree_root")?;
+) -> Result<SubagentWorktreeApplyResponse, String> {
+    let parent_workdir = canonicalize_existing_dir(&parent_workdir, "parentWorkdir")?;
+    let worktree_root = canonicalize_existing_dir(&worktree_root, "worktreeRoot")?;
 
     let parent_repo_root_raw = run_git(&parent_workdir, &["rev-parse", "--show-toplevel"])?;
     let parent_repo_root =
@@ -707,14 +741,13 @@ fn apply_worktree_changes_blocking(
     )?;
     if parent_common != worktree_common {
         return Err(
-            "worktree_root does not belong to the same git repository as parent_workdir"
-                .to_string(),
+            "worktreeRoot does not belong to the same git repository as parentWorkdir".to_string(),
         );
     }
 
     let status = run_git(&worktree_root, &["status", "--short"])?;
     if status.trim().is_empty() {
-        return Ok(DelegateWorktreeApplyResponse {
+        return Ok(SubagentWorktreeApplyResponse {
             applied: false,
             changed: false,
             status,
@@ -730,7 +763,7 @@ fn apply_worktree_changes_blocking(
 
     let apply_paths = collect_apply_paths(&worktree_root)?;
     if apply_paths.is_empty() {
-        return Ok(DelegateWorktreeApplyResponse {
+        return Ok(SubagentWorktreeApplyResponse {
             applied: false,
             changed: true,
             status,
@@ -751,7 +784,7 @@ fn apply_worktree_changes_blocking(
     )?;
     let patch_bytes = patch.as_bytes().len();
     if patch.trim().is_empty() {
-        return Ok(DelegateWorktreeApplyResponse {
+        return Ok(SubagentWorktreeApplyResponse {
             applied: false,
             changed: true,
             status,
@@ -768,7 +801,7 @@ fn apply_worktree_changes_blocking(
     let direct_apply_result = run_git_apply_with_options(&parent_repo_root, &patch, &[]);
 
     match direct_apply_result {
-        Ok(_) => Ok(DelegateWorktreeApplyResponse {
+        Ok(_) => Ok(SubagentWorktreeApplyResponse {
             applied: true,
             changed: true,
             status,
@@ -783,7 +816,7 @@ fn apply_worktree_changes_blocking(
         Err(apply_error) => {
             let three_way_apply_result = run_git_apply_3way(&parent_repo_root, &patch);
             if three_way_apply_result.is_ok() {
-                return Ok(DelegateWorktreeApplyResponse {
+                return Ok(SubagentWorktreeApplyResponse {
                     applied: true,
                     changed: true,
                     status,
@@ -811,7 +844,7 @@ fn apply_worktree_changes_blocking(
             })?;
             let copied_or_deleted =
                 !fallback.copied_files.is_empty() || !fallback.deleted_files.is_empty();
-            Ok(DelegateWorktreeApplyResponse {
+            Ok(SubagentWorktreeApplyResponse {
                 applied: copied_or_deleted,
                 changed: true,
                 status,
@@ -836,11 +869,11 @@ fn apply_worktree_changes_blocking(
 }
 
 fn cleanup_worktree_target_blocking(
-    target: DelegateWorktreeCleanupTarget,
+    target: SubagentWorktreeCleanupTarget,
     dry_run: bool,
     force: bool,
     delete_branch: bool,
-) -> DelegateWorktreeCleanupItem {
+) -> SubagentWorktreeCleanupItem {
     let worktree_root_text = target.worktree_root.trim().to_string();
     let branch_name = target
         .branch_name
@@ -861,7 +894,7 @@ fn cleanup_worktree_target_blocking(
         }
     });
 
-    let mut item = DelegateWorktreeCleanupItem {
+    let mut item = SubagentWorktreeCleanupItem {
         run_id,
         worktree_root: worktree_root_text.clone(),
         branch_name: branch_name.clone(),
@@ -872,14 +905,14 @@ fn cleanup_worktree_target_blocking(
     };
 
     if worktree_root_text.is_empty() {
-        item.error = Some("worktree_root is required".to_string());
+        item.error = Some("worktreeRoot is required".to_string());
         return item;
     }
 
     let raw_path = PathBuf::from(&worktree_root_text);
     if !raw_path.is_absolute() {
         item.error = Some(format!(
-            "worktree_root must be an absolute path: {worktree_root_text}"
+            "worktreeRoot must be an absolute path: {worktree_root_text}"
         ));
         return item;
     }
@@ -891,7 +924,7 @@ fn cleanup_worktree_target_blocking(
     let worktree_root = match fs::canonicalize(&raw_path) {
         Ok(path) => path,
         Err(err) => {
-            item.error = Some(format!("failed to canonicalize worktree_root: {err}"));
+            item.error = Some(format!("failed to canonicalize worktreeRoot: {err}"));
             return item;
         }
     };
@@ -990,11 +1023,11 @@ fn cleanup_worktree_target_blocking(
 }
 
 pub(crate) fn cleanup_worktree_targets_blocking(
-    targets: Vec<DelegateWorktreeCleanupTarget>,
+    targets: Vec<SubagentWorktreeCleanupTarget>,
     dry_run: bool,
     force: bool,
     delete_branch: bool,
-) -> DelegateWorktreeCleanupBatchResponse {
+) -> SubagentWorktreeCleanupBatchResponse {
     let items = targets
         .into_iter()
         .map(|target| cleanup_worktree_target_blocking(target, dry_run, force, delete_branch))
@@ -1006,7 +1039,7 @@ pub(crate) fn cleanup_worktree_targets_blocking(
         .filter(|item| item.skipped_reason.is_some() && item.error.is_none())
         .count();
     let failed_count = items.iter().filter(|item| item.error.is_some()).count();
-    DelegateWorktreeCleanupBatchResponse {
+    SubagentWorktreeCleanupBatchResponse {
         cleaned_count,
         branch_deleted_count,
         skipped_count,
@@ -1015,12 +1048,12 @@ pub(crate) fn cleanup_worktree_targets_blocking(
     }
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn delegate_create_worktree(
-    workdir: String,
-    label: Option<String>,
-) -> Result<DelegateWorktreeCreateResponse, String> {
+#[tauri::command]
+pub async fn subagent_worktree_create(
+    input: SubagentWorktreeCreateInput,
+) -> Result<SubagentWorktreeCreateResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let SubagentWorktreeCreateInput { workdir, label } = input;
         let requested_workdir = canonicalize_existing_dir(&workdir, "workdir")?;
         let repo_root_raw = run_git(&requested_workdir, &["rev-parse", "--show-toplevel"])?;
         let repo_root = canonicalize_existing_dir(&repo_root_raw, "git repo root")?;
@@ -1094,7 +1127,7 @@ pub async fn delegate_create_worktree(
             ));
         }
 
-        Ok(DelegateWorktreeCreateResponse {
+        Ok(SubagentWorktreeCreateResponse {
             repo_root: display_path(&repo_root),
             worktree_root: display_path(&worktree_root),
             workdir: display_path(&child_workdir),
@@ -1102,74 +1135,49 @@ pub async fn delegate_create_worktree(
         })
     })
     .await
-    .map_err(|err| format!("delegate_create_worktree join failed: {err}"))?
+    .map_err(|err| format!("subagent_worktree_create join failed: {err}"))?
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn delegate_worktree_status(
-    worktree_root: String,
-    max_diff_chars: Option<usize>,
-) -> Result<DelegateWorktreeStatusResponse, String> {
+#[tauri::command]
+pub async fn subagent_worktree_status(
+    input: SubagentWorktreeStatusInput,
+) -> Result<SubagentWorktreeStatusResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        worktree_status_blocking(worktree_root, max_diff_chars)
+        worktree_status_blocking(input.worktree_root, input.max_diff_chars)
     })
     .await
-    .map_err(|err| format!("delegate_worktree_status join failed: {err}"))?
+    .map_err(|err| format!("subagent_worktree_status join failed: {err}"))?
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn delegate_apply_worktree_changes(
-    parent_workdir: String,
-    worktree_root: String,
-) -> Result<DelegateWorktreeApplyResponse, String> {
+#[tauri::command]
+pub async fn subagent_worktree_apply(
+    input: SubagentWorktreeApplyInput,
+) -> Result<SubagentWorktreeApplyResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        apply_worktree_changes_blocking(parent_workdir, worktree_root)
+        apply_worktree_changes_blocking(input.parent_workdir, input.worktree_root)
     })
     .await
-    .map_err(|err| format!("delegate_apply_worktree_changes join failed: {err}"))?
+    .map_err(|err| format!("subagent_worktree_apply join failed: {err}"))?
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn delegate_cleanup_worktree(
-    worktree_root: String,
-    branch_name: Option<String>,
-    dry_run: Option<bool>,
-    force: Option<bool>,
-    delete_branch: Option<bool>,
-) -> Result<DelegateWorktreeCleanupItem, String> {
+#[tauri::command]
+pub async fn subagent_worktree_cleanup(
+    input: SubagentWorktreeCleanupInput,
+) -> Result<SubagentWorktreeCleanupItem, String> {
     tauri::async_runtime::spawn_blocking(move || {
         cleanup_worktree_target_blocking(
-            DelegateWorktreeCleanupTarget {
+            SubagentWorktreeCleanupTarget {
                 run_id: None,
-                worktree_root,
-                branch_name,
+                worktree_root: input.worktree_root,
+                branch_name: input.branch_name,
             },
-            dry_run.unwrap_or(false),
-            force.unwrap_or(true),
-            delete_branch.unwrap_or(true),
+            input.dry_run.unwrap_or(false),
+            input.force.unwrap_or(true),
+            input.delete_branch.unwrap_or(true),
         )
     })
     .await
-    .map_err(|err| format!("delegate_cleanup_worktree join failed: {err}"))
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn delegate_cleanup_worktrees(
-    targets: Vec<DelegateWorktreeCleanupTarget>,
-    dry_run: Option<bool>,
-    force: Option<bool>,
-    delete_branch: Option<bool>,
-) -> Result<DelegateWorktreeCleanupBatchResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        cleanup_worktree_targets_blocking(
-            targets,
-            dry_run.unwrap_or(false),
-            force.unwrap_or(true),
-            delete_branch.unwrap_or(true),
-        )
-    })
-    .await
-    .map_err(|err| format!("delegate_cleanup_worktrees join failed: {err}"))
+    .map_err(|err| format!("subagent_worktree_cleanup join failed: {err}"))
 }
 
 #[cfg(test)]
@@ -1178,7 +1186,7 @@ mod tests {
 
     fn temp_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "liveagent-delegate-{label}-{}-{}",
+            "liveagent-subagent-worktree-{label}-{}-{}",
             std::process::id(),
             Uuid::new_v4().simple()
         ))
@@ -1237,7 +1245,7 @@ mod tests {
     }
 
     #[test]
-    fn delegate_apply_worktree_changes_preserves_patch_trailing_newline() -> Result<(), String> {
+    fn subagent_worktree_apply_preserves_patch_trailing_newline() -> Result<(), String> {
         let root = temp_root("patch-new-file");
         let repo = root.join("repo");
         let worktree = root.join("worktree");
@@ -1266,8 +1274,7 @@ mod tests {
     }
 
     #[test]
-    fn delegate_apply_worktree_changes_falls_back_when_file_is_already_present(
-    ) -> Result<(), String> {
+    fn subagent_worktree_apply_falls_back_when_file_is_already_present() -> Result<(), String> {
         let root = temp_root("fallback-already-present");
         let repo = root.join("repo");
         let worktree = root.join("worktree");
@@ -1300,7 +1307,7 @@ mod tests {
     }
 
     #[test]
-    fn delegate_apply_worktree_changes_applies_deleted_files() -> Result<(), String> {
+    fn subagent_worktree_apply_applies_deleted_files() -> Result<(), String> {
         let root = temp_root("apply-delete");
         let repo = root.join("repo");
         let worktree = root.join("worktree");
@@ -1323,7 +1330,7 @@ mod tests {
     }
 
     #[test]
-    fn delegate_apply_worktree_changes_applies_renamed_files() -> Result<(), String> {
+    fn subagent_worktree_apply_applies_renamed_files() -> Result<(), String> {
         let root = temp_root("apply-rename");
         let repo = root.join("repo");
         let worktree = root.join("worktree");
@@ -1353,7 +1360,7 @@ mod tests {
     }
 
     #[test]
-    fn delegate_apply_worktree_changes_does_not_overwrite_parent_head_after_3way_conflict(
+    fn subagent_worktree_apply_does_not_overwrite_parent_head_after_3way_conflict(
     ) -> Result<(), String> {
         let root = temp_root("apply-3way-conflict");
         let repo = root.join("repo");
@@ -1386,7 +1393,7 @@ mod tests {
     }
 
     #[test]
-    fn delegate_cleanup_worktree_removes_liveagent_worktree_and_branch() -> Result<(), String> {
+    fn subagent_worktree_cleanup_removes_liveagent_worktree_and_branch() -> Result<(), String> {
         let root = temp_root("cleanup-worktree");
         let repo = root.join("repo");
         let worktree = root
@@ -1398,7 +1405,7 @@ mod tests {
         add_worktree_with_branch(&repo, &worktree, branch)?;
 
         let result = cleanup_worktree_target_blocking(
-            DelegateWorktreeCleanupTarget {
+            SubagentWorktreeCleanupTarget {
                 run_id: Some("run-cleanup".to_string()),
                 worktree_root: display_path(&worktree),
                 branch_name: Some(branch.to_string()),
@@ -1420,7 +1427,7 @@ mod tests {
     }
 
     #[test]
-    fn delegate_cleanup_worktree_respects_force_false() -> Result<(), String> {
+    fn subagent_worktree_cleanup_respects_force_false() -> Result<(), String> {
         let root = temp_root("cleanup-worktree-no-force");
         let repo = root.join("repo");
         let worktree = root
@@ -1434,7 +1441,7 @@ mod tests {
             .map_err(|err| format!("failed to dirty worktree file: {err}"))?;
 
         let result = cleanup_worktree_target_blocking(
-            DelegateWorktreeCleanupTarget {
+            SubagentWorktreeCleanupTarget {
                 run_id: Some("run-cleanup-no-force".to_string()),
                 worktree_root: display_path(&worktree),
                 branch_name: Some(branch.to_string()),
@@ -1453,7 +1460,7 @@ mod tests {
     }
 
     #[test]
-    fn delegate_worktree_status_preserves_unicode_untracked_paths() -> Result<(), String> {
+    fn subagent_worktree_status_preserves_unicode_untracked_paths() -> Result<(), String> {
         let root = temp_root("unicode-status");
         let repo = root.join("repo");
         let worktree = root.join("worktree");

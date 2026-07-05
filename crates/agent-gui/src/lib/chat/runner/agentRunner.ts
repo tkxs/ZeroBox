@@ -44,6 +44,7 @@ import type {
   ProviderModelConfig,
   ReasoningLevel,
 } from "../../settings";
+import { createSubagentScheduler, type SubagentScheduler } from "../../subagents/scheduler";
 import { withPowerActivity } from "../../system/powerActivity";
 import { sanitizeContextForModelRequest } from "../context/requestContextSanitizer";
 import {
@@ -57,7 +58,6 @@ import {
   createDeferredProviderNativeWebSearchStatus,
   resolveProviderNativeWebSearchStatus,
 } from "../search/providerNativeSearchStatus";
-import { createSubagentScheduler, type SubagentScheduler } from "../subagent/subagentScheduler";
 import { comparableToolCall } from "./flattenedToolCallText";
 import { recoverAssistantSeedToolCalls } from "./seedToolCalls";
 import { wrapStreamWithToolCallArgumentGuard } from "./toolCallArgumentGuard";
@@ -323,11 +323,10 @@ export function buildToolsSuffix(
       [
         "## Agent Delegation",
         "- Use Agent for bounded, independent jobs that benefit from a fresh context: implementation, research, review, discussion, or verification. Do not delegate trivial work you can finish yourself.",
-        "- To run multiple independent jobs in parallel, issue ONE Agent call whose `agent_spec` lists every job. Use sequential Agent calls only when a later job needs an earlier job's output.",
-        "- For parallel delegation, use one Agent tool call with agent_spec so the agents run in parallel; do not make separate sequential Agent calls unless later agents depend on earlier results.",
-        '- For multi-agent discussion or role replies, set `task_intent="communication"` so subagents respond via their final reports rather than workspace files.',
-        "- Enable `worktree` / auto-apply only when the subagent is expected to produce file changes or the user explicitly asked for file output.",
-        "- To continue with an existing delegated agent or a previously formed team, call Agent again with the agent id(s) returned by the earlier Agent call — do not impersonate those agents from this transcript.",
+        "- To run multiple independent jobs in parallel, issue ONE Agent call whose `agents` array lists every job. Use sequential Agent calls only when a later job needs an earlier job's output.",
+        "- Default to mode=readonly for research, review, and discussion agents. Use mode=worktree (with apply_policy) only when the subagent is expected to produce file changes or the user explicitly asked for file output.",
+        "- To continue with an existing delegated agent or a previously formed team, call Agent again with the same stable id(s) and only the new prompt — do not impersonate those agents from this transcript and do not restate their identity fields.",
+        "- If an Agent call is rejected, no subagents were started; fix every listed issue and retry with one corrected call.",
       ].join("\n"),
     );
   }
@@ -336,7 +335,7 @@ export function buildToolsSuffix(
     sections.push(
       [
         "## Subagent Message Bus",
-        "- Use SendMessage to send concise Markdown messages to the parent agent, all agents, or a stable delegated-agent id.",
+        "- Use SendMessage to send concise Markdown messages to the parent agent, all agents (to=*), or a stable delegated-agent id from the roster. Unknown recipients are rejected.",
         "- Messages sent to parent are private to the parent; send to=* when peer agents need to read a report or summary.",
         "- Message delivery is deferred to the next model turn boundary; do not use workspace files as a mailbox.",
       ].join("\n"),

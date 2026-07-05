@@ -28,6 +28,7 @@ import {
   Zap,
 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { useAutomation } from "@/lib/automation";
 import { normalizeGatewayAccessToken, verifyGatewayAccessToken } from "@/lib/gatewayAuth";
 import {
   type GatewayWebSocketClientLike,
@@ -43,7 +44,6 @@ import type {
   HistoryList,
   HistoryWorkdirSummary,
 } from "@/lib/gatewayTypes";
-import { useAutomation } from "@/lib/automation";
 import type { GatewaySettingsSyncPayload } from "@/lib/settings/sync";
 import { cn } from "@/lib/shared/utils";
 import { clearToken, loadToken, saveToken } from "@/lib/storage";

@@ -1,6 +1,6 @@
 import type { Message } from "@earendil-works/pi-ai";
 
-import { MAX_SUMMARY_CHARS } from "./constants";
+import { MAX_SUMMARY_CHARS } from "./types";
 
 export function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -13,7 +13,8 @@ export function optionalString(value: unknown) {
 }
 
 export function normalizeErrorMessage(value: unknown, fallback: string) {
-  const text = typeof value === "string" ? value.trim() : "";
+  const text =
+    value instanceof Error ? value.message.trim() : typeof value === "string" ? value.trim() : "";
   return text || fallback;
 }
 

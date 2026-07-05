@@ -43,7 +43,12 @@ import {
 import { prepareImageProxyUrl } from "../../lib/providers/proxy";
 import { cn } from "../../lib/shared/utils";
 import type {
-  DelegateAgentCardResultDetails,
+  SubagentBatchDetails,
+  SubagentCardDetails,
+  SubagentMessageDetails,
+  SubagentReportDetails,
+} from "../../lib/subagents/protocol";
+import type {
   DeleteResultDetails,
   DisplayImageItemDetails,
   DisplayImageResultDetails,
@@ -58,7 +63,6 @@ import type {
   ReadPdfResultDetails,
   ReadTextResultDetails,
   SkillsManagerResultDetails,
-  SubagentMessageResultDetails,
   WriteResultDetails,
 } from "../../lib/tools/builtinTypes";
 import { EditDiffView } from "./EditDiffView";
@@ -690,42 +694,32 @@ function compactInlineText(value: unknown, maxChars = 120) {
   return `${text.slice(0, maxChars)}...`;
 }
 
-function isDelegateAgentCardToolCall(toolCall: {
-  name: string;
-  arguments?: Record<string, unknown>;
-}) {
-  return toolCall.name === "Agent" && toolCall.arguments?.delegate_agent_card === true;
+function isSubagentCardToolCall(toolCall: { name: string; arguments?: Record<string, unknown> }) {
+  return toolCall.name === "Agent" && toolCall.arguments?.subagent_card === true;
 }
 
-function getDelegateAgentTask(agent: { prompt?: unknown; description?: unknown }) {
-  return displayString(agent.prompt) || displayString(agent.description);
+function getSubagentTask(agent: { prompt?: unknown }) {
+  return displayString(agent.prompt);
 }
 
-function getDelegateAgentInlineSummary(item: ToolTraceItem) {
-  const details = item.toolResult?.details as Partial<DelegateAgentCardResultDetails> | undefined;
-  const agent = details?.kind === "delegate_agent_item" ? details.agent : undefined;
+function getSubagentInlineSummary(item: ToolTraceItem) {
+  const details = item.toolResult?.details as Partial<SubagentCardDetails> | undefined;
+  const agent = details?.kind === "subagent_card" ? details.agent : undefined;
   const args = item.toolCall.arguments || {};
-  const name =
-    displayString(agent?.name) ||
-    displayString(agent?.agentName) ||
-    displayString(args.name) ||
-    displayString(args.agent_id) ||
-    displayString(args.id);
-  const task = agent
-    ? getDelegateAgentTask(agent)
-    : displayString(args.prompt) || displayString(args.description);
+  const name = displayString(agent?.name) || displayString(args.name) || displayString(args.id);
+  const task = agent ? getSubagentTask(agent) : displayString(args.prompt);
 
   if (name && task) return `${name} - ${compactInlineText(task, 96)}`;
   return name || compactInlineText(task, 120);
 }
 
-function shouldShowDelegateApplyStatus(agent: DelegateAgentCardResultDetails["agent"]) {
+function shouldShowSubagentApplyStatus(agent: SubagentReportDetails) {
   if (!agent.applyStatus) return false;
   if (agent.applyStatus === "applied" || agent.applyStatus === "failed") return true;
   return Boolean(agent.applySkippedReason && agent.applySkippedReason !== "no_changes");
 }
 
-function shouldShowDelegateCleanupStatus(agent: DelegateAgentCardResultDetails["agent"]) {
+function shouldShowSubagentCleanupStatus(agent: SubagentReportDetails) {
   return Boolean(
     agent.worktreeCleanupStatus &&
       agent.worktreeCleanupStatus !== "removed" &&
@@ -733,10 +727,10 @@ function shouldShowDelegateCleanupStatus(agent: DelegateAgentCardResultDetails["
   );
 }
 
-function shouldShowDelegateWorktreeLocation(agent: DelegateAgentCardResultDetails["agent"]) {
+function shouldShowSubagentWorktreeLocation(agent: SubagentReportDetails) {
   return Boolean(
     agent.worktreeRoot &&
-      (agent.status === "failed" ||
+      (agent.status !== "completed" ||
         agent.worktreeCleanupStatus === "retained" ||
         agent.worktreeCleanupStatus === "failed"),
   );
@@ -1127,11 +1121,11 @@ function ToolArgsDisplay({ item }: { item: ToolTraceItem }) {
 
   const display = getToolDisplay(toolCall);
 
-  if (isDelegateAgentCardToolCall(toolCall)) {
+  if (isSubagentCardToolCall(toolCall)) {
     const args = toolCall.arguments || {};
-    const name = displayString(args.name) || displayString(args.agent_id) || displayString(args.id);
+    const name = displayString(args.name) || displayString(args.id);
     const role = displayString(args.role);
-    const task = displayString(args.prompt) || displayString(args.description);
+    const task = displayString(args.prompt);
 
     return (
       <div className="tool-expand flex flex-col gap-2">
@@ -2322,15 +2316,51 @@ function ToolResultDisplay({
     );
   }
 
-  if (kind === "delegate_agent") {
-    return null;
+  if (kind === "subagent_batch") {
+    const details = result.details as SubagentBatchDetails;
+    if (details.status !== "rejected" && result.isError !== true) {
+      // The successful parent batch is rendered as per-agent cards.
+      return null;
+    }
+    const issues = details.issues ?? [];
+    return (
+      <ToolSurface className="space-y-2">
+        <MetaTags
+          tags={[
+            { label: "agent", value: "rejected" },
+            { label: "issues", value: String(issues.length) },
+          ]}
+        />
+        <div className="text-[12px] font-semibold leading-[1.45] text-foreground/90">
+          Agent call rejected — no subagents were started
+        </div>
+        {issues.length > 0 ? (
+          <CodePreview
+            text={issues
+              .map(
+                (item, index) =>
+                  `${index + 1}. [${item.code}]${item.agentId ? ` agent=${item.agentId}` : ""} ${item.message}`,
+              )
+              .join("\n")}
+            maxChars={2400}
+          />
+        ) : (
+          <CodePreview
+            text={result.content
+              .map((block) => (block.type === "text" ? block.text : ""))
+              .join("\n")}
+            maxChars={2400}
+          />
+        )}
+      </ToolSurface>
+    );
   }
 
-  if (kind === "delegate_agent_item") {
-    const details = result.details as DelegateAgentCardResultDetails;
+  if (kind === "subagent_card") {
+    const details = result.details as SubagentCardDetails;
     const agent = details.agent;
-    const agentDisplayName = agent.name || agent.agentName || agent.id;
-    const agentTask = getDelegateAgentTask(agent);
+    const agentDisplayName = agent.name || agent.id;
+    const agentTask = getSubagentTask(agent);
     const tags: MetaTag[] = [
       { label: "agent", value: `${details.index + 1}/${details.total}` },
       { label: "status", value: agent.status },
@@ -2338,10 +2368,10 @@ function ToolResultDisplay({
     if (agent.mode === "worktree") {
       tags.push({ label: "mode", value: agent.mode });
     }
-    if (shouldShowDelegateApplyStatus(agent) && agent.applyStatus) {
+    if (shouldShowSubagentApplyStatus(agent) && agent.applyStatus) {
       tags.push({ label: "apply", value: agent.applyStatus });
     }
-    if (shouldShowDelegateCleanupStatus(agent) && agent.worktreeCleanupStatus) {
+    if (shouldShowSubagentCleanupStatus(agent) && agent.worktreeCleanupStatus) {
       tags.push({ label: "cleanup", value: agent.worktreeCleanupStatus });
     }
 
@@ -2350,8 +2380,8 @@ function ToolResultDisplay({
     const showUntrackedFiles = agent.applyStatus !== "applied" && untrackedFiles.length > 0;
     const showCandidateArtifacts = Boolean(
       candidateArtifacts.length > 0 &&
-        (agent.taskIntent === "document_generation" ||
-          (agent.applySkippedReason && agent.applySkippedReason !== "no_changes")),
+        agent.applySkippedReason &&
+        agent.applySkippedReason !== "no_changes",
     );
 
     return (
@@ -2371,7 +2401,7 @@ function ToolResultDisplay({
               <span className="text-muted-foreground">task</span> {agentTask}
             </div>
           ) : null}
-          {shouldShowDelegateWorktreeLocation(agent) ? (
+          {shouldShowSubagentWorktreeLocation(agent) ? (
             <div className="break-all text-[10px] text-muted-foreground/70">
               {agent.branchName ? `${agent.branchName} | ` : ""}
               {agent.worktreeRoot}
@@ -2430,6 +2460,12 @@ function ToolResultDisplay({
               maxChars={1200}
             />
           ) : null}
+          {agent.persistenceWarnings && agent.persistenceWarnings.length > 0 ? (
+            <CodePreview
+              text={`persistence warning:\n${agent.persistenceWarnings.map((item) => `- ${item}`).join("\n")}`}
+              maxChars={1200}
+            />
+          ) : null}
           {agent.error ? (
             <CodePreview text={agent.error} maxChars={1200} />
           ) : agent.summary ? (
@@ -2441,9 +2477,9 @@ function ToolResultDisplay({
   }
 
   if (kind === "subagent_message") {
-    const details = result.details as SubagentMessageResultDetails;
-    const from = details.senderDisplayName || details.senderAgentId;
-    const to = details.recipientDisplayName || details.recipientAgentId;
+    const details = result.details as SubagentMessageDetails;
+    const from = details.senderName || details.senderId;
+    const to = details.recipientName || details.recipientId;
     return (
       <ToolSurface className="space-y-2">
         <MetaTags
@@ -2549,12 +2585,12 @@ function ToolCallItem({
     !isRedactedToolContent &&
     (item.toolCall.name === "Image" || builtinResultKind === "display_image");
   const [open, setOpen] = useState(readOnly || isRedactedToolContent ? false : shouldAutoOpen);
-  const isDelegateAgentCard = isDelegateAgentCardToolCall(item.toolCall);
+  const isSubagentCard = isSubagentCardToolCall(item.toolCall);
   const hasArgs = Object.keys(item.toolCall.arguments || {}).length > 0;
   const isStreamingFilePreviewTool = FILE_TOOL_TEXT_FIELDS[item.toolCall.name] !== undefined;
   const shouldShowArgs =
     !isRedactedToolContent &&
-    (!isDelegateAgentCard || !result) &&
+    (!isSubagentCard || !result) &&
     (isStreamingFilePreviewTool ? !result : hasArgs);
   const isBash = item.toolCall.name === "Bash";
   const bashCmd =
@@ -2565,8 +2601,8 @@ function ToolCallItem({
   const toolArgsSummary =
     isRedactedToolContent || isBash
       ? ""
-      : isDelegateAgentCard
-        ? getDelegateAgentInlineSummary(item)
+      : isSubagentCard
+        ? getSubagentInlineSummary(item)
         : summarizeToolCall(item.toolCall, {
             includeName: false,
             includeManagerAction: false,

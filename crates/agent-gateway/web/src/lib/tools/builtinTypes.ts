@@ -1,6 +1,11 @@
 import type { Tool, ToolCall, ToolResultMessage } from "../agentTypes";
+import type {
+  SubagentBatchDetails,
+  SubagentCardDetails,
+  SubagentMessageDetails,
+} from "../subagents/protocol";
 
-export type BuiltinToolGroupId = "fs" | "shell" | "skill" | "system" | "mcp" | "delegate";
+export type BuiltinToolGroupId = "fs" | "shell" | "skill" | "system" | "mcp" | "subagent";
 
 export type BuiltinToolDisplayCategory =
   | "file"
@@ -213,88 +218,6 @@ export type McpManagerResultDetails = {
   errors?: string[];
 };
 
-export type DelegateAgentItemResultDetails = {
-  id: string;
-  runId?: string;
-  name?: string;
-  role?: string;
-  prompt: string;
-  description?: string;
-  agentId?: string;
-  agentName?: string;
-  mode: "readonly" | "worktree";
-  taskIntent?: "communication" | "research" | "review" | "implementation" | "document_generation";
-  applyPolicy?: "none" | "explicit" | "auto";
-  allowedOutputPaths?: string[];
-  status: "completed" | "failed";
-  summary: string;
-  durationMs: number;
-  rounds: number;
-  toolCalls: number;
-  error?: string;
-  worktreeRoot?: string;
-  workdir?: string;
-  branchName?: string;
-  changed?: boolean;
-  statusText?: string;
-  diffStat?: string;
-  diff?: string;
-  diffTruncated?: boolean;
-  untrackedFiles?: string[];
-  worktreeStatusError?: string;
-  applyStatus?: "applied" | "skipped" | "failed";
-  applyMethod?: "git_apply" | "git_apply_3way" | "file_copy_fallback";
-  applyChanged?: boolean;
-  applyPatchBytes?: number;
-  applySkippedReason?: string;
-  applyFallbackReason?: string;
-  applyCopiedFiles?: string[];
-  applyDeletedFiles?: string[];
-  applyConflictFiles?: string[];
-  applyError?: string;
-  appliedToWorkdir?: string;
-  worktreeCleanupStatus?: "removed" | "retained" | "skipped" | "failed";
-  worktreeCleanupReason?: string;
-  worktreeCleanupError?: string;
-  worktreeBranchDeleted?: boolean;
-  candidateArtifacts?: string[];
-  changedPaths?: string[];
-};
-
-export type DelegateAgentCardResultDetails = {
-  kind: "delegate_agent_item";
-  parentToolCallId: string;
-  index: number;
-  total: number;
-  concurrency: number;
-  agent: DelegateAgentItemResultDetails;
-};
-
-export type DelegateAgentResultDetails = {
-  kind: "delegate_agent";
-  agentCount: number;
-  concurrency: number;
-  totalDurationMs: number;
-  readOnly: boolean;
-  mode: "readonly" | "worktree" | "mixed";
-  agents: DelegateAgentItemResultDetails[];
-};
-
-export type SubagentMessageResultDetails = {
-  kind: "subagent_message";
-  parentConversationId: string;
-  seq: number;
-  senderAgentId: string;
-  senderDisplayName?: string;
-  recipientAgentId: string;
-  recipientDisplayName?: string;
-  channel: "direct" | "shared" | "decision" | "question";
-  subject?: string;
-  sourceRunId?: string;
-  sourceToolCallId?: string;
-  bodyPreview: string;
-};
-
 export type WriteResultDetails = {
   kind: "write";
   path: string;
@@ -428,9 +351,9 @@ export type BuiltinToolResultDetails =
   | ReadDocumentResultDetails
   | SkillsManagerResultDetails
   | McpManagerResultDetails
-  | DelegateAgentCardResultDetails
-  | DelegateAgentResultDetails
-  | SubagentMessageResultDetails
+  | SubagentBatchDetails
+  | SubagentCardDetails
+  | SubagentMessageDetails
   | WriteResultDetails
   | EditResultDetails
   | DeleteResultDetails

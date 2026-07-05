@@ -43,7 +43,7 @@
 | Skills tools | `crates/agent-gui/src/lib/tools/skillTools.ts` |
 | Memory tools | `crates/agent-gui/src/lib/tools/memoryTools.ts` |
 | Cron tools | `crates/agent-gui/src/lib/tools/cronTools.ts` |
-| Delegate tools | `crates/agent-gui/src/lib/tools/delegateTools.ts`、`src/lib/tools/delegate/*` |
+| Subagent tools（Agent/SendMessage） | `crates/agent-gui/src/lib/subagents/*` |
 | Conversation state | `crates/agent-gui/src/lib/chat/conversation/*` |
 | Memory prompt/policy | `crates/agent-gui/src/lib/chat/memory/*` |
 | Skills discovery | `crates/agent-gui/src/lib/skills/*` |
@@ -63,8 +63,8 @@
 | Shell/process commands | `crates/agent-gui/src-tauri/src/commands/shell.rs`、`process.rs` |
 | System commands | `crates/agent-gui/src-tauri/src/commands/system.rs`、`system_tools.rs` |
 | Gateway commands | `crates/agent-gui/src-tauri/src/commands/gateway.rs` |
-| Delegate commands | `crates/agent-gui/src-tauri/src/commands/delegate.rs` |
-| Subagent history | `crates/agent-gui/src-tauri/src/commands/subagent_history.rs` |
+| Subagent worktree commands | `crates/agent-gui/src-tauri/src/commands/workspace/subagent_worktree.rs` |
+| Subagent store | `crates/agent-gui/src-tauri/src/commands/history/subagent_store.rs` |
 | MemoryStore | `crates/agent-gui/src-tauri/src/services/memory.rs` |
 | Skills service | `crates/agent-gui/src-tauri/src/services/skills.rs` |
 | Gateway service | `crates/agent-gui/src-tauri/src/services/gateway.rs`、`gateway_bridge.rs` |

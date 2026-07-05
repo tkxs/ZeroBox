@@ -47,17 +47,15 @@ macro_rules! app_invoke_handler {
             commands::chat_history::chat_history_share_get,
             commands::chat_history::chat_history_share_set,
             commands::chat_history::chat_history_delete,
-            // Subagent history
-            commands::subagent_history::subagent_identity_upsert,
-            commands::subagent_history::subagent_identity_list,
-            commands::subagent_history::subagent_run_upsert,
-            commands::subagent_history::subagent_run_append_event,
-            commands::subagent_history::subagent_message_append,
-            commands::subagent_history::subagent_message_list,
-            commands::subagent_history::subagent_run_list,
-            commands::subagent_history::subagent_run_get,
-            commands::subagent_history::subagent_run_get_state,
-            commands::subagent_history::subagent_run_prune,
+            // Subagent store
+            commands::subagent_store::subagent_identity_upsert,
+            commands::subagent_store::subagent_identity_list,
+            commands::subagent_store::subagent_run_save,
+            commands::subagent_store::subagent_run_list,
+            commands::subagent_store::subagent_run_load,
+            commands::subagent_store::subagent_run_prune,
+            commands::subagent_store::subagent_message_append,
+            commands::subagent_store::subagent_message_list,
             // File system
             commands::fs::fs_read_text,
             commands::fs::fs_read_editable_text,
@@ -76,12 +74,11 @@ macro_rules! app_invoke_handler {
             commands::fs::fs_glob,
             commands::fs::fs_grep,
             commands::fs::fs_mention_list,
-            // Delegated subagent worktrees
-            commands::delegate::delegate_create_worktree,
-            commands::delegate::delegate_worktree_status,
-            commands::delegate::delegate_apply_worktree_changes,
-            commands::delegate::delegate_cleanup_worktree,
-            commands::delegate::delegate_cleanup_worktrees,
+            // Subagent worktrees
+            commands::subagent_worktree::subagent_worktree_create,
+            commands::subagent_worktree::subagent_worktree_status,
+            commands::subagent_worktree::subagent_worktree_apply,
+            commands::subagent_worktree::subagent_worktree_cleanup,
             // MCP
             commands::mcp::mcp_list_tools,
             commands::mcp::mcp_call_tool,
@@ -411,9 +408,7 @@ pub fn run() {
         .manage(Arc::clone(&allow_exit))
         .manage(Arc::clone(&automation_store))
         .manage(Arc::clone(&automation_scheduler))
-        .manage(Arc::new(
-            commands::hook::HookScopeRegistry::default(),
-        ))
+        .manage(Arc::new(commands::hook::HookScopeRegistry::default()))
         .setup({
             let allow_exit = Arc::clone(&allow_exit);
             let terminal_registry = Arc::clone(&terminal_registry);

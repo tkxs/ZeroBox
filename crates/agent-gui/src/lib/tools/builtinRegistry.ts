@@ -1,23 +1,13 @@
 import type { ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import { homeDir } from "@tauri-apps/api/path";
-import {
-  listSubagentIdentities,
-  listSubagentRuns,
-  type SubagentIdentityRecord,
-  type SubagentRunSummary,
-} from "../chat/subagent/subagentHistory";
-import type { SubagentRuntimeManager } from "../chat/subagent/subagentRuntimeManager";
-import type { SubagentScheduler } from "../chat/subagent/subagentScheduler";
 import type { RuntimePlatform } from "../runtimePlatform";
-import type {
-  AgentPromptTemplate,
-  CodexRequestFormat,
-  McpServerConfig,
-  ProviderId,
-  ProviderModelConfig,
-  ReasoningLevel,
-  SshHostConfig,
-} from "../settings";
+import type { McpServerConfig, ProviderId, SshHostConfig } from "../settings";
+import {
+  createSendMessageTools,
+  createSubagentTools,
+  SUBAGENT_PARENT_ID,
+  type SubagentRuntimeConfig,
+} from "../subagents";
 import type {
   BuiltinToolBundle,
   BuiltinToolExecutionContext,
@@ -25,8 +15,6 @@ import type {
 } from "./builtinTypes";
 import { createCronTools } from "./cronTools";
 import { createCustomSystemTools } from "./customSystemTools";
-import { createSubagentMessageTools } from "./delegate/messageTools";
-import { createDelegateTools } from "./delegateTools";
 import { createFileToolState, type FileToolState } from "./fileToolState";
 import { createFsTools } from "./fsTools";
 import { createMcpManagerTools } from "./mcpManagerTools";
@@ -50,57 +38,6 @@ export type BuiltinToolRegistry = {
   metadataByName: Map<string, BuiltinToolMetadata>;
   hasTool: (toolName: string) => boolean;
 };
-
-export type DelegateToolRuntimeConfig = {
-  providerId: ProviderId;
-  model: string;
-  runtime: {
-    baseUrl: string;
-    apiKey: string;
-    requestFormat?: CodexRequestFormat;
-    reasoning?: ReasoningLevel;
-    promptCachingEnabled?: boolean;
-    nativeWebSearchEnabled?: boolean;
-    modelConfig?: ProviderModelConfig;
-  };
-  conversationId?: string;
-  sessionId?: string;
-  agentTemplates?: AgentPromptTemplate[];
-  conversationSubagentIdentities?: SubagentIdentityRecord[];
-  conversationSubagentRuns?: SubagentRunSummary[];
-  subagentRuntimeManager?: SubagentRuntimeManager;
-  subagentScheduler?: SubagentScheduler;
-};
-
-async function loadExistingSubagentRuns(conversationId?: string): Promise<SubagentRunSummary[]> {
-  const parentConversationId = conversationId?.trim();
-  if (!parentConversationId) return [];
-  try {
-    return await listSubagentRuns({
-      parentConversationId,
-      limit: 50,
-    });
-  } catch (error) {
-    console.warn("Failed to load existing delegated subagent runs", error);
-    return [];
-  }
-}
-
-async function loadExistingSubagentIdentities(
-  conversationId?: string,
-): Promise<SubagentIdentityRecord[]> {
-  const parentConversationId = conversationId?.trim();
-  if (!parentConversationId) return [];
-  try {
-    return await listSubagentIdentities({
-      parentConversationId,
-      limit: 200,
-    });
-  } catch (error) {
-    console.warn("Failed to load delegated subagent identities", error);
-    return [];
-  }
-}
 
 function createBuiltinToolRegistry(bundles: BuiltinToolBundle[]): BuiltinToolRegistry {
   const tools: BuiltinToolBundle["tools"] = [];
@@ -319,56 +256,46 @@ async function buildBaseBuiltinToolBundles(params: BuildBuiltinBaseToolRegistryP
 
 export async function buildBuiltinToolRegistry(
   params: BuildBuiltinBaseToolRegistryParams & {
-    delegateRuntime?: DelegateToolRuntimeConfig;
+    subagentRuntime?: SubagentRuntimeConfig;
   },
 ) {
   const baseBundles = await buildBaseBuiltinToolBundles(params);
 
-  if (!params.delegateRuntime) {
+  const subagentRuntime = params.subagentRuntime;
+  if (!subagentRuntime) {
     return createBuiltinToolRegistry(baseBundles);
   }
 
   const baseRegistry = createBuiltinToolRegistry(baseBundles);
-  const parentMessageBundle = params.delegateRuntime.conversationId?.trim()
-    ? createSubagentMessageTools({
-        parentConversationId: params.delegateRuntime.conversationId,
-        currentAgentId: "parent",
-        currentAgentName: "Parent Agent",
+  // The Agent tool description embeds the roster, so the store must be
+  // hydrated before the bundle is created. Roster load failures degrade to an
+  // empty roster instead of blocking the whole registry.
+  try {
+    await subagentRuntime.store.ready();
+  } catch (error) {
+    console.warn("Failed to load subagent roster for the Agent tool", error);
+  }
+  const parentMessageBundle = subagentRuntime.store.conversationId
+    ? createSendMessageTools({
+        store: subagentRuntime.store,
+        senderId: SUBAGENT_PARENT_ID,
+        senderName: "Parent Agent",
       })
     : null;
   const parentBundles = parentMessageBundle ? [...baseBundles, parentMessageBundle] : baseBundles;
-  const storedSubagentRuns = Array.isArray(params.delegateRuntime.conversationSubagentRuns)
-    ? []
-    : await loadExistingSubagentRuns(params.delegateRuntime.conversationId);
-  const existingSubagentRuns = [
-    ...(params.delegateRuntime.conversationSubagentRuns ?? []),
-    ...storedSubagentRuns,
-  ];
-  const storedSubagentIdentities = Array.isArray(
-    params.delegateRuntime.conversationSubagentIdentities,
-  )
-    ? []
-    : await loadExistingSubagentIdentities(params.delegateRuntime.conversationId);
-  const existingSubagentIdentities = [
-    ...(params.delegateRuntime.conversationSubagentIdentities ?? []),
-    ...storedSubagentIdentities,
-  ];
   return createBuiltinToolRegistry([
     ...parentBundles,
-    createDelegateTools({
-      providerId: params.delegateRuntime.providerId,
-      model: params.delegateRuntime.model,
-      runtime: params.delegateRuntime.runtime,
+    createSubagentTools({
+      providerId: subagentRuntime.providerId,
+      model: subagentRuntime.model,
+      runtime: subagentRuntime.runtime,
       runtimePlatform: params.runtimePlatform,
       workdir: params.workdir,
       resolveHomeDir,
-      parentConversationId: params.delegateRuntime.conversationId,
-      sessionId: params.delegateRuntime.sessionId,
-      agentTemplates: params.delegateRuntime.agentTemplates,
-      existingSubagentIdentities,
-      existingSubagentRuns,
-      subagentRuntimeManager: params.delegateRuntime.subagentRuntimeManager,
-      subagentScheduler: params.delegateRuntime.subagentScheduler,
+      sessionId: subagentRuntime.sessionId,
+      templates: subagentRuntime.templates,
+      store: subagentRuntime.store,
+      scheduler: subagentRuntime.scheduler,
       baseTools: baseRegistry.tools,
       executeToolCall: baseRegistry.executeToolCall,
       metadataByName: baseRegistry.metadataByName,

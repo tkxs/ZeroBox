@@ -335,9 +335,7 @@ const loader = createTsModuleLoader({
 });
 
 const { runAssistantWithTools } = loader.loadModule("src/lib/chat/runner/agentRunner.ts");
-const { createSubagentScheduler } = loader.loadModule(
-  "src/lib/chat/subagent/subagentScheduler.ts",
-);
+const { createSubagentScheduler } = loader.loadModule("src/lib/subagents/scheduler.ts");
 
 function resetFakeStreams(...assistants) {
   streamQueue.length = 0;

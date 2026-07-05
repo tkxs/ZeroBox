@@ -1,15 +1,14 @@
-import { invoke } from "@tauri-apps/api/core";
+import type { Tool } from "@earendil-works/pi-ai";
 
-import type { DelegateAgentItemResultDetails } from "../builtinTypes";
-import type {
-  DelegateAgentInput,
-  DelegateWorktreeApplyResult,
-  DelegateWorktreeCleanupResult,
-  DelegateWorktreeInfo,
-  DelegateWorktreeStatus,
-  WorktreeApplyDecision,
+import {
+  AGENT_TOOL_NAME,
+  SEND_MESSAGE_TOOL_NAME,
+  type SubagentSpec,
+  type SubagentWorktreeStatus,
+  type ToolMetadataLike,
+  type WorktreeApplyDecision,
+  type WorktreeCleanupDecision,
 } from "./types";
-import { sanitizeLabelPart } from "./utils";
 
 // Cleans paths coming out of git status/porcelain output. Malformed entries
 // are dropped, not surfaced — git plumbing noise is not a tool-input error.
@@ -32,14 +31,6 @@ function normalizeGitStatusPath(value: string) {
     segments.push(segment);
   }
   return segments.join("/");
-}
-
-function pathMatchesAllowedOutput(path: string, allowedPath: string) {
-  if (!allowedPath || allowedPath === ".") return true;
-  if (allowedPath.includes("*") || allowedPath.includes("?") || allowedPath.includes("[")) {
-    return globAllowedOutputPathToRegExp(allowedPath).test(path);
-  }
-  return path === allowedPath || path.startsWith(`${allowedPath}/`);
 }
 
 function globAllowedOutputPathToRegExp(pattern: string) {
@@ -69,6 +60,14 @@ function globAllowedOutputPathToRegExp(pattern: string) {
     source += char.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
   }
   return new RegExp(`${source}$`);
+}
+
+function pathMatchesAllowedOutput(path: string, allowedPath: string) {
+  if (!allowedPath || allowedPath === ".") return true;
+  if (allowedPath.includes("*") || allowedPath.includes("?") || allowedPath.includes("[")) {
+    return globAllowedOutputPathToRegExp(allowedPath).test(path);
+  }
+  return path === allowedPath || path.startsWith(`${allowedPath}/`);
 }
 
 function decodeGitQuotedPath(value: string) {
@@ -140,9 +139,9 @@ function shouldIgnoreChangedPath(path: string) {
   return basename === ".DS_Store" || basename === "Thumbs.db" || basename === "Desktop.ini";
 }
 
-function collectWorktreeChangedPaths(status: DelegateWorktreeStatus) {
+export function collectWorktreeChangedPaths(status: SubagentWorktreeStatus) {
   const paths = new Set<string>();
-  for (const file of status.untracked_files ?? []) {
+  for (const file of status.untrackedFiles ?? []) {
     const normalized = normalizeGitStatusPath(decodeGitQuotedPath(file));
     if (normalized && !shouldIgnoreChangedPath(normalized)) paths.add(normalized);
   }
@@ -153,61 +152,39 @@ function collectWorktreeChangedPaths(status: DelegateWorktreeStatus) {
   return removeParentDirectoryPaths([...paths].sort());
 }
 
-function isLikelyCommunicationArtifact(path: string) {
-  const normalized = normalizeGitStatusPath(path);
-  if (!normalized) return false;
-  const parts = normalized.split("/");
-  const basename = (parts[parts.length - 1] ?? "").toLowerCase();
-  if (!/\.(md|markdown|txt|rst)$/i.test(basename)) return false;
-  if (parts.length <= 2) return true;
-  return /(^|[-_.])(report|response|reply|contribution|discussion|roundtable|opening|notes|thoughts|summary|发言|回应|回复|讨论|观点|报告|品鉴|哲学|物理|科学|文学|禅|生命|意义)([-_.]|$)/i.test(
-    basename,
-  );
-}
-
+/**
+ * Decide whether worktree changes merge back into the parent workspace.
+ * Purely policy-driven: "none" never applies, "explicit" applies only when
+ * every changed path matches allowed_output_paths, "auto" always applies.
+ */
 export function decideWorktreeApply(params: {
-  task: DelegateAgentInput;
-  status: DelegateWorktreeStatus;
+  spec: SubagentSpec;
+  status: SubagentWorktreeStatus;
 }): WorktreeApplyDecision {
   const changedPaths = collectWorktreeChangedPaths(params.status);
-  const candidateArtifacts =
-    params.task.taskIntent === "implementation"
-      ? []
-      : changedPaths.filter(isLikelyCommunicationArtifact);
 
   if (!params.status.changed || changedPaths.length === 0) {
     return {
       shouldApply: false,
       skippedReason: params.status.changed ? "no_applyable_changes" : "no_changes",
       changedPaths,
-      candidateArtifacts,
+      candidateArtifacts: [],
     };
   }
 
-  if (params.task.applyPolicy === "none") {
+  if (params.spec.applyPolicy === "none") {
     return {
       shouldApply: false,
-      skippedReason: candidateArtifacts.length > 0 ? "artifact_only" : "apply_policy_none",
+      skippedReason: "apply_policy_none",
       changedPaths,
-      candidateArtifacts: candidateArtifacts.length > 0 ? candidateArtifacts : changedPaths,
+      candidateArtifacts: changedPaths,
     };
   }
 
-  if (params.task.applyPolicy === "explicit") {
-    if (params.task.allowedOutputPaths.length === 0) {
-      return {
-        shouldApply: false,
-        skippedReason:
-          candidateArtifacts.length > 0
-            ? "artifact_explicit_apply_required"
-            : "explicit_apply_required",
-        changedPaths,
-        candidateArtifacts: candidateArtifacts.length > 0 ? candidateArtifacts : changedPaths,
-      };
-    }
+  if (params.spec.applyPolicy === "explicit") {
     const disallowedPaths = changedPaths.filter(
       (path) =>
-        !params.task.allowedOutputPaths.some((allowedPath) =>
+        !params.spec.allowedOutputPaths.some((allowedPath) =>
           pathMatchesAllowedOutput(path, allowedPath),
         ),
     );
@@ -224,18 +201,18 @@ export function decideWorktreeApply(params: {
   return {
     shouldApply: true,
     changedPaths,
-    candidateArtifacts,
+    candidateArtifacts: [],
   };
 }
 
 export function decideWorktreeCleanup(params: {
-  task: DelegateAgentInput;
-  status?: DelegateWorktreeStatus;
+  spec: SubagentSpec;
+  status?: SubagentWorktreeStatus;
   statusError?: string;
-  applyStatus?: DelegateAgentItemResultDetails["applyStatus"];
+  applyStatus?: "applied" | "skipped" | "failed";
   applySkippedReason?: string;
-}) {
-  if (params.task.retainWorktree) {
+}): WorktreeCleanupDecision {
+  if (params.spec.retainWorktree) {
     return { shouldCleanup: false, reason: "retain_worktree" };
   }
   if (params.statusError) {
@@ -259,59 +236,35 @@ export function decideWorktreeCleanup(params: {
   return { shouldCleanup: false, reason: "unapplied_changes" };
 }
 
-export function buildWorktreeLabel(params: {
-  sessionId?: string;
-  toolCallId: string;
-  agent: DelegateAgentInput;
-  index: number;
+/** Readonly children: read-only builtin tools + MCP business tools. */
+export function selectReadOnlyTools(params: {
+  tools: Tool[];
+  metadataByName: Map<string, ToolMetadataLike>;
 }) {
-  const prefix = params.sessionId
-    ? sanitizeLabelPart(params.sessionId.split(":")[0] || params.sessionId, "session")
-    : "session";
-  const call = sanitizeLabelPart(params.toolCallId, "call");
-  const agent = sanitizeLabelPart(params.agent.id, `agent-${params.index + 1}`);
-  return `${prefix}-${call}-${params.index + 1}-${agent}`;
+  return params.tools.filter((tool) => {
+    if (tool.name === AGENT_TOOL_NAME) return false;
+    if (tool.name === SEND_MESSAGE_TOOL_NAME) return true;
+    const metadata = params.metadataByName.get(tool.name);
+    return (
+      metadata?.isReadOnly === true || (metadata?.groupId === "mcp" && metadata.kind === "mcp")
+    );
+  });
 }
 
-export async function defaultCreateWorktree(params: {
-  workdir: string;
-  label: string;
-}): Promise<DelegateWorktreeInfo> {
-  return invoke<DelegateWorktreeInfo>("delegate_create_worktree", {
-    workdir: params.workdir,
-    label: params.label,
-  } as any);
-}
-
-export async function defaultGetWorktreeStatus(params: {
-  worktreeRoot: string;
-  maxDiffChars: number;
-}): Promise<DelegateWorktreeStatus> {
-  return invoke<DelegateWorktreeStatus>("delegate_worktree_status", {
-    worktree_root: params.worktreeRoot,
-    max_diff_chars: params.maxDiffChars,
-  } as any);
-}
-
-export async function defaultApplyWorktreeChanges(params: {
-  parentWorkdir: string;
-  worktreeRoot: string;
-}): Promise<DelegateWorktreeApplyResult> {
-  return invoke<DelegateWorktreeApplyResult>("delegate_apply_worktree_changes", {
-    parent_workdir: params.parentWorkdir,
-    worktree_root: params.worktreeRoot,
-  } as any);
-}
-
-export async function defaultCleanupWorktree(params: {
-  worktreeRoot: string;
-  branchName?: string;
-}): Promise<DelegateWorktreeCleanupResult> {
-  return invoke<DelegateWorktreeCleanupResult>("delegate_cleanup_worktree", {
-    worktree_root: params.worktreeRoot,
-    branch_name: params.branchName,
-    dry_run: false,
-    force: true,
-    delete_branch: true,
-  } as any);
+/** Worktree children: fs + shell + read-only memory + MCP business tools. */
+export function selectWorktreeTools(params: {
+  tools: Tool[];
+  metadataByName: Map<string, ToolMetadataLike>;
+}) {
+  return params.tools.filter((tool) => {
+    if (tool.name === AGENT_TOOL_NAME) return false;
+    if (tool.name === SEND_MESSAGE_TOOL_NAME) return true;
+    const metadata = params.metadataByName.get(tool.name);
+    return (
+      metadata?.groupId === "fs" ||
+      metadata?.groupId === "shell" ||
+      (metadata?.groupId === "memory" && metadata.isReadOnly === true) ||
+      (metadata?.groupId === "mcp" && metadata.kind === "mcp")
+    );
+  });
 }

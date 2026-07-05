@@ -41,20 +41,6 @@ import {
   upsertToolCallToRound,
 } from "../../../lib/chat/messages/uiMessages";
 import { runAssistantWithTools } from "../../../lib/chat/runner/agentRunner";
-import {
-  listSubagentIdentities,
-  listSubagentMessages,
-  listSubagentRuns,
-  type SubagentIdentityRecord,
-  type SubagentRunSummary,
-} from "../../../lib/chat/subagent/subagentHistory";
-import {
-  renderSubagentMessageBusSnapshot,
-  SUBAGENT_PARENT_AGENT_ID,
-} from "../../../lib/chat/subagent/subagentMessageBus";
-import { buildExistingSubagentsReminder } from "../../../lib/chat/subagent/subagentReminders";
-import type { SubagentRuntimeManager } from "../../../lib/chat/subagent/subagentRuntimeManager";
-import { createSubagentScheduler } from "../../../lib/chat/subagent/subagentScheduler";
 import type { StreamDebugLogger } from "../../../lib/debug/agentDebug";
 import { assistantMessageToText } from "../../../lib/providers/llm";
 import { resolveRuntimePlatform } from "../../../lib/runtimePlatform";
@@ -65,6 +51,16 @@ import {
   type SystemToolId,
   workspaceProjectPathKey,
 } from "../../../lib/settings";
+import {
+  AGENT_TOOL_NAME,
+  buildRosterReminder,
+  createSubagentScheduler,
+  isSubagentCardArguments,
+  renderMessageBusSnapshot,
+  SUBAGENT_PARENT_ID,
+  type SubagentConversationStore,
+  type SubagentTemplate,
+} from "../../../lib/subagents";
 import { buildBuiltinToolRegistry } from "../../../lib/tools/builtinRegistry";
 import type { BuiltinToolExecutionContext } from "../../../lib/tools/builtinTypes";
 import { createFileToolState } from "../../../lib/tools/fileToolState";
@@ -189,127 +185,29 @@ function finishAgentPerfSpan(
   return durationMs;
 }
 
-function shouldShowToolEvent(toolCall: ToolCall) {
-  return toolCall.name !== "Agent" || toolCall.arguments?.delegate_agent_card === true;
+function isSubagentCardToolCall(toolCall: ToolCall) {
+  return toolCall.name === AGENT_TOOL_NAME && isSubagentCardArguments(toolCall.arguments);
 }
 
-function isDelegateAgentCardToolCall(toolCall: ToolCall) {
-  return toolCall.name === "Agent" && toolCall.arguments?.delegate_agent_card === true;
+// Only enabled, non-empty templates are resolvable from Agent calls.
+function enabledSubagentTemplates(agentTemplates: AppSettings["agents"]): SubagentTemplate[] {
+  return (agentTemplates ?? [])
+    .filter((template) => template.enabled && template.prompt.trim())
+    .map((template) => ({
+      id: template.id,
+      name: template.name,
+      description: template.description,
+      prompt: template.prompt,
+    }));
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function optionalString(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function optionalNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function extractConversationSubagentRuns(params: {
-  state: ConversationViewState;
-  conversationId: string;
-  sessionId: string;
-  providerId: ProviderId;
-  model: string;
-}): SubagentRunSummary[] {
-  const runs: SubagentRunSummary[] = [];
-  for (const segment of params.state.segments) {
-    for (const message of segment.messages) {
-      if (message.role !== "toolResult" || message.toolName !== "Agent") continue;
-      const details = asRecord(message.details);
-      if (details.kind !== "delegate_agent") continue;
-      const agents = details.agents;
-      if (!Array.isArray(agents)) continue;
-      const timestamp = message.timestamp ?? Date.now();
-      agents.forEach((rawAgent, index) => {
-        const agent = asRecord(rawAgent);
-        const logicalAgentId = optionalString(agent.id);
-        if (!logicalAgentId) return;
-        const mode = optionalString(agent.mode) ?? "worktree";
-        const status = optionalString(agent.status) ?? "completed";
-        runs.push({
-          id:
-            optionalString(agent.runId) ??
-            `${message.toolCallId}:agent:${index + 1}:${logicalAgentId}:transcript`,
-          parentConversationId: params.conversationId,
-          parentToolCallId: message.toolCallId,
-          parentToolName: message.toolName,
-          agentIndex: index,
-          agentTotal: agents.length,
-          logicalAgentId,
-          agentId: optionalString(agent.agentId),
-          agentName: optionalString(agent.name) ?? optionalString(agent.agentName),
-          description: optionalString(agent.prompt) ?? logicalAgentId,
-          mode,
-          status: status === "failed" ? "failed" : "completed",
-          providerId: params.providerId,
-          model: params.model,
-          sessionId:
-            optionalString(agent.sessionId) ?? `${params.sessionId}:subagent:${logicalAgentId}`,
-          workdir: optionalString(agent.workdir),
-          worktreeRoot: optionalString(agent.worktreeRoot),
-          branchName: optionalString(agent.branchName),
-          messageCount: 0,
-          roundCount: optionalNumber(agent.rounds) ?? 0,
-          toolCallCount: optionalNumber(agent.toolCalls) ?? 0,
-          compactionCount: 0,
-          summary: optionalString(agent.summary),
-          error: optionalString(agent.error),
-          startedAt: timestamp,
-          endedAt: timestamp,
-          updatedAt: timestamp,
-        });
-      });
-    }
-  }
-  return runs;
-}
-
-async function loadStoredSubagentRuns(conversationId: string) {
-  const parentConversationId = conversationId.trim();
-  if (!parentConversationId) return [];
-  try {
-    return await listSubagentRuns({
-      parentConversationId,
-      limit: 50,
-    });
-  } catch (error) {
-    console.warn("Failed to load stored delegated subagent runs", error);
-    return [];
-  }
-}
-
-async function loadStoredSubagentIdentities(conversationId: string) {
-  try {
-    return await listSubagentIdentities({
-      parentConversationId: conversationId,
-      limit: 200,
-    });
-  } catch (error) {
-    console.warn("Failed to load stored delegated subagent identities", error);
-    return [] satisfies SubagentIdentityRecord[];
-  }
-}
-
-async function loadStoredSubagentMessages(conversationId: string) {
-  try {
-    return await listSubagentMessages({
-      parentConversationId: conversationId,
-      recipientAgentId: SUBAGENT_PARENT_AGENT_ID,
-      includeShared: true,
-      includeSent: true,
-      limit: 100,
-    });
-  } catch (error) {
-    console.warn("Failed to load stored delegated subagent messages", error);
-    return [];
-  }
+// The parent Agent call is suppressed in favor of the per-agent cards; a
+// rejected batch (error result) stays visible so validation failures are
+// never silent.
+function shouldShowToolEvent(toolCall: ToolCall, toolResult?: ToolResultMessage) {
+  if (toolCall.name !== AGENT_TOOL_NAME) return true;
+  if (isSubagentCardToolCall(toolCall)) return true;
+  return toolResult?.isError === true;
 }
 
 export type RunAgentConversationTurnParams = {
@@ -356,7 +254,7 @@ export type RunAgentConversationTurnParams = {
   conversationThrottleState: CompactionThrottleState;
   conversationDebugLogger: StreamDebugLogger;
   compactionDebugLogger: StreamDebugLogger;
-  subagentRuntimeManager?: SubagentRuntimeManager;
+  subagentStore?: SubagentConversationStore;
   getNextConversationState: () => ConversationViewState;
   applyConversationState: (state: ConversationViewState) => void;
   buildCompactionContext: (
@@ -445,7 +343,7 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
     conversationThrottleState,
     conversationDebugLogger,
     compactionDebugLogger,
-    subagentRuntimeManager,
+    subagentStore,
     getNextConversationState,
     applyConversationState,
     buildCompactionContext,
@@ -476,46 +374,45 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
   // this turn. In-flight extraction from the previous turn keeps running.
   memoryExtraction.noteTurnBoundary(conversationId);
 
-  const transcriptSubagentRuns = extractConversationSubagentRuns({
-    state: getNextConversationState(),
-    conversationId,
-    sessionId,
-    providerId,
-    model,
-  });
-  const loadStoredRunsStartedAt = perfNowMs();
-  const [storedSubagentRuns, storedSubagentIdentities, storedSubagentMessages] = await Promise.all([
-    loadStoredSubagentRuns(conversationId),
-    loadStoredSubagentIdentities(conversationId),
-    loadStoredSubagentMessages(conversationId),
-  ]);
+  const loadParentBusSnapshot = async () => {
+    if (!subagentStore) return "";
+    try {
+      return renderMessageBusSnapshot({
+        messages: await subagentStore.listBusMessages(SUBAGENT_PARENT_ID),
+        currentAgentId: SUBAGENT_PARENT_ID,
+        currentAgentName: "Parent Agent",
+      });
+    } catch (error) {
+      console.warn("Failed to load parent message bus snapshot", error);
+      return "";
+    }
+  };
+  const subagentStoreReadyStartedAt = perfNowMs();
+  let subagentReminder = "";
+  let parentMessageBusSnapshot = "";
+  if (subagentStore) {
+    try {
+      await subagentStore.ready();
+      subagentReminder = buildRosterReminder({
+        identities: subagentStore.listIdentities(),
+        latestRunsByAgent: subagentStore.latestRunsByAgent(),
+      });
+    } catch (error) {
+      console.warn("Failed to load the subagent roster", error);
+    }
+    parentMessageBusSnapshot = await loadParentBusSnapshot();
+  }
   finishAgentPerfSpan(
     conversationDebugLogger,
-    "subagent_runs.load_stored",
-    loadStoredRunsStartedAt,
+    "subagent_store.ready",
+    subagentStoreReadyStartedAt,
     {
       conversationId,
-      count: storedSubagentRuns.length,
-      identityCount: storedSubagentIdentities.length,
-      messageCount: storedSubagentMessages.length,
+      identityCount: subagentStore?.listIdentities().length ?? 0,
     },
   );
-  const conversationSubagentRuns = [...transcriptSubagentRuns, ...storedSubagentRuns];
-  const subagentReminder = buildExistingSubagentsReminder(
-    storedSubagentIdentities,
-    conversationSubagentRuns,
-  );
-  let parentMessageBusSnapshot = renderSubagentMessageBusSnapshot({
-    messages: storedSubagentMessages,
-    currentAgentId: SUBAGENT_PARENT_AGENT_ID,
-    currentAgentName: "Parent Agent",
-  });
   const refreshParentMessageBusSnapshot = async () => {
-    parentMessageBusSnapshot = renderSubagentMessageBusSnapshot({
-      messages: await loadStoredSubagentMessages(conversationId),
-      currentAgentId: SUBAGENT_PARENT_AGENT_ID,
-      currentAgentName: "Parent Agent",
-    });
+    parentMessageBusSnapshot = await loadParentBusSnapshot();
     return parentMessageBusSnapshot;
   };
   const withSubagentRuntimeContext = (context: Context): Context => {
@@ -566,23 +463,21 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
       console.warn(warning);
       updateToolStatus(warning, transcriptStore, isConversationVisible());
     },
-    delegateRuntime: {
-      providerId,
-      model,
-      runtime,
-      conversationId,
-      sessionId,
-      agentTemplates,
-      conversationSubagentIdentities: storedSubagentIdentities,
-      conversationSubagentRuns,
-      subagentRuntimeManager,
-      subagentScheduler,
-    },
+    subagentRuntime: subagentStore
+      ? {
+          providerId,
+          model,
+          runtime,
+          sessionId,
+          templates: enabledSubagentTemplates(agentTemplates),
+          store: subagentStore,
+          scheduler: subagentScheduler,
+        }
+      : undefined,
   });
   finishAgentPerfSpan(conversationDebugLogger, "builtin_registry.build", buildRegistryStartedAt, {
     toolCount: builtinRegistry.tools.length,
     enabledMcpServerCount: enabledMcpServerIds.length,
-    subagentRunCount: conversationSubagentRuns.length,
   });
   const combinedTools = builtinRegistry.tools;
 
@@ -907,7 +802,7 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
         onToolExecutionStart: (toolCall, round) => {
           sawToolCallInRound = true;
           discardPendingToolCallDelta(toolCall, round);
-          if (!isDelegateAgentCardToolCall(toolCall)) {
+          if (!isSubagentCardToolCall(toolCall)) {
             hookLifecycle.toolExecutionStarted();
           }
           if (!shouldShowToolEvent(toolCall)) return;
@@ -932,10 +827,10 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
         onToolResult: (toolCall, toolResult, round) => {
           if (toolResult.role !== "toolResult") return;
           discardPendingToolCallDelta(toolCall, round);
-          if (!isDelegateAgentCardToolCall(toolCall)) {
+          if (!isSubagentCardToolCall(toolCall)) {
             hookLifecycle.toolResultReceived(round);
           }
-          if (!shouldShowToolEvent(toolCall)) return;
+          if (!shouldShowToolEvent(toolCall, toolResult)) return;
           gatewayBridgeEvents.queueEvent({
             type: "tool_result",
             id: toolCall.id,

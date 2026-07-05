@@ -22,10 +22,10 @@ import {
   areStableValuesEqual,
   displayString,
   getBuiltinResultKind,
-  getDelegateAgentInlineSummary,
+  getSubagentInlineSummary,
   getToolDisplayTitle,
   getToolMeta,
-  isDelegateAgentCardToolCall,
+  isSubagentCardToolCall,
   type MetaTag,
 } from "./assistantBubbleUtils";
 import { FileToolArgsDisplay } from "./FileToolArgs";
@@ -152,11 +152,11 @@ function ToolArgsDisplay({ item }: { item: ToolTraceItem }) {
 
   const display = getToolDisplay(toolCall);
 
-  if (isDelegateAgentCardToolCall(toolCall)) {
+  if (isSubagentCardToolCall(toolCall)) {
     const args = toolCall.arguments || {};
-    const name = displayString(args.name) || displayString(args.agent_id) || displayString(args.id);
+    const name = displayString(args.name) || displayString(args.id);
     const role = displayString(args.role);
-    const task = displayString(args.prompt) || displayString(args.description);
+    const task = displayString(args.prompt);
 
     return (
       <div className="tool-expand flex flex-col gap-2">
@@ -279,11 +279,11 @@ function ToolCallItem({
   const builtinResultKind = getBuiltinResultKind(result);
   const shouldAutoOpen = item.toolCall.name === "Image" || builtinResultKind === "display_image";
   const [open, setOpen] = useState(shouldAutoOpen);
-  const isDelegateAgentCard = isDelegateAgentCardToolCall(item.toolCall);
+  const isSubagentCard = isSubagentCardToolCall(item.toolCall);
   const hasArgs = Object.keys(item.toolCall.arguments || {}).length > 0;
   const isStreamingFilePreviewTool = FILE_TOOL_TEXT_FIELDS[item.toolCall.name] !== undefined;
   const shouldShowArgs =
-    (!isDelegateAgentCard || !result) && (isStreamingFilePreviewTool ? !result : hasArgs);
+    (!isSubagentCard || !result) && (isStreamingFilePreviewTool ? !result : hasArgs);
   const isBash = item.toolCall.name === "Bash";
   const bashCmd =
     isBash && typeof item.toolCall.arguments?.command === "string"
@@ -292,8 +292,8 @@ function ToolCallItem({
   const firstLine = bashCmd ? bashCmd.split("\n")[0] : "";
   const toolArgsSummary = isBash
     ? ""
-    : isDelegateAgentCard
-      ? getDelegateAgentInlineSummary(item)
+    : isSubagentCard
+      ? getSubagentInlineSummary(item)
       : summarizeToolCall(item.toolCall, {
           includeName: false,
           includeManagerAction: false,

@@ -38,6 +38,8 @@ import type { WorkspaceSshTerminalOpenRequest } from "../components/workspace-ed
 import { isWorkspacePreviewPath } from "../components/workspace-editor/workspaceImagePreview";
 import { useLocale } from "../i18n";
 import type { AppUpdateController } from "../lib/appUpdates";
+import { getAutomationState } from "../lib/automation";
+import { createHookRunScope } from "../lib/automation/hookRunner";
 import {
   type CompactionStatus,
   noteCompactionApplied,
@@ -92,15 +94,8 @@ import {
   getFirstUserMessageText,
   isAbortLikeError,
 } from "../lib/chat/page/chatPageHelpers";
-import {
-  collectRetainedSubagentParentToolCallIds,
-  pruneSubagentRunsForConversation,
-} from "../lib/chat/subagent/subagentHistory";
-import { createSubagentRuntimeManager } from "../lib/chat/subagent/subagentRuntimeManager";
 import { createStreamDebugLogger } from "../lib/debug/agentDebug";
 import { tauriGitClient } from "../lib/git/tauriGitClient";
-import { getAutomationState } from "../lib/automation";
-import { createHookRunScope } from "../lib/automation/hookRunner";
 import { memoryDeleteProject } from "../lib/memory/api";
 import { buildMemoryOverviewSection } from "../lib/memory/prompts/injection";
 import {
@@ -162,6 +157,11 @@ import {
   mergeAlwaysEnabledSkillNames,
   resolveExplicitSkillMentions,
 } from "../lib/skills";
+import {
+  collectRetainedSubagentParentToolCallIds,
+  createSubagentStoreManager,
+  pruneSubagentRunsForConversation,
+} from "../lib/subagents";
 import {
   applyTerminalEventToSessions,
   sortTerminalSessions,
@@ -1266,7 +1266,7 @@ export function ChatPage(props: ChatPageProps) {
   const composerRef = useRef<MentionComposerHandle | null>(null);
   const composerDraftCacheRef = useRef<Map<string, MentionComposerDraft>>(new Map());
   const conversationLoadSequenceRef = useRef(0);
-  const subagentRuntimeManagerRef = useRef(createSubagentRuntimeManager());
+  const subagentStoresRef = useRef(createSubagentStoreManager());
   const previousSubagentRuntimeConversationRef = useRef(currentConversationId);
   const subagentWarmupSignatureRef = useRef("");
   const titleJobRef = useRef<{
@@ -1972,7 +1972,7 @@ export function ChatPage(props: ChatPageProps) {
         isConversationRunning,
         onPruneConversation: (conversationId) => {
           deleteConversationLocalCaches(conversationId);
-          subagentRuntimeManagerRef.current.disposeConversation(conversationId);
+          subagentStoresRef.current.dispose(conversationId);
         },
       });
     },
@@ -2722,7 +2722,7 @@ export function ChatPage(props: ChatPageProps) {
     resetVisibleTransientState,
     deleteConversationArtifacts: deleteConversationLocalCaches,
     disposeSubagentsForConversation: (conversationId) => {
-      subagentRuntimeManagerRef.current.disposeConversation(conversationId);
+      subagentStoresRef.current.dispose(conversationId);
     },
     getDefaultNewConversationWorkdir: () =>
       isAgentMode ? activeWorkspaceProjectPath || undefined : undefined,
@@ -2866,7 +2866,7 @@ export function ChatPage(props: ChatPageProps) {
               conversationRuntimeCacheRef.current.delete(conversationId);
               locallySyncedHistoryUpdatedAtRef.current.delete(conversationId);
               deleteConversationLocalCaches(conversationId);
-              subagentRuntimeManagerRef.current.disposeConversation(conversationId);
+              subagentStoresRef.current.dispose(conversationId);
             }
           }
           if (terminalSessions.length > 0) {
@@ -2958,7 +2958,7 @@ export function ChatPage(props: ChatPageProps) {
   useEffect(() => {
     const previous = previousSubagentRuntimeConversationRef.current;
     if (previous && previous !== currentConversationId) {
-      subagentRuntimeManagerRef.current.disposeConversation(previous);
+      subagentStoresRef.current.dispose(previous);
     }
     previousSubagentRuntimeConversationRef.current = currentConversationId;
 
@@ -2973,15 +2973,12 @@ export function ChatPage(props: ChatPageProps) {
     const warmupSignature = `${currentConversationId}:${currentHistoryItem.updatedAt}:${agentSignature}`;
     if (subagentWarmupSignatureRef.current === warmupSignature) return;
     subagentWarmupSignatureRef.current = warmupSignature;
-    subagentRuntimeManagerRef.current.warmupConversation({
-      parentConversationId: currentConversationId,
-      agentTemplates: settings.agents,
-    });
+    subagentStoresRef.current.warmup(currentConversationId);
   }, [currentConversationId, historyItems, settings.agents]);
 
   useEffect(
     () => () => {
-      subagentRuntimeManagerRef.current.disposeAll();
+      subagentStoresRef.current.disposeAll();
     },
     [],
   );
@@ -3193,7 +3190,7 @@ export function ChatPage(props: ChatPageProps) {
     }
 
     const keepParentToolCallIds = collectRetainedSubagentParentToolCallIds(nextState);
-    subagentRuntimeManagerRef.current.invalidateConversation(targetConversationId);
+    subagentStoresRef.current.invalidate(targetConversationId);
     void pruneSubagentRunsForConversation({
       parentConversationId: targetConversationId,
       keepParentToolCallIds,
@@ -4640,7 +4637,7 @@ export function ChatPage(props: ChatPageProps) {
             conversationThrottleState,
             conversationDebugLogger,
             compactionDebugLogger,
-            subagentRuntimeManager: subagentRuntimeManagerRef.current,
+            subagentStore: subagentStoresRef.current.get(conversationId),
             getNextConversationState: () => nextConversationState,
             applyConversationState,
             buildCompactionContext,
@@ -5301,7 +5298,7 @@ export function ChatPage(props: ChatPageProps) {
     setPendingUploadedFiles,
     updateConversationRuntimeEntry,
     invalidateSubagentsForConversation: (conversationId) => {
-      subagentRuntimeManagerRef.current.invalidateConversation(conversationId);
+      subagentStoresRef.current.invalidate(conversationId);
     },
     sendActionRef,
   });

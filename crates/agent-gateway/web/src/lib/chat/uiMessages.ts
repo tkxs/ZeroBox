@@ -1,9 +1,11 @@
 import type { AssistantMessage, Message, ToolCall, ToolResultMessage, Usage } from "../agentTypes";
 import { assistantMessageToText } from "../providers/llm";
-import type {
-  DelegateAgentCardResultDetails,
-  DelegateAgentResultDetails,
-} from "../tools/builtinTypes";
+import {
+  buildSubagentCardToolCallId,
+  isSubagentCardArguments,
+  type SubagentBatchDetails,
+  type SubagentCardDetails,
+} from "../subagents/protocol";
 import {
   enrichHostedSearchContentWithText,
   type HostedSearchBlock,
@@ -300,20 +302,14 @@ export function summarizeToolCall(
                       ]
                     : name === "Agent"
                       ? [
-                          typeof args.agent_id === "string"
-                            ? `agent=${summarizeToolArg(args.agent_id)}`
-                            : null,
+                          typeof args.id === "string" ? `agent=${summarizeToolArg(args.id)}` : null,
                           typeof args.name === "string"
                             ? `name=${summarizeToolArg(args.name)}`
                             : null,
                           typeof args.prompt === "string"
                             ? `prompt=${summarizeToolArg(args.prompt)}`
-                            : typeof args.description === "string"
-                              ? `prompt=${summarizeToolArg(args.description)}`
-                              : null,
-                          typeof args.agent_spec === "string"
-                            ? `agentSpecChars=${args.agent_spec.length}`
                             : null,
+                          Array.isArray(args.agents) ? `agents=${args.agents.length}` : null,
                           typeof args.mode === "string"
                             ? `mode=${summarizeToolArg(args.mode)}`
                             : null,
@@ -536,14 +532,9 @@ export function toolCallArgsForDisplay(toolCall: ToolCall) {
 }
 
 function summarizeAgentArgsForDisplay(args: Record<string, unknown>) {
-  const prompt =
-    typeof args.prompt === "string"
-      ? args.prompt
-      : typeof args.description === "string"
-        ? args.description
-        : undefined;
+  const prompt = typeof args.prompt === "string" ? args.prompt : undefined;
   const summary: Record<string, unknown> = {
-    agent_id: args.agent_id,
+    id: args.id,
     name: args.name,
     role: args.role,
     prompt:
@@ -553,10 +544,10 @@ function summarizeAgentArgsForDisplay(args: Record<string, unknown>) {
     mode: args.mode,
     identityChars: typeof args.identity === "string" ? args.identity.length : undefined,
     promptChars: typeof prompt === "string" ? prompt.length : undefined,
-    agentSpecChars: typeof args.agent_spec === "string" ? args.agent_spec.length : undefined,
+    agentCount: Array.isArray(args.agents) ? args.agents.length : undefined,
     concurrency: args.concurrency,
   };
-  if (args.task_intent !== undefined) summary.task_intent = args.task_intent;
+  if (args.template !== undefined) summary.template = args.template;
   if (args.apply_policy !== undefined) summary.apply_policy = args.apply_policy;
   if (args.allowed_output_paths !== undefined) {
     summary.allowed_output_paths = args.allowed_output_paths;
@@ -649,12 +640,12 @@ function rebalanceHostedSearchTextBoundaries(blocks: UiRoundContentBlock[]): UiR
   return out;
 }
 
-function isDelegateAgentCardToolCall(toolCall: ToolCall) {
-  return toolCall.name === "Agent" && toolCall.arguments?.delegate_agent_card === true;
+function isSubagentCardToolCall(toolCall: ToolCall) {
+  return toolCall.name === "Agent" && isSubagentCardArguments(toolCall.arguments);
 }
 
-function isParentDelegateAgentToolCall(toolCall: ToolCall) {
-  return toolCall.name === "Agent" && !isDelegateAgentCardToolCall(toolCall);
+function isParentAgentToolCall(toolCall: ToolCall) {
+  return toolCall.name === "Agent" && !isSubagentCardToolCall(toolCall);
 }
 
 function isProviderNativeWebSearchToolName(toolName: string | undefined) {
@@ -717,21 +708,7 @@ function filterHiddenToolBlocks(blocks: UiRoundContentBlock[]) {
   );
 }
 
-type DelegateAgentPlaceholder = {
-  id: string;
-  name?: string;
-  role?: string;
-  prompt: string;
-  agentId?: string;
-  mode: "readonly" | "worktree";
-  taskIntent: "communication" | "research" | "review" | "implementation" | "document_generation";
-  applyPolicy: "none" | "explicit" | "auto";
-  allowedOutputPaths: string[];
-};
-
-const DELEGATE_AGENT_PLACEHOLDER_MAX_AGENTS = 8;
-const DELEGATE_AGENT_PLACEHOLDER_DEFAULT_CONCURRENCY = 8;
-const DELEGATE_AGENT_PLACEHOLDER_MAX_CONCURRENCY = 8;
+const SUBAGENT_PLACEHOLDER_MAX_AGENTS = 8;
 
 function asPlainObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -748,462 +725,74 @@ function clampInteger(value: unknown, fallback: number, min: number, max: number
   return Math.max(min, Math.min(max, Math.floor(value)));
 }
 
-function normalizePlaceholderMode(value: unknown): DelegateAgentPlaceholder["mode"] | undefined {
-  return value === "readonly" || value === "worktree" ? value : undefined;
-}
-
-function normalizePlaceholderTaskIntent(
-  value: unknown,
-): DelegateAgentPlaceholder["taskIntent"] | undefined {
-  return value === "communication" ||
-    value === "research" ||
-    value === "review" ||
-    value === "implementation" ||
-    value === "document_generation"
-    ? value
-    : undefined;
-}
-
-function normalizePlaceholderApplyPolicy(
-  value: unknown,
-): DelegateAgentPlaceholder["applyPolicy"] | undefined {
-  return value === "none" || value === "explicit" || value === "auto" ? value : undefined;
-}
-
-function normalizePlaceholderRelativePath(value: string) {
-  const normalized = value.trim().replace(/\\/g, "/").replace(/^\.\//, "");
-  if (
-    !normalized ||
-    /^[a-zA-Z]:\//.test(normalized) ||
-    normalized.startsWith("/") ||
-    normalized.startsWith("//") ||
-    normalized === "." ||
-    normalized === ".."
-  ) {
-    return "";
-  }
-
-  const segments: string[] = [];
-  for (const segment of normalized.split("/")) {
-    if (!segment || segment === ".") continue;
-    if (segment === ".." || segment.includes(":")) return "";
-    segments.push(segment);
-  }
-  return segments.join("/");
-}
-
-function normalizePlaceholderPathList(value: unknown): string[] {
-  const rawItems = Array.isArray(value)
-    ? value
-    : typeof value === "string"
-      ? value.split(/[,\n]/g)
-      : [];
-  const out: string[] = [];
-  for (const raw of rawItems) {
-    if (typeof raw !== "string") continue;
-    const normalized = normalizePlaceholderRelativePath(raw);
-    if (normalized && !out.includes(normalized)) out.push(normalized);
-  }
-  return out;
-}
-
-function maybePlaceholderOutputPath(value: string) {
-  const text = value.trim().replace(/^[`"'“”‘’]+|[`"'“”‘’，,。.；;:：)）\]]+$/g, "");
-  if (!text || /[*?[\]]/.test(text) || /^https?:\/\//i.test(text)) return "";
-  if (/\s/.test(text)) return "";
-  if (!/\.[a-z0-9]{1,12}$/i.test(text)) return "";
-  return normalizePlaceholderRelativePath(text);
-}
-
-function inferPlaceholderAllowedOutputPaths(params: { prompt?: string }): string[] {
-  const text = params.prompt ?? "";
-  const out: string[] = [];
-  const pushPath = (value: string) => {
-    const normalized = maybePlaceholderOutputPath(value);
-    if (normalized && !out.includes(normalized)) out.push(normalized);
-  };
-
-  for (const match of text.matchAll(/`([^`\r\n]{1,240})`/g)) {
-    pushPath(match[1] ?? "");
-  }
-  for (const match of text.matchAll(/["“'‘]([^"“”'‘’\r\n]{1,240}\.[a-z0-9]{1,12})["”'’]/gi)) {
-    pushPath(match[1] ?? "");
-  }
-  for (const match of text.matchAll(
-    /(?:^|[\s(（])((?:[A-Za-z0-9._\-\u4e00-\u9fff]+\/)+[A-Za-z0-9._\-\u4e00-\u9fff]+\.[A-Za-z0-9]{1,12})(?=$|[\s)）。；;，,])/g,
-  )) {
-    pushPath(match[1] ?? "");
-  }
-
-  return out;
-}
-
-function inferPlaceholderTaskIntent(params: {
-  prompt?: string;
-}): DelegateAgentPlaceholder["taskIntent"] {
-  const text = (params.prompt ?? "").toLowerCase();
-  if (
-    /(\.md\b|\.txt\b|\.markdown\b|\.rst\b|save\s+(it\s+)?to\s+(a\s+)?file|create\s+(a\s+)?(file|document)|write\s+(a\s+)?(file|document)|生成.*(文件|文档)|保存.*(文件|文档)|写(入|到|成).*(文件|文档))/i.test(
-      text,
-    )
-  ) {
-    return "document_generation";
-  }
-  if (
-    /(implement|fix|patch|refactor|modify\s+files?|edit\s+files?|write\s+(code|tests?)|run\s+tests?|add\s+(tests?|feature)|update\s+(code|files?)|实现|修复|补丁|重构|修改(代码|文件)?|编辑(代码|文件)?|新增(测试|功能)|补充测试|运行测试)/i.test(
-      text,
-    )
-  ) {
-    return "implementation";
-  }
-  if (/(review|audit|inspect|verify|check|评审|审查|审核|复核|验证|检查)/i.test(text)) {
-    return "review";
-  }
-  if (/(research|investigate|analy[sz]e|analysis|look up|调研|调查|分析|研究|查找)/i.test(text)) {
-    return "research";
-  }
-  if (
-    /(discuss|debate|conversation|dialogue|roundtable|reply|respond|brainstorm|role|opinion|talk|讨论|对话|辩论|圆桌|回应|回复|发言|观点|头脑风暴|品鉴|专家团队|生命的意义)/i.test(
-      text,
-    )
-  ) {
-    return "communication";
-  }
-  return "research";
-}
-
-function defaultPlaceholderModeForIntent(
-  intent: DelegateAgentPlaceholder["taskIntent"],
-): DelegateAgentPlaceholder["mode"] {
-  return intent === "implementation" || intent === "document_generation" ? "worktree" : "readonly";
-}
-
-function defaultPlaceholderApplyPolicyForTask(params: {
-  mode: DelegateAgentPlaceholder["mode"];
-  taskIntent: DelegateAgentPlaceholder["taskIntent"];
-}): DelegateAgentPlaceholder["applyPolicy"] {
-  if (params.mode === "readonly") return "none";
-  if (params.taskIntent === "implementation") return "auto";
-  if (params.taskIntent === "document_generation") return "explicit";
-  return "none";
-}
-
-function normalizePlaceholderSpecKey(value: string) {
-  const key = value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-  if (key === "id" || key === "agent" || key === "agent_id_for_resume") return "id";
-  if (key === "name" || key === "agent_name") return "name";
-  if (key === "agent_id" || key === "template" || key === "template_id") return "agent_id";
-  if (key === "mode" || key === "execution_mode") return "mode";
-  if (key === "task_intent" || key === "intent" || key === "task_type") return "task_intent";
-  if (key === "apply_policy" || key === "apply") return "apply_policy";
-  if (
-    key === "allowed_output_paths" ||
-    key === "allowed_paths" ||
-    key === "output_paths" ||
-    key === "apply_paths"
-  ) {
-    return "allowed_output_paths";
-  }
-  if (key === "role" || key === "persona") return "role";
-  if (
-    key === "prompt" ||
-    key === "description" ||
-    key === "goal" ||
-    key === "instruction" ||
-    key === "instructions" ||
-    key === "task"
-  ) {
-    return "prompt";
-  }
-  return "";
-}
-
-function unquotePlaceholderSpecValue(value: string) {
-  const text = value.trim();
-  if (
-    (text.startsWith('"') && text.endsWith('"')) ||
-    (text.startsWith("'") && text.endsWith("'"))
-  ) {
-    return text.slice(1, -1);
-  }
-  return text;
-}
-
-function parsePlaceholderSpecScalar(value: string): unknown {
-  const text = unquotePlaceholderSpecValue(value);
-  if (/^(true|false)$/i.test(text)) return text.toLowerCase() === "true";
-  return text;
-}
-
-function parsePlaceholderSpecAttributes(value: string) {
-  const attrs: Record<string, unknown> = {};
-  const pattern = /([a-zA-Z_][\w-]*)=("[^"]*"|'[^']*'|[^\s]+)/g;
-  for (const match of value.matchAll(pattern)) {
-    const key = normalizePlaceholderSpecKey(match[1] ?? "");
-    if (!key) continue;
-    attrs[key] = parsePlaceholderSpecScalar(match[2] ?? "");
-  }
-  return attrs;
-}
-
-function appendPlaceholderSpecField(record: Record<string, unknown>, key: string, value: string) {
-  const normalizedKey = normalizePlaceholderSpecKey(key);
-  if (!normalizedKey) return "";
-  if (normalizedKey === "allowed_output_paths") {
-    const previous = normalizePlaceholderPathList(record[normalizedKey]);
-    record[normalizedKey] = [...previous, ...normalizePlaceholderPathList(value)];
-    return normalizedKey;
-  }
-  const next = unquotePlaceholderSpecValue(value);
-  if (normalizedKey === "prompt") {
-    const previous = optionalText(record[normalizedKey]);
-    record[normalizedKey] = previous ? `${previous}\n${next}` : next;
-    return normalizedKey;
-  }
-  record[normalizedKey] = next;
-  return normalizedKey;
-}
-
-function splitPlaceholderSpecBlocks(spec: string) {
-  const blocks: string[][] = [];
-  let current: string[] = [];
-  for (const line of spec.replace(/\r\n/g, "\n").split("\n")) {
-    const trimmed = line.trim();
-    if (/^---+$/.test(trimmed)) {
-      if (current.some((item) => item.trim())) blocks.push(current);
-      current = [];
-      continue;
-    }
-    if (/^@agent\b/i.test(trimmed) && current.some((item) => item.trim())) {
-      blocks.push(current);
-      current = [];
-    }
-    current.push(line);
-  }
-  if (current.some((item) => item.trim())) blocks.push(current);
-  return blocks;
-}
-
-function parsePlaceholderSpecBlock(lines: string[]) {
-  const record: Record<string, unknown> = {};
-  let activeKey = "";
-  const freeText: string[] = [];
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      if (activeKey === "prompt") {
-        appendPlaceholderSpecField(record, activeKey, "");
-      }
-      continue;
-    }
-
-    if (/^@agent\b/i.test(trimmed)) {
-      Object.assign(record, parsePlaceholderSpecAttributes(trimmed.replace(/^@agent\b/i, "")));
-      activeKey = "";
-      continue;
-    }
-    if (/^agent\s+\d+\s*:$/i.test(trimmed) || /^agent\s*:$/i.test(trimmed)) {
-      activeKey = "";
-      continue;
-    }
-
-    const fieldMatch = /^([a-zA-Z_][\w\s-]{0,40})\s*:\s*(.*)$/.exec(trimmed);
-    const normalizedField = fieldMatch ? normalizePlaceholderSpecKey(fieldMatch[1] ?? "") : "";
-    if (fieldMatch && normalizedField) {
-      const rawValue = (fieldMatch[2] ?? "").trim();
-      activeKey = normalizedField;
-      if (rawValue && rawValue !== "|" && rawValue !== ">") {
-        appendPlaceholderSpecField(record, activeKey, rawValue);
-      } else if (!(activeKey in record)) {
-        record[activeKey] = "";
-      }
-      continue;
-    }
-    if (fieldMatch) {
-      activeKey = "";
-      continue;
-    }
-
-    if (activeKey === "prompt") {
-      appendPlaceholderSpecField(record, activeKey, line.replace(/^\s{0,4}/, ""));
-    } else {
-      freeText.push(line);
-    }
-  }
-
-  if (!optionalText(record.prompt) && freeText.length > 0) {
-    record.prompt = freeText.join("\n").trim();
-  }
-  return record;
-}
-
-function parsePlaceholderSpec(spec: string) {
-  return splitPlaceholderSpecBlocks(spec).map(parsePlaceholderSpecBlock);
-}
-
-function shouldTreatPlaceholderTextAsAgentSpec(value: unknown) {
-  const text = optionalText(value);
-  if (!text) return false;
-  if (/^\s*@agent\b/im.test(text)) return true;
-  return (
-    /^\s*agent\s+\d+\s*:/im.test(text) && /^\s*(name|role|prompt|description|task)\s*:/im.test(text)
-  );
-}
-
-function normalizePlaceholderAgent(
-  rawAgent: Record<string, unknown>,
-  index: number,
-  inheritedAgentId?: string,
-  inheritedMode?: DelegateAgentPlaceholder["mode"],
-  inheritedTaskIntent?: DelegateAgentPlaceholder["taskIntent"],
-  inheritedApplyPolicy?: DelegateAgentPlaceholder["applyPolicy"],
-  inheritedAllowedOutputPaths: string[] = [],
-): DelegateAgentPlaceholder | null {
-  const prompt = optionalText(rawAgent.prompt) ?? optionalText(rawAgent.description);
-  if (!prompt) return null;
-  const id = optionalText(rawAgent.id) ?? `agent-${index + 1}`;
-  const taskIntent =
-    normalizePlaceholderTaskIntent(rawAgent.task_intent) ??
-    inheritedTaskIntent ??
-    inferPlaceholderTaskIntent({ prompt });
-  const mode =
-    normalizePlaceholderMode(rawAgent.mode) ??
-    inheritedMode ??
-    defaultPlaceholderModeForIntent(taskIntent);
-  const applyPolicy =
-    normalizePlaceholderApplyPolicy(rawAgent.apply_policy) ??
-    inheritedApplyPolicy ??
-    defaultPlaceholderApplyPolicyForTask({ mode, taskIntent });
-  const inferredAllowedOutputPaths =
-    taskIntent === "document_generation" && applyPolicy === "explicit"
-      ? inferPlaceholderAllowedOutputPaths({ prompt })
-      : [];
-  const allowedOutputPaths = [
-    ...inheritedAllowedOutputPaths,
-    ...normalizePlaceholderPathList(rawAgent.allowed_output_paths),
-    ...inferredAllowedOutputPaths,
-  ].filter((path, position, paths) => paths.indexOf(path) === position);
-  return {
-    id,
-    name: optionalText(rawAgent.name),
-    role: optionalText(rawAgent.role),
-    prompt,
-    agentId: optionalText(rawAgent.agent_id) ?? inheritedAgentId,
-    mode,
-    taskIntent,
-    applyPolicy,
-    allowedOutputPaths,
-  };
-}
-
-function normalizeDelegateAgentPlaceholders(
-  args: Record<string, unknown>,
-): DelegateAgentPlaceholder[] {
-  const inheritedAgentId = optionalText(args.agent_id);
-  const inheritedMode = normalizePlaceholderMode(args.mode);
-  const inheritedTaskIntent = normalizePlaceholderTaskIntent(args.task_intent);
-  const inheritedApplyPolicy = normalizePlaceholderApplyPolicy(args.apply_policy);
-  const inheritedAllowedOutputPaths = normalizePlaceholderPathList(args.allowed_output_paths);
-  const explicitAgentSpec = optionalText(args.agent_spec) ?? optionalText(args.spec);
-  const promptAgentSpec =
-    !explicitAgentSpec && shouldTreatPlaceholderTextAsAgentSpec(args.prompt)
-      ? optionalText(args.prompt)
-      : undefined;
-  const agentSpec = explicitAgentSpec ?? promptAgentSpec;
-
-  if (agentSpec) {
-    const specItems = parsePlaceholderSpec(agentSpec).filter((item) => optionalText(item.prompt));
-    if (specItems.length === 0 || specItems.length > DELEGATE_AGENT_PLACEHOLDER_MAX_AGENTS) {
-      return [];
-    }
-    return specItems
-      .map((item, index) =>
-        normalizePlaceholderAgent(
-          item,
-          index,
-          inheritedAgentId,
-          inheritedMode,
-          inheritedTaskIntent,
-          inheritedApplyPolicy,
-          inheritedAllowedOutputPaths,
-        ),
-      )
-      .filter((item): item is DelegateAgentPlaceholder => Boolean(item));
-  }
-
-  const single = normalizePlaceholderAgent(
-    args,
-    0,
-    inheritedAgentId,
-    inheritedMode,
-    inheritedTaskIntent,
-    inheritedApplyPolicy,
-    inheritedAllowedOutputPaths,
-  );
-  return single ? [single] : [];
-}
-
-export function buildDelegateAgentPlaceholderToolCalls(parentToolCall: ToolCall): ToolCall[] {
-  if (!isParentDelegateAgentToolCall(parentToolCall)) return [];
+/**
+ * Live placeholder cards while the parent Agent call's arguments stream.
+ * The streaming JSON parser yields partial `agents` arrays; an element only
+ * renders once its `id` and `prompt` fields have started streaming. Indexes
+ * follow the raw array so placeholder ids match the authoritative cards
+ * emitted when execution starts.
+ */
+export function buildSubagentPlaceholderToolCalls(parentToolCall: ToolCall): ToolCall[] {
+  if (!isParentAgentToolCall(parentToolCall)) return [];
   const args = asPlainObject(parentToolCall.arguments);
-  const agents = normalizeDelegateAgentPlaceholders(args);
-  if (agents.length === 0) return [];
+  const rawAgents = Array.isArray(args.agents) ? args.agents : [];
+  if (rawAgents.length === 0 || rawAgents.length > SUBAGENT_PLACEHOLDER_MAX_AGENTS) return [];
   const concurrency = Math.min(
-    agents.length,
+    rawAgents.length,
     clampInteger(
       args.concurrency,
-      DELEGATE_AGENT_PLACEHOLDER_DEFAULT_CONCURRENCY,
+      SUBAGENT_PLACEHOLDER_MAX_AGENTS,
       1,
-      DELEGATE_AGENT_PLACEHOLDER_MAX_CONCURRENCY,
+      SUBAGENT_PLACEHOLDER_MAX_AGENTS,
     ),
   );
 
-  return agents.map((agent, index) => ({
-    type: "toolCall",
-    id: `${parentToolCall.id}:agent:${index + 1}`,
-    name: "Agent",
-    arguments: {
-      delegate_agent_card: true,
-      parent_tool_call_id: parentToolCall.id,
-      index: index + 1,
-      total: agents.length,
-      concurrency,
-      id: agent.id,
-      name: agent.name,
-      role: agent.role,
-      agent_id: agent.agentId,
-      prompt: agent.prompt,
-      mode: agent.mode,
-      task_intent: agent.taskIntent,
-      apply_policy: agent.applyPolicy,
-      allowed_output_paths: agent.allowedOutputPaths,
-    },
-  }));
+  const placeholders: ToolCall[] = [];
+  rawAgents.forEach((rawAgent, index) => {
+    const record = asPlainObject(rawAgent);
+    const id = optionalText(record.id);
+    const prompt = optionalText(record.prompt);
+    if (!id || !prompt) return;
+    placeholders.push({
+      type: "toolCall",
+      id: buildSubagentCardToolCallId(parentToolCall.id, index + 1),
+      name: "Agent",
+      arguments: {
+        subagent_card: true,
+        parent_tool_call_id: parentToolCall.id,
+        index: index + 1,
+        total: rawAgents.length,
+        concurrency,
+        id,
+        name: optionalText(record.name),
+        role: optionalText(record.role),
+        mode: record.mode === "worktree" || record.mode === "readonly" ? record.mode : undefined,
+        prompt,
+      },
+    });
+  });
+  return placeholders;
 }
 
-function isDelegateAgentResult(
+function isSubagentBatchResult(
   toolResult: ToolResultMessage | undefined,
-): toolResult is ToolResultMessage & { details: DelegateAgentResultDetails } {
-  const details = toolResult?.details as Partial<DelegateAgentResultDetails> | undefined;
-  return details?.kind === "delegate_agent" && Array.isArray(details.agents);
+): toolResult is ToolResultMessage & { details: SubagentBatchDetails } {
+  const details = toolResult?.details as Partial<SubagentBatchDetails> | undefined;
+  return details?.kind === "subagent_batch" && Array.isArray(details.agents);
 }
 
-function buildDelegateAgentCardToolCall(params: {
+function buildSubagentCardToolCallFromReport(params: {
   parentToolCall: ToolCall;
-  details: DelegateAgentResultDetails;
+  details: SubagentBatchDetails;
   index: number;
-  agent: DelegateAgentResultDetails["agents"][number];
+  agent: SubagentBatchDetails["agents"][number];
 }): ToolCall {
   return {
     type: "toolCall",
-    id: `${params.parentToolCall.id}:agent:${params.index + 1}`,
+    id: buildSubagentCardToolCallId(params.parentToolCall.id, params.index + 1),
     name: "Agent",
     arguments: {
-      delegate_agent_card: true,
+      subagent_card: true,
       parent_tool_call_id: params.parentToolCall.id,
       index: params.index + 1,
       total: params.details.agentCount,
@@ -1211,22 +800,21 @@ function buildDelegateAgentCardToolCall(params: {
       id: params.agent.id,
       name: params.agent.name,
       role: params.agent.role,
-      agent_id: params.agent.agentId,
-      prompt: params.agent.prompt || params.agent.description,
+      prompt: params.agent.prompt,
       mode: params.agent.mode,
     },
   };
 }
 
-function buildDelegateAgentCardToolResult(params: {
+function buildSubagentCardToolResultFromReport(params: {
   parentToolResult: ToolResultMessage;
   toolCall: ToolCall;
-  details: DelegateAgentResultDetails;
+  details: SubagentBatchDetails;
   index: number;
-  agent: DelegateAgentResultDetails["agents"][number];
+  agent: SubagentBatchDetails["agents"][number];
 }): ToolResultMessage {
-  const details: DelegateAgentCardResultDetails = {
-    kind: "delegate_agent_item",
+  const details: SubagentCardDetails = {
+    kind: "subagent_card",
     parentToolCallId: params.parentToolResult.toolCallId,
     index: params.index,
     total: params.details.agentCount,
@@ -1245,44 +833,40 @@ function buildDelegateAgentCardToolResult(params: {
           params.agent.applyError ||
           params.agent.summary ||
           params.agent.prompt ||
-          params.agent.description ||
           "",
       },
     ],
     details,
-    isError: params.agent.status === "failed",
+    isError: params.agent.status !== "completed",
     timestamp: params.parentToolResult.timestamp,
   };
 }
 
-function appendDelegateAgentPlaceholderBlocks(
-  blocks: UiRoundContentBlock[],
-  parentToolCall: ToolCall,
-) {
+function appendSubagentPlaceholderBlocks(blocks: UiRoundContentBlock[], parentToolCall: ToolCall) {
   let next = blocks;
-  for (const toolCall of buildDelegateAgentPlaceholderToolCalls(parentToolCall)) {
+  for (const toolCall of buildSubagentPlaceholderToolCalls(parentToolCall)) {
     next = upsertToolBlock(next, toolCall);
   }
   return next;
 }
 
-function appendDelegateAgentItemBlocks(
+function appendSubagentCardBlocks(
   blocks: UiRoundContentBlock[],
   parentToolCall: ToolCall,
   parentToolResult: ToolResultMessage | undefined,
 ) {
-  if (!isDelegateAgentResult(parentToolResult)) return blocks;
+  if (!isSubagentBatchResult(parentToolResult)) return blocks;
 
   let next = blocks;
-  const details = parentToolResult.details as DelegateAgentResultDetails;
+  const details = parentToolResult.details as SubagentBatchDetails;
   details.agents.forEach((agent, index: number) => {
-    const toolCall = buildDelegateAgentCardToolCall({
+    const toolCall = buildSubagentCardToolCallFromReport({
       parentToolCall,
       details,
       index,
       agent,
     });
-    const toolResult = buildDelegateAgentCardToolResult({
+    const toolResult = buildSubagentCardToolResultFromReport({
       parentToolResult,
       toolCall,
       details,
@@ -1294,31 +878,56 @@ function appendDelegateAgentItemBlocks(
   return next;
 }
 
+// A rejected batch never fans out into result-bearing cards, so streaming
+// placeholders that never resolved would linger as forever-pending blocks
+// next to the parent's error block. Drop them; resolved cards stay.
+function removeUnresolvedSubagentPlaceholderBlocks(
+  blocks: UiRoundContentBlock[],
+  parentToolCallId: string,
+) {
+  const placeholderIdPrefix = `${parentToolCallId}:agent:`;
+  return blocks.filter(
+    (block) =>
+      !(
+        block.kind === "tool" &&
+        !block.item.toolResult &&
+        block.item.toolCall.id?.startsWith(placeholderIdPrefix)
+      ),
+  );
+}
+
 function upsertToolBlock(
   blocks: UiRoundContentBlock[],
   toolCall: ToolCall,
   toolResult?: ToolResultMessage,
   options?: { contentHasHostedSearch?: boolean },
 ): UiRoundContentBlock[] {
-  if (isParentDelegateAgentToolCall(toolCall)) {
-    return appendDelegateAgentPlaceholderBlocks(blocks, toolCall);
+  // The parent Agent call is suppressed in favor of per-agent cards, except
+  // when it failed — a rejected batch must stay visible. While the parent's
+  // arguments stream, structured `agents` entries render as placeholder cards.
+  if (isParentAgentToolCall(toolCall) && toolResult?.isError !== true) {
+    if (toolResult) return appendSubagentCardBlocks(blocks, toolCall, toolResult);
+    return appendSubagentPlaceholderBlocks(blocks, toolCall);
   }
+  const baseBlocks = isParentAgentToolCall(toolCall)
+    ? removeUnresolvedSubagentPlaceholderBlocks(blocks, toolCall.id)
+    : blocks;
   const toolCallSnapshot = snapshotToolCallForTrace(toolCall);
 
-  const existingIdx = blocks.findIndex(
+  const existingIdx = baseBlocks.findIndex(
     (block) => block.kind === "tool" && block.item.toolCall.id === toolCallSnapshot.id,
   );
-  if (!shouldDisplayToolBlock(toolCallSnapshot, toolResult, blocks, options)) {
+  if (!shouldDisplayToolBlock(toolCallSnapshot, toolResult, baseBlocks, options)) {
     return existingIdx >= 0
-      ? blocks.filter(
+      ? baseBlocks.filter(
           (block) => !(block.kind === "tool" && block.item.toolCall.id === toolCallSnapshot.id),
         )
-      : blocks;
+      : baseBlocks;
   }
   if (existingIdx >= 0) {
-    const existing = blocks[existingIdx];
-    if (existing.kind !== "tool") return blocks;
-    const next = blocks.slice();
+    const existing = baseBlocks[existingIdx];
+    if (existing.kind !== "tool") return baseBlocks;
+    const next = baseBlocks.slice();
     next[existingIdx] = {
       kind: "tool",
       item: {
@@ -1334,7 +943,7 @@ function upsertToolBlock(
     kind: "tool",
     item: toolResult ? { toolCall: toolCallSnapshot, toolResult } : { toolCall: toolCallSnapshot },
   };
-  return [...blocks, nextBlock];
+  return [...baseBlocks, nextBlock];
 }
 
 export function getRoundText(round: Pick<UiRound, "blocks">) {
@@ -1534,9 +1143,8 @@ function buildUiRoundBlocks(
     }
     if (block.type === "toolCall") {
       const toolResult = toolResultById.get(block.id);
-      if (isParentDelegateAgentToolCall(block)) {
-        blocks = appendDelegateAgentPlaceholderBlocks(blocks, block);
-        blocks = appendDelegateAgentItemBlocks(blocks, block, toolResult);
+      if (isParentAgentToolCall(block) && toolResult?.isError !== true) {
+        blocks = appendSubagentCardBlocks(blocks, block, toolResult);
         continue;
       }
       blocks = upsertToolBlock(blocks, block, toolResult, { contentHasHostedSearch });

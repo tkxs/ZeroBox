@@ -192,9 +192,17 @@ test("agent tool rules prefer one parallel Agent batch over sequential calls", (
     "Write",
     "Bash",
   ]);
-  assert.match(suffix, /one Agent tool call with agent_spec so the agents run in parallel/);
-  assert.match(suffix, /do not make separate sequential Agent calls/);
-  assert.match(suffix, /unless later agents depend on earlier results/);
+  assert.match(suffix, /issue ONE Agent call whose `agents` array lists every job/);
+  assert.match(
+    suffix,
+    /Use sequential Agent calls only when a later job needs an earlier job's output/,
+  );
+  assert.match(suffix, /Default to mode=readonly for research, review, and discussion agents/);
+  assert.match(
+    suffix,
+    /call Agent again with the same stable id\(s\) and only the new prompt/,
+  );
+  assert.match(suffix, /If an Agent call is rejected, no subagents were started/);
 });
 
 test("SendMessage tool rules explain parent-private visibility", () => {

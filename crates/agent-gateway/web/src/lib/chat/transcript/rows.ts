@@ -3,7 +3,7 @@ import {
   appendTextDeltaToRound,
   appendThinkingDeltaToRound,
   attachToolResultToRound,
-  buildDelegateAgentPlaceholderToolCalls,
+  buildSubagentPlaceholderToolCalls,
   getRoundToolTrace,
   hasRoundContent,
   upsertHostedSearchToRound,
@@ -16,11 +16,7 @@ import {
   hashValue,
   stripRecoveredToolCallMarkup,
 } from "@/lib/chatUi";
-import type {
-  DelegateAgentCardResultDetails,
-  DelegateAgentItemResultDetails,
-  DelegateAgentResultDetails,
-} from "@/lib/tools/builtinTypes";
+import type { SubagentBatchDetails } from "@/lib/subagents/protocol";
 
 import type { TranscriptRow, TranscriptRowOrigin, Turn } from "./types";
 
@@ -152,107 +148,25 @@ function resolveToolCallForResult(
   } as ToolCall;
 }
 
-function asDelegateAgentResultDetails(details: unknown): DelegateAgentResultDetails | null {
+function asSubagentBatchDetails(details: unknown): SubagentBatchDetails | null {
   const record = details && typeof details === "object" ? (details as Record<string, unknown>) : {};
-  return record.kind === "delegate_agent" && Array.isArray(record.agents)
-    ? (record as unknown as DelegateAgentResultDetails)
+  return record.kind === "subagent_batch" && Array.isArray(record.agents)
+    ? (record as unknown as SubagentBatchDetails)
     : null;
 }
 
-function readDelegateAgentPrompt(agent: DelegateAgentItemResultDetails) {
-  return agent.prompt || agent.description || "";
-}
-
-function buildDelegateAgentCardToolCall(params: {
-  parentToolResult: ToolResultMessage;
-  details: DelegateAgentResultDetails;
-  index: number;
-  agent: DelegateAgentItemResultDetails;
-}): ToolCall {
-  const parentToolCallId = params.parentToolResult.toolCallId || "agent";
+// The batch result is addressed to the parent Agent call, which is never
+// stored as a block (it is expanded into per-agent cards), so id/name lookups
+// in resolveToolCallForResult would mis-bind it to a pending card. Synthesize
+// the parent call instead; attachToolResultToRound expands an ok batch into
+// cards and keeps a rejected batch visible as an error block.
+function buildParentAgentToolCallForBatchResult(toolResult: ToolResultMessage): ToolCall {
   return {
     type: "toolCall",
-    id: `${parentToolCallId}:agent:${params.index + 1}`,
-    name: "Agent",
-    arguments: {
-      delegate_agent_card: true,
-      parent_tool_call_id: parentToolCallId,
-      index: params.index + 1,
-      total: params.details.agentCount,
-      concurrency: params.details.concurrency,
-      id: params.agent.id,
-      name: params.agent.name,
-      role: params.agent.role,
-      agent_id: params.agent.agentId,
-      prompt: readDelegateAgentPrompt(params.agent),
-      mode: params.agent.mode,
-    },
+    id: toolResult.toolCallId || `orphan:${hashValue([toolResult.toolName, toolResult.content])}`,
+    name: toolResult.toolName || "Agent",
+    arguments: {},
   } as ToolCall;
-}
-
-function buildDelegateAgentCardToolResult(params: {
-  parentToolResult: ToolResultMessage;
-  toolCall: ToolCall;
-  details: DelegateAgentResultDetails;
-  index: number;
-  agent: DelegateAgentItemResultDetails;
-}): ToolResultMessage {
-  const details: DelegateAgentCardResultDetails = {
-    kind: "delegate_agent_item",
-    parentToolCallId: params.parentToolResult.toolCallId,
-    index: params.index,
-    total: params.details.agentCount,
-    concurrency: params.details.concurrency,
-    agent: params.agent,
-  };
-  return {
-    role: "toolResult",
-    toolCallId: params.toolCall.id,
-    toolName: params.toolCall.name,
-    content: [
-      {
-        type: "text",
-        text:
-          params.agent.error ||
-          params.agent.applyError ||
-          params.agent.summary ||
-          readDelegateAgentPrompt(params.agent) ||
-          "",
-      },
-    ],
-    details,
-    isError: params.agent.status === "failed",
-    timestamp: params.parentToolResult.timestamp,
-  } as ToolResultMessage;
-}
-
-function appendDelegateAgentCardsToRound(
-  round: GatewayTranscriptRound,
-  parentToolResult: ToolResultMessage,
-  details: DelegateAgentResultDetails,
-): GatewayTranscriptRound {
-  let nextRound = round;
-  details.agents.forEach((agent, index) => {
-    const toolCall = buildDelegateAgentCardToolCall({ parentToolResult, details, index, agent });
-    const toolResult = buildDelegateAgentCardToolResult({
-      parentToolResult,
-      toolCall,
-      details,
-      index,
-      agent,
-    });
-    nextRound = attachToolResultToRound(nextRound, toolCall, toolResult) as GatewayTranscriptRound;
-  });
-
-  const completedIds = new Set([
-    parentToolResult.toolCallId,
-    ...details.agents.map((_, index) => `${parentToolResult.toolCallId}:agent:${index + 1}`),
-  ]);
-
-  return {
-    ...nextRound,
-    runningToolCallIds: nextRound.runningToolCallIds.filter((id) => !completedIds.has(id)),
-  };
 }
 
 export function buildRowsFromEntries(
@@ -345,7 +259,7 @@ export function buildRowsFromEntries(
 
     if (entry.kind === "tool_call") {
       updateTranscriptRound(assistantGroup, roundNumber, (round) => {
-        const visibleToolCalls = buildDelegateAgentPlaceholderToolCalls(entry.toolCall);
+        const visibleToolCalls = buildSubagentPlaceholderToolCalls(entry.toolCall);
         const runningCandidateIds =
           visibleToolCalls.length > 0
             ? visibleToolCalls.map((toolCall) => toolCall.id)
@@ -392,19 +306,13 @@ export function buildRowsFromEntries(
     }
 
     if (entry.kind === "tool_result") {
-      const delegateDetails = asDelegateAgentResultDetails(entry.toolResult.details);
-      if (delegateDetails) {
-        updateTranscriptRound(assistantGroup, roundNumber, (round) =>
-          appendDelegateAgentCardsToRound(
-            collapseThinking(round),
-            entry.toolResult,
-            delegateDetails,
-          ),
-        );
-        continue;
-      }
-
-      const toolCall = resolveToolCallForResult(assistantGroup, roundNumber, entry.toolResult);
+      const batchDetails = asSubagentBatchDetails(entry.toolResult.details);
+      const toolCall = batchDetails
+        ? buildParentAgentToolCallForBatchResult(entry.toolResult)
+        : resolveToolCallForResult(assistantGroup, roundNumber, entry.toolResult);
+      // A batch result settles the parent and every derived card id (ok
+      // batches upgrade the cards in place; rejected batches drop them).
+      const settledCardIdPrefix = batchDetails ? `${toolCall.id}:agent:` : null;
       updateTranscriptRound(assistantGroup, roundNumber, (round) => {
         const withResult = attachToolResultToRound(
           collapseThinking(round),
@@ -413,7 +321,10 @@ export function buildRowsFromEntries(
         ) as GatewayTranscriptRound;
         return {
           ...withResult,
-          runningToolCallIds: withResult.runningToolCallIds.filter((id) => id !== toolCall.id),
+          runningToolCallIds: withResult.runningToolCallIds.filter(
+            (id) =>
+              id !== toolCall.id && !(settledCardIdPrefix && id.startsWith(settledCardIdPrefix)),
+          ),
         };
       });
     }

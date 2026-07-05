@@ -9,7 +9,7 @@ import type { PendingUploadedFile } from "../../../lib/chat/messages/uploadedFil
 import {
   collectRetainedSubagentParentToolCallIds,
   pruneSubagentRunsForConversation,
-} from "../../../lib/chat/subagent/subagentHistory";
+} from "../../../lib/subagents";
 import type { SendChatAction } from "../gateway/gatewayBridgeTypes";
 import type { ConversationRuntimeEntry } from "../runtime/chatPageRuntime";
 

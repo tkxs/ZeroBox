@@ -1,7 +1,8 @@
-import type { SubagentMessageRecord } from "./subagentHistory";
-
-export const SUBAGENT_PARENT_AGENT_ID = "parent";
-export const SUBAGENT_BROADCAST_RECIPIENT = "*";
+import {
+  SUBAGENT_BROADCAST_RECIPIENT,
+  SUBAGENT_PARENT_ID,
+  type SubagentMessageRecord,
+} from "./types";
 
 const DEFAULT_MAX_MESSAGES = 24;
 const DEFAULT_MAX_BODY_CHARS = 2_400;
@@ -10,19 +11,19 @@ function normalizeAgentId(value: string | undefined) {
   return (value ?? "").trim();
 }
 
-function displayAgentLabel(agentId: string | undefined, displayName?: string) {
-  const id = normalizeAgentId(agentId) || "unknown";
-  const name = displayName?.trim();
-  if (!name || name === id) return `\`${escapeInlineCode(id)}\``;
-  return `**${escapeInlineMarkdown(name)}** (\`${escapeInlineCode(id)}\`)`;
-}
-
 function escapeInlineCode(value: string) {
   return value.replace(/`/g, "\\`");
 }
 
 function escapeInlineMarkdown(value: string) {
   return value.replace(/[`*_{}[\]()#+\-.!|>]/g, "\\$&");
+}
+
+function displayAgentLabel(agentId: string | undefined, displayName?: string) {
+  const id = normalizeAgentId(agentId) || "unknown";
+  const name = displayName?.trim();
+  if (!name || name === id) return `\`${escapeInlineCode(id)}\``;
+  return `**${escapeInlineMarkdown(name)}** (\`${escapeInlineCode(id)}\`)`;
 }
 
 function truncateMarkdown(value: string, maxChars: number) {
@@ -41,11 +42,11 @@ function quoteMarkdown(value: string) {
 }
 
 function isSharedMessage(message: SubagentMessageRecord) {
-  return message.recipientAgentId === SUBAGENT_BROADCAST_RECIPIENT;
+  return message.recipientId === SUBAGENT_BROADCAST_RECIPIENT;
 }
 
 function isForAgent(message: SubagentMessageRecord, agentId: string) {
-  return message.recipientAgentId === agentId;
+  return message.recipientId === agentId;
 }
 
 function sortBySeq(messages: SubagentMessageRecord[]) {
@@ -53,8 +54,8 @@ function sortBySeq(messages: SubagentMessageRecord[]) {
 }
 
 function renderMessage(message: SubagentMessageRecord, maxBodyChars: number) {
-  const from = displayAgentLabel(message.senderAgentId, message.senderDisplayName);
-  const to = displayAgentLabel(message.recipientAgentId, message.recipientDisplayName);
+  const from = displayAgentLabel(message.senderId, message.senderName);
+  const to = displayAgentLabel(message.recipientId, message.recipientName);
   const subject = message.subject?.trim();
   return [
     `#### #${message.seq} ${from} -> ${to}`,
@@ -73,7 +74,18 @@ function takeLatest(messages: SubagentMessageRecord[], limit: number) {
   return messages.slice(messages.length - limit);
 }
 
-export function renderSubagentMessageBusSnapshot(params: {
+export function displayRecipientLabel(recipientId: string) {
+  if (recipientId === SUBAGENT_PARENT_ID) return "parent";
+  if (recipientId === SUBAGENT_BROADCAST_RECIPIENT) return "all agents";
+  return recipientId;
+}
+
+/**
+ * Render a bounded Markdown snapshot of the conversation-level message bus
+ * for one agent. Delivery is pull-based: this snapshot is injected into the
+ * agent's context at turn boundaries.
+ */
+export function renderMessageBusSnapshot(params: {
   messages: SubagentMessageRecord[];
   currentAgentId: string;
   currentAgentName?: string;
@@ -91,7 +103,7 @@ export function renderSubagentMessageBusSnapshot(params: {
       message.bodyMarkdown.trim() &&
       (isForAgent(message, currentAgentId) ||
         isSharedMessage(message) ||
-        message.senderAgentId === currentAgentId),
+        message.senderId === currentAgentId),
   );
   if (messages.length === 0) return "";
 

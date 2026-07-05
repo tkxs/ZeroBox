@@ -984,7 +984,7 @@ test("UI message builder anchors delayed hosted search inside the text run", () 
   assert.equal(blocks[2].text, "任务2完成：设计模式是可复用方案。");
 });
 
-test("UI message builder expands delegated Agent results without showing the parent aggregate card", () => {
+test("UI message builder expands subagent batch results without showing the parent aggregate card", () => {
   const parentToolCall = {
     type: "toolCall",
     id: "call-agent",
@@ -1005,15 +1005,17 @@ test("UI message builder expands delegated Agent results without showing the par
     isError: false,
     timestamp: 3,
     details: {
-      kind: "delegate_agent",
+      kind: "subagent_batch",
+      status: "ok",
       agentCount: 2,
       concurrency: 2,
       totalDurationMs: 50,
-      readOnly: false,
       mode: "worktree",
       agents: [
         {
           id: "a",
+          runId: "call-agent:agent:1:a:uuid",
+          name: "Agent A",
           prompt: "Inspect A.",
           mode: "worktree",
           status: "completed",
@@ -1026,6 +1028,8 @@ test("UI message builder expands delegated Agent results without showing the par
         },
         {
           id: "b",
+          runId: "call-agent:agent:2:b:uuid",
+          name: "Agent B",
           prompt: "Inspect B.",
           mode: "worktree",
           status: "failed",
@@ -1060,22 +1064,33 @@ test("UI message builder expands delegated Agent results without showing the par
     ["call-agent:agent:1", "call-agent:agent:2"],
   );
   assert.ok(trace.every((item) => item.toolCall.name === "Agent"));
-  assert.ok(
-    trace.every((item) => item.toolCall.arguments.delegate_agent_card === true),
+  assert.ok(trace.every((item) => item.toolCall.arguments.subagent_card === true));
+  assert.deepEqual(
+    trace.map((item) => item.toolCall.arguments.index),
+    [1, 2],
+  );
+  assert.deepEqual(
+    trace.map((item) => item.toolCall.arguments.total),
+    [2, 2],
   );
   assert.deepEqual(
     trace.map((item) => item.toolResult.details.kind),
-    ["delegate_agent_item", "delegate_agent_item"],
+    ["subagent_card", "subagent_card"],
   );
   assert.deepEqual(
     trace.map((item) => item.toolResult.details.parentToolCallId),
     ["call-agent", "call-agent"],
   );
   assert.deepEqual(
+    trace.map((item) => item.toolResult.details.agent.id),
+    ["a", "b"],
+  );
+  assert.deepEqual(
     trace.map((item) => item.toolResult.isError),
     [false, true],
   );
   assert.equal(trace[0].toolResult.content[0].text, "A patch conflict");
+  assert.equal(trace[1].toolResult.content[0].text, "B failed");
 
   const liveRound = {
     round: 1,
@@ -1092,85 +1107,57 @@ test("UI message builder expands delegated Agent results without showing the par
   );
 });
 
-test("delegated Agent placeholders are built before individual Agent results arrive", () => {
+test("subagent placeholders are built from complete structured agents before results arrive", () => {
   const parentToolCall = {
     type: "toolCall",
     id: "call-agent",
     name: "Agent",
     arguments: {
-      agent_spec: [
-        "@agent id=a",
-        "name: 狼人玩家 1",
-        "prompt: 你是玩家 1，请继续发言。",
-        "---",
-        "@agent id=b",
-        "name: 狼人玩家 2",
-        "prompt: 你是玩家 2，请继续发言。",
-      ].join("\n"),
-      concurrency: 2,
-      task_intent: "communication",
-      mode: "readonly",
-      apply_policy: "none",
-      allowed_output_paths: [
-        " docs\\answer.md ",
-        "docs/./notes.md",
-        "docs//summary.md",
-        "C:\\Users\\me\\bad.md",
-        "\\\\server\\share\\bad.md",
-        "safe:name.md",
-        "docs/../secret.md",
+      agents: [
+        { id: "a", name: "狼人玩家 1", prompt: "你是玩家 1，请继续发言。", mode: "readonly" },
+        { id: "b", name: "狼人玩家 2", prompt: "你是玩家 2，请继续发言。" },
       ],
+      concurrency: 2,
     },
   };
 
-  const placeholders = uiMessages.buildDelegateAgentPlaceholderToolCalls(parentToolCall);
+  const placeholders = uiMessages.buildSubagentPlaceholderToolCalls(parentToolCall);
   assert.equal(placeholders.length, 2);
   assert.deepEqual(
     placeholders.map((item) => item.id),
     ["call-agent:agent:1", "call-agent:agent:2"],
   );
   assert.deepEqual(
-    placeholders.map((item) => item.arguments.delegate_agent_card),
+    placeholders.map((item) => item.arguments.subagent_card),
     [true, true],
+  );
+  assert.deepEqual(
+    placeholders.map((item) => item.arguments.id),
+    ["a", "b"],
   );
   assert.deepEqual(
     placeholders.map((item) => item.arguments.name),
     ["狼人玩家 1", "狼人玩家 2"],
   );
   assert.deepEqual(
+    placeholders.map((item) => item.arguments.mode),
+    ["readonly", undefined],
+  );
+  assert.deepEqual(
     placeholders.map((item) => item.arguments.parent_tool_call_id),
     ["call-agent", "call-agent"],
   );
   assert.deepEqual(
-    placeholders.map((item) => item.arguments.concurrency),
+    placeholders.map((item) => item.arguments.index),
+    [1, 2],
+  );
+  assert.deepEqual(
+    placeholders.map((item) => item.arguments.total),
     [2, 2],
   );
   assert.deepEqual(
-    placeholders.map((item) => item.arguments.task_intent),
-    ["communication", "communication"],
-  );
-  assert.deepEqual(
-    placeholders.map((item) => item.arguments.allowed_output_paths),
-    [
-      [
-        "docs/answer.md",
-        "docs/./notes.md",
-        "docs//summary.md",
-        "C:/Users/me/bad.md",
-        "//server/share/bad.md",
-        "safe:name.md",
-        "docs/../secret.md",
-      ],
-      [
-        "docs/answer.md",
-        "docs/./notes.md",
-        "docs//summary.md",
-        "C:/Users/me/bad.md",
-        "//server/share/bad.md",
-        "safe:name.md",
-        "docs/../secret.md",
-      ],
-    ],
+    placeholders.map((item) => item.arguments.concurrency),
+    [2, 2],
   );
 
   const liveRound = {
@@ -1201,85 +1188,180 @@ test("delegated Agent placeholders are built before individual Agent results arr
   assert.equal(updatedTrace[0].toolCall.arguments.name, "稳定玩家 1");
 });
 
-test("delegated Agent placeholders parse agent_spec manifests", () => {
-  const placeholders = uiMessages.buildDelegateAgentPlaceholderToolCalls({
+test("subagent placeholders skip partial streaming agents while keeping raw array indexes", () => {
+  // Streaming JSON yields partial elements: [1] has no prompt yet and the
+  // trailing element only started streaming its id.
+  const midStream = uiMessages.buildSubagentPlaceholderToolCalls({
     type: "toolCall",
-    id: "call-agent-spec",
+    id: "call-agent-live",
     name: "Agent",
     arguments: {
-      agent_spec: [
-        '@agent id=seer name="预言家" mode=readonly',
-        "prompt: 请选择一个玩家并给出查验理由。",
-        "---",
-        '@agent id=wolf name="狼人" mode=readonly',
-        "prompt: 继续进行夜间策略讨论。",
-      ].join("\n"),
+      agents: [
+        { id: "seer", name: "预言家", prompt: "请选择一个玩家并给出查验理由。" },
+        { id: "wolf", name: "狼人" },
+        { id: "witch", prompt: "继续进行夜间策略讨论。" },
+        { id: "hun" },
+      ],
       concurrency: 8,
-      task_intent: "communication",
     },
   });
 
-  assert.equal(placeholders.length, 2);
+  assert.equal(midStream.length, 2);
   assert.deepEqual(
-    placeholders.map((item) => item.arguments.id),
-    ["seer", "wolf"],
+    midStream.map((item) => item.arguments.id),
+    ["seer", "witch"],
+  );
+  // Ids and indexes follow the raw array positions, so a placeholder never
+  // has to change identity once the skipped element finishes streaming.
+  assert.deepEqual(
+    midStream.map((item) => item.id),
+    ["call-agent-live:agent:1", "call-agent-live:agent:3"],
   );
   assert.deepEqual(
-    placeholders.map((item) => item.arguments.name),
-    ["预言家", "狼人"],
+    midStream.map((item) => item.arguments.index),
+    [1, 3],
   );
   assert.deepEqual(
-    placeholders.map((item) => item.arguments.total),
-    [2, 2],
+    midStream.map((item) => item.arguments.total),
+    [4, 4],
   );
+  // concurrency caps to the raw agent count.
   assert.deepEqual(
-    placeholders.map((item) => item.arguments.concurrency),
-    [2, 2],
+    midStream.map((item) => item.arguments.concurrency),
+    [4, 4],
   );
 });
 
-test("delegated Agent placeholders parse prompt manifests", () => {
-  const placeholders = uiMessages.buildDelegateAgentPlaceholderToolCalls({
+test("subagent placeholders are only produced for parseable parent Agent calls", () => {
+  assert.deepEqual(
+    uiMessages.buildSubagentPlaceholderToolCalls({
+      type: "toolCall",
+      id: "call-other",
+      name: "Read",
+      arguments: { agents: [{ id: "a", prompt: "p" }] },
+    }),
+    [],
+  );
+  // A synthetic card call is not a parent call.
+  assert.deepEqual(
+    uiMessages.buildSubagentPlaceholderToolCalls({
+      type: "toolCall",
+      id: "call-agent:agent:1",
+      name: "Agent",
+      arguments: { subagent_card: true, id: "a", prompt: "p" },
+    }),
+    [],
+  );
+  // No agents yet / not an array yet while streaming.
+  assert.deepEqual(
+    uiMessages.buildSubagentPlaceholderToolCalls({
+      type: "toolCall",
+      id: "call-agent",
+      name: "Agent",
+      arguments: { agents: "@agent id=a" },
+    }),
+    [],
+  );
+  // Oversized arrays render nothing rather than a wall of cards.
+  assert.deepEqual(
+    uiMessages.buildSubagentPlaceholderToolCalls({
+      type: "toolCall",
+      id: "call-agent",
+      name: "Agent",
+      arguments: {
+        agents: Array.from({ length: 9 }, (_, index) => ({ id: `a${index}`, prompt: "p" })),
+      },
+    }),
+    [],
+  );
+});
+
+test("rejected subagent batches keep the parent Agent call visible", () => {
+  const parentToolCall = {
     type: "toolCall",
-    id: "call-agent-prompt-spec",
+    id: "call-agent",
     name: "Agent",
     arguments: {
-      prompt: [
-        "@agent id=player1",
-        "name: 张明",
-        "role: 狼人",
-        "prompt: 等待夜晚行动",
-        "---",
-        "@agent id=player2",
-        "name: 李婷",
-        "role: 女巫",
-        "prompt: 等待用药指令",
-      ].join("\n"),
-      concurrency: 8,
-      task_intent: "communication",
+      agents: [
+        { id: "dup", prompt: "one" },
+        { id: "DUP", prompt: "two" },
+      ],
     },
-  });
+  };
+  const rejectedResult = {
+    role: "toolResult",
+    toolCallId: "call-agent",
+    toolName: "Agent",
+    content: [{ type: "text", text: "Agent rejected this call. No subagents were started." }],
+    isError: true,
+    timestamp: 3,
+    details: {
+      kind: "subagent_batch",
+      status: "rejected",
+      agentCount: 0,
+      concurrency: 0,
+      totalDurationMs: 0,
+      mode: "readonly",
+      agents: [],
+      issues: [{ agentId: "DUP", code: "duplicate_agent_id", message: "Duplicate agent id" }],
+      roster: [],
+      templates: [],
+    },
+  };
 
-  assert.equal(placeholders.length, 2);
+  const ui = uiMessages.buildUiMessages([
+    { role: "user", content: "delegate", timestamp: 1 },
+    {
+      role: "assistant",
+      content: [parentToolCall],
+      provider: "codex",
+      model: "gpt-5",
+      api: "openai-responses",
+      stopReason: "toolUse",
+      timestamp: 2,
+    },
+    rejectedResult,
+  ]);
+
+  const trace = uiMessages.getRoundToolTrace(ui[1].rounds[0]);
+  assert.equal(trace.length, 1);
+  assert.equal(trace[0].toolCall.id, "call-agent");
+  assert.equal(trace[0].toolResult.isError, true);
+  assert.equal(trace[0].toolResult.details.status, "rejected");
+
+  // The same parent stays hidden when the result is not an error.
+  const liveRound = {
+    round: 1,
+    blocks: [],
+    key: "live-1",
+    runningToolCallIds: [],
+    thinkingOpen: false,
+  };
+  const suppressed = uiMessages.attachToolResultToRound(liveRound, parentToolCall, {
+    ...rejectedResult,
+    isError: false,
+  });
+  assert.equal(uiMessages.getRoundToolTrace(suppressed).length, 0);
+  const visible = uiMessages.attachToolResultToRound(liveRound, parentToolCall, rejectedResult);
   assert.deepEqual(
-    placeholders.map((item) => item.arguments.id),
-    ["player1", "player2"],
-  );
-  assert.deepEqual(
-    placeholders.map((item) => item.arguments.name),
-    ["张明", "李婷"],
+    uiMessages.getRoundToolTrace(visible).map((item) => item.toolCall.id),
+    ["call-agent"],
   );
 });
 
-test("UI message builder uses the stable Agent name supplied by item results", () => {
+test("UI message builder uses the stable Agent name supplied by card results", () => {
   const firstToolCall = {
     type: "toolCall",
     id: "call-agent-first",
     name: "Agent",
     arguments: {
-      id: "agent-1",
-      name: "哲学家 - 苏格拉底",
-      prompt: "哲学视角探讨生命的意义",
+      agents: [
+        {
+          id: "agent-1",
+          name: "哲学家 - 苏格拉底",
+          prompt: "哲学视角探讨生命的意义",
+        },
+      ],
     },
   };
   const secondToolCall = {
@@ -1287,8 +1369,7 @@ test("UI message builder uses the stable Agent name supplied by item results", (
     id: "call-agent-second",
     name: "Agent",
     arguments: {
-      id: "agent-1",
-      prompt: "哲学家继续回应",
+      agents: [{ id: "agent-1", prompt: "哲学家继续回应" }],
     },
   };
   const firstToolResult = {
@@ -1299,15 +1380,16 @@ test("UI message builder uses the stable Agent name supplied by item results", (
     isError: false,
     timestamp: 3,
     details: {
-      kind: "delegate_agent",
+      kind: "subagent_batch",
+      status: "ok",
       agentCount: 1,
       concurrency: 1,
       totalDurationMs: 10,
-      readOnly: true,
       mode: "readonly",
       agents: [
         {
           id: "agent-1",
+          runId: "call-agent-first:agent:1:agent-1:uuid",
           name: "哲学家 - 苏格拉底",
           prompt: "哲学视角探讨生命的意义",
           mode: "readonly",
@@ -1329,6 +1411,7 @@ test("UI message builder uses the stable Agent name supplied by item results", (
       agents: [
         {
           ...firstToolResult.details.agents[0],
+          runId: "call-agent-second:agent:1:agent-1:uuid",
           name: "哲学家 - 苏格拉底",
           role: "哲学视角",
           prompt: "哲学家继续回应",
@@ -1536,14 +1619,30 @@ test("tool call summaries and argument display avoid dumping large payloads", ()
       id: "agent-card",
       name: "Agent",
       arguments: {
-        delegate_agent_card: true,
+        subagent_card: true,
+        id: "philosopher",
         name: "Philosophy Agent",
         prompt: "从哲学角度探讨生命的意义",
         mode: "worktree",
         concurrency: 4,
       },
     }),
-    "Agent name=Philosophy Agent prompt=从哲学角度探讨生命的意义 mode=worktree concurrency=4",
+    "Agent agent=philosopher name=Philosophy Agent prompt=从哲学角度探讨生命的意义 mode=worktree concurrency=4",
+  );
+  assert.equal(
+    uiMessages.summarizeToolCall({
+      type: "toolCall",
+      id: "agent-parent",
+      name: "Agent",
+      arguments: {
+        agents: [
+          { id: "a", prompt: "one" },
+          { id: "b", prompt: "two" },
+        ],
+        concurrency: 2,
+      },
+    }),
+    "Agent agents=2 concurrency=2",
   );
   assert.deepEqual(
     uiMessages.toolCallArgsForDisplay({
@@ -1557,15 +1656,40 @@ test("tool call summaries and argument display avoid dumping large payloads", ()
       },
     }),
     {
-      agent_id: undefined,
+      id: undefined,
       name: "Philosophy Agent",
       role: undefined,
       prompt: "Long delegated prompt",
       mode: "worktree",
       identityChars: undefined,
       promptChars: 21,
-      agentSpecChars: undefined,
+      agentCount: undefined,
       concurrency: undefined,
+    },
+  );
+  assert.deepEqual(
+    uiMessages.toolCallArgsForDisplay({
+      type: "toolCall",
+      id: "agent-parent",
+      name: "Agent",
+      arguments: {
+        agents: [
+          { id: "a", prompt: "one" },
+          { id: "b", prompt: "two", template: "reviewer" },
+        ],
+        concurrency: 2,
+      },
+    }),
+    {
+      id: undefined,
+      name: undefined,
+      role: undefined,
+      prompt: undefined,
+      mode: undefined,
+      identityChars: undefined,
+      promptChars: undefined,
+      agentCount: 2,
+      concurrency: 2,
     },
   );
   assert.equal(
@@ -1837,7 +1961,7 @@ test("visible live tool calls are marked running as soon as their cards appear",
       id: "call-agent:agent:1",
       name: "Agent",
       arguments: {
-        delegate_agent_card: true,
+        subagent_card: true,
         parent_tool_call_id: "call-agent",
         index: 1,
         total: 1,
@@ -1868,7 +1992,7 @@ test("visible live tool calls are marked running as soon as their cards appear",
     id: "call-agent",
     name: "Agent",
     arguments: {
-      agent_spec: "@agent id=reviewer\nprompt: Review the change.",
+      agents: [{ id: "reviewer", prompt: "Review the change." }],
     },
   };
   const parentOnly = uiMessages.markToolCallRunningInRound(
