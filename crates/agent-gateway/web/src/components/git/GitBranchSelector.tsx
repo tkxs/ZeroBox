@@ -339,6 +339,7 @@ export function GitBranchSelector(props: {
     () => branches.filter((branch) => branch.kind === "remote"),
     [branches],
   );
+  const currentUpstream = state.upstream.trim();
 
   const resetCreateBranch = useCallback(() => {
     setCreating(false);
@@ -484,8 +485,12 @@ export function GitBranchSelector(props: {
           )}
           <span className="min-w-0 truncate">{label}</span>
         </DropdownMenuTrigger>
-        <DropdownMenuContent className="w-72" side="top" align="start">
-          <div className="flex items-center gap-2 px-2 py-1.5">
+        <DropdownMenuContent
+          className="flex w-72 flex-col overflow-hidden p-0"
+          side="top"
+          align="start"
+        >
+          <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-2 py-1.5">
             <div className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
               {repositorySummary}
             </div>
@@ -499,70 +504,83 @@ export function GitBranchSelector(props: {
               <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
             </button>
           </div>
-          {visibleError ? (
-            <div className="px-2 py-1 text-xs text-destructive">{visibleError}</div>
-          ) : null}
-          {!canWrite && disabledMessage ? (
-            <div className="px-2 py-1 text-xs text-muted-foreground">{disabledMessage}</div>
-          ) : null}
-          {noRepo && !visibleError ? (
-            <>
-              <div className="px-2 py-2 text-xs text-muted-foreground">
-                {t("git.branchSelector.noRepositoryFound")}
-              </div>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                disabled={!canWrite || initializing}
-                onSelect={openInitModal}
-                className="gap-2 text-xs"
-                title={!canWrite ? disabledMessage : undefined}
-              >
-                {initializing ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Plus className="h-3.5 w-3.5" />
-                )}
-                <span>{t("git.branchSelector.initRepository")}</span>
-              </DropdownMenuItem>
-            </>
-          ) : noRepo ? null : (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel className="px-2 py-1 text-[11px] uppercase tracking-wide text-muted-foreground">
-                {t("git.branchSelector.localBranches")}
-              </DropdownMenuLabel>
-              {localBranches.map((branch) => (
+          <div className="min-h-0 flex-1 overflow-y-auto p-1">
+            {visibleError ? (
+              <div className="px-2 py-1 text-xs text-destructive">{visibleError}</div>
+            ) : null}
+            {!canWrite && disabledMessage ? (
+              <div className="px-2 py-1 text-xs text-muted-foreground">{disabledMessage}</div>
+            ) : null}
+            {noRepo && !visibleError ? (
+              <>
+                <div className="px-2 py-2 text-xs text-muted-foreground">
+                  {t("git.branchSelector.noRepositoryFound")}
+                </div>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  key={branch.fullName}
-                  disabled={branch.current || mutating || !canWrite}
-                  onSelect={() => selectBranch(branch)}
+                  disabled={!canWrite || initializing}
+                  onSelect={openInitModal}
                   className="gap-2 text-xs"
+                  title={!canWrite ? disabledMessage : undefined}
                 >
-                  {branch.current ? (
-                    <Check className="h-3.5 w-3.5" />
+                  {initializing ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
-                    <GitBranch className="h-3.5 w-3.5" />
+                    <Plus className="h-3.5 w-3.5" />
                   )}
-                  <span className="min-w-0 flex-1 truncate">{branch.name}</span>
+                  <span>{t("git.branchSelector.initRepository")}</span>
                 </DropdownMenuItem>
-              ))}
-              <DropdownMenuLabel className="px-2 py-1 text-[11px] uppercase tracking-wide text-muted-foreground">
-                {t("git.branchSelector.remoteBranches")}
-              </DropdownMenuLabel>
-              {remoteBranches.slice(0, 40).map((branch) => (
-                <DropdownMenuItem
-                  key={branch.fullName}
-                  disabled={mutating || !canWrite}
-                  onSelect={() => selectBranch(branch)}
-                  className="gap-2 text-xs"
-                >
-                  <GitBranch className="h-3.5 w-3.5" />
-                  <span className="min-w-0 flex-1 truncate">{branch.fullName}</span>
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuSeparator />
+              </>
+            ) : noRepo ? null : (
+              <>
+                <DropdownMenuLabel className="px-2 py-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                  {t("git.branchSelector.localBranches")}
+                </DropdownMenuLabel>
+                {localBranches.map((branch) => (
+                  <DropdownMenuItem
+                    key={branch.fullName}
+                    disabled={branch.current || mutating || !canWrite}
+                    onSelect={() => selectBranch(branch)}
+                    className="gap-2 text-xs"
+                  >
+                    {branch.current ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      <GitBranch className="h-3.5 w-3.5" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate">{branch.name}</span>
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuLabel className="px-2 py-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                  {t("git.branchSelector.remoteBranches")}
+                </DropdownMenuLabel>
+                {remoteBranches.slice(0, 40).map((branch) => {
+                  const isCurrentUpstream =
+                    branch.current ||
+                    (currentUpstream !== "" && branch.fullName === currentUpstream);
+                  return (
+                    <DropdownMenuItem
+                      key={branch.fullName}
+                      disabled={isCurrentUpstream || mutating || !canWrite}
+                      onSelect={() => selectBranch(branch)}
+                      className="gap-2 text-xs"
+                    >
+                      {isCurrentUpstream ? (
+                        <Check className="h-3.5 w-3.5" />
+                      ) : (
+                        <GitBranch className="h-3.5 w-3.5" />
+                      )}
+                      <span className="min-w-0 flex-1 truncate">{branch.fullName}</span>
+                    </DropdownMenuItem>
+                  );
+                })}
+              </>
+            )}
+          </div>
+          {noRepo ? null : (
+            <div className="shrink-0 border-t border-border/60 p-1">
               {creating ? (
-                <div className="flex items-center gap-1 px-2 py-1.5">
+                <div className="flex items-center gap-1 px-1 py-0.5">
                   <Input
                     value={draftBranch}
                     onChange={(event) => setDraftBranch(event.target.value)}
@@ -598,7 +616,7 @@ export function GitBranchSelector(props: {
                   {t("git.branchSelector.createNewBranch")}
                 </button>
               )}
-            </>
+            </div>
           )}
         </DropdownMenuContent>
       </DropdownMenu>
