@@ -121,8 +121,12 @@ export interface MentionComposerHandle {
   insertGitFileMention: (file: MentionComposerGitFileMention) => void;
   clear: () => void;
   focus: () => void;
-  /** Clear the composer and type `text` in with a typewriter animation. */
-  typeText: (text: string) => void;
+  /**
+   * Clear the composer and type `text` in with a typewriter animation.
+   * User input is locked out while it runs; resolves once the full text
+   * has landed in the editor (or the run was cancelled).
+   */
+  typeText: (text: string) => Promise<void>;
 }
 
 export type MentionComposerLargePaste = {
@@ -1985,26 +1989,58 @@ export const MentionComposer = memo(
     }, [applyEmptyState]);
 
     // ---- Typewriter (typeText) ----
-    const typewriterRef = useRef<{ timer: number; finish: () => void } | null>(null);
+    // While a run is active the editor drops contentEditable so keyboard and
+    // IME input cannot interleave user text with the scripted text.
+    const typewriterRef = useRef<{
+      timer: number;
+      finish: () => void;
+      settle: (restoreFocus: boolean) => void;
+    } | null>(null);
+    const [isTypewriting, setIsTypewriting] = useState(false);
+    const typewriterFocusPendingRef = useRef(false);
+
+    const placeCaretAtEditorEnd = useCallback(() => {
+      const el = editorRef.current;
+      if (!el) return;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }, []);
 
     const cancelTypewriter = useCallback(() => {
       const active = typewriterRef.current;
       if (!active) return;
       typewriterRef.current = null;
       window.clearTimeout(active.timer);
+      active.settle(false);
     }, []);
 
-    // Any user keystroke or paste completes the animation instantly so the
-    // user's input always lands after the full suggestion text.
+    // Programmatic draft reads and mention inserts complete the animation
+    // instantly so they always observe the full suggestion text.
     const finishTypewriter = useCallback(() => {
       const active = typewriterRef.current;
       if (!active) return;
       typewriterRef.current = null;
       window.clearTimeout(active.timer);
       active.finish();
+      active.settle(true);
     }, []);
 
     useEffect(() => cancelTypewriter, [cancelTypewriter]);
+
+    // Restore focus only after React has re-enabled contentEditable; focusing
+    // inside settle() would race the attribute flip and get dropped.
+    useEffect(() => {
+      if (isTypewriting || !typewriterFocusPendingRef.current) return;
+      typewriterFocusPendingRef.current = false;
+      const el = editorRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      placeCaretAtEditorEnd();
+    }, [isTypewriting, placeCaretAtEditorEnd]);
 
     const buildDraft = useCallback((): MentionComposerDraft => {
       const el = editorRef.current;
@@ -2144,9 +2180,13 @@ export const MentionComposer = memo(
         getText: () => {
           const el = editorRef.current;
           if (!el) return "";
+          finishTypewriter();
           return normalizeSerializedText(serializeChildren(el, largePastesRef.current));
         },
-        getDraft: buildDraft,
+        getDraft: () => {
+          finishTypewriter();
+          return buildDraft();
+        },
         hasContent: () => {
           const el = editorRef.current;
           return el != null && !editorTextIsEmpty(el);
@@ -2245,7 +2285,7 @@ export const MentionComposer = memo(
         focus: () => editorRef.current?.focus(),
         typeText: (text: string) => {
           const el = editorRef.current;
-          if (!el) return;
+          if (!el) return Promise.resolve();
           cancelTypewriter();
           el.innerHTML = "";
           largePastesRef.current.clear();
@@ -2257,67 +2297,72 @@ export const MentionComposer = memo(
           const chars = Array.from(text);
           const textNode = document.createTextNode("");
           el.appendChild(textNode);
-          const placeCaretAtEnd = () => {
-            const range = document.createRange();
-            range.selectNodeContents(el);
-            range.collapse(false);
-            const sel = window.getSelection();
-            sel?.removeAllRanges();
-            sel?.addRange(range);
-          };
           if (chars.length === 0 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
             textNode.data = chars.join("");
-            placeCaretAtEnd();
+            placeCaretAtEditorEnd();
             refreshEmptyState();
-            return;
+            return Promise.resolve();
           }
 
-          // Freshly typed characters live in short-lived fade-in spans, then
-          // fold into the committed text node once their fade completes, so
-          // the editor always ends up holding one plain text node.
-          const ghosts: HTMLSpanElement[] = [];
-          const foldOldestGhost = () => {
-            const ghost = ghosts.shift();
-            if (!ghost) return;
-            textNode.data += ghost.textContent ?? "";
-            ghost.remove();
-          };
-          const finish = () => {
-            for (const ghost of ghosts) ghost.remove();
-            ghosts.length = 0;
-            textNode.data = chars.join("");
-            placeCaretAtEnd();
-            refreshEmptyState();
-          };
+          return new Promise<void>((resolve) => {
+            let settled = false;
+            const settle = (restoreFocus: boolean) => {
+              if (settled) return;
+              settled = true;
+              typewriterFocusPendingRef.current = restoreFocus;
+              setIsTypewriting(false);
+              resolve();
+            };
+            setIsTypewriting(true);
 
-          // Adaptive pace: long prompts speed up so the whole line lands in ~1s.
-          const tickMs = Math.max(12, Math.min(28, Math.round(900 / chars.length)));
-          const maxGhosts = Math.max(1, Math.ceil(TYPEWRITER_CHAR_FADE_MS / tickMs));
-          let index = 0;
-          const tick = () => {
-            if (index < chars.length) {
-              const ghost = document.createElement("span");
-              ghost.className = "composer-typewriter-char";
-              ghost.textContent = chars[index] ?? "";
-              el.appendChild(ghost);
-              ghosts.push(ghost);
-              index += 1;
-              while (ghosts.length > maxGhosts) foldOldestGhost();
-              placeCaretAtEnd();
+            // Freshly typed characters live in short-lived fade-in spans, then
+            // fold into the committed text node once their fade completes, so
+            // the editor always ends up holding one plain text node.
+            const ghosts: HTMLSpanElement[] = [];
+            const foldOldestGhost = () => {
+              const ghost = ghosts.shift();
+              if (!ghost) return;
+              textNode.data += ghost.textContent ?? "";
+              ghost.remove();
+            };
+            const finish = () => {
+              for (const ghost of ghosts) ghost.remove();
+              ghosts.length = 0;
+              textNode.data = chars.join("");
+              placeCaretAtEditorEnd();
               refreshEmptyState();
-              typewriterRef.current = { timer: window.setTimeout(tick, tickMs), finish };
-              return;
-            }
-            if (ghosts.length > 0) {
-              foldOldestGhost();
-              placeCaretAtEnd();
-              typewriterRef.current = { timer: window.setTimeout(tick, tickMs), finish };
-              return;
-            }
-            typewriterRef.current = null;
-          };
-          refreshEmptyState();
-          typewriterRef.current = { timer: window.setTimeout(tick, tickMs), finish };
+            };
+
+            // Adaptive pace: long prompts speed up so the whole line lands in ~1s.
+            const tickMs = Math.max(12, Math.min(28, Math.round(900 / chars.length)));
+            const maxGhosts = Math.max(1, Math.ceil(TYPEWRITER_CHAR_FADE_MS / tickMs));
+            let index = 0;
+            const tick = () => {
+              if (index < chars.length) {
+                const ghost = document.createElement("span");
+                ghost.className = "composer-typewriter-char";
+                ghost.textContent = chars[index] ?? "";
+                el.appendChild(ghost);
+                ghosts.push(ghost);
+                index += 1;
+                while (ghosts.length > maxGhosts) foldOldestGhost();
+                placeCaretAtEditorEnd();
+                refreshEmptyState();
+                typewriterRef.current = { timer: window.setTimeout(tick, tickMs), finish, settle };
+                return;
+              }
+              if (ghosts.length > 0) {
+                foldOldestGhost();
+                placeCaretAtEditorEnd();
+                typewriterRef.current = { timer: window.setTimeout(tick, tickMs), finish, settle };
+                return;
+              }
+              typewriterRef.current = null;
+              settle(true);
+            };
+            refreshEmptyState();
+            typewriterRef.current = { timer: window.setTimeout(tick, tickMs), finish, settle };
+          });
         },
       }),
       [
@@ -2328,6 +2373,7 @@ export const MentionComposer = memo(
         closeMentionSession,
         finishTypewriter,
         insertLargePaste,
+        placeCaretAtEditorEnd,
         refreshEmptyState,
       ],
     );
@@ -2639,7 +2685,12 @@ export const MentionComposer = memo(
           e.preventDefault();
           return;
         }
-        finishTypewriter();
+        // The typewriter owns the editor while it runs; swallow keys so Enter
+        // cannot send a half-typed suggestion.
+        if (typewriterRef.current) {
+          e.preventDefault();
+          return;
+        }
         const isEnter = isEnterKeyboardEvent(e);
         const isActiveCompositionKey = isComposingRef.current || isActiveImeKeyboardEvent(e);
         const hasLegacyImeSignal = hasLegacyImeKeyboardSignal(e);
@@ -2755,7 +2806,6 @@ export const MentionComposer = memo(
         selectSuggestion,
         disabled,
         closeMentionSession,
-        finishTypewriter,
         onSend,
         refreshEmptyState,
         refreshMention,
@@ -2768,7 +2818,10 @@ export const MentionComposer = memo(
           e.preventDefault();
           return;
         }
-        finishTypewriter();
+        if (typewriterRef.current) {
+          e.preventDefault();
+          return;
+        }
         const clipboardFiles = extractClipboardFiles(e.clipboardData);
         if (clipboardFiles.length > 0) {
           e.preventDefault();
@@ -2785,14 +2838,7 @@ export const MentionComposer = memo(
         refreshEmptyState();
         refreshMention();
       },
-      [
-        disabled,
-        finishTypewriter,
-        insertLargePaste,
-        onPasteFiles,
-        refreshEmptyState,
-        refreshMention,
-      ],
+      [disabled, insertLargePaste, onPasteFiles, refreshEmptyState, refreshMention],
     );
 
     const handleCompositionStart = useCallback(() => {
@@ -2947,7 +2993,7 @@ export const MentionComposer = memo(
         {/* biome-ignore lint/a11y/useSemanticElements: The composer is contenteditable so it can host inline mention chips. */}
         <div
           ref={editorRef}
-          contentEditable={!disabled}
+          contentEditable={!disabled && !isTypewriting}
           suppressContentEditableWarning
           role="textbox"
           tabIndex={disabled ? undefined : 0}

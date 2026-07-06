@@ -106,6 +106,7 @@ import {
 import { createModelFromConfig, toModelValue } from "../lib/providers/llm";
 import {
   type AppSettings,
+  applyMcpOpsToAppSettings,
   type ChatRuntimeControls,
   DEFAULT_WORKSPACE_PROJECT_ID,
   type ExecutionMode,
@@ -130,7 +131,6 @@ import {
   type SystemToolId,
   updateChatRuntimeControlsForProvider,
   updateCustomSettings,
-  updateMcp,
   updateMemorySettings,
   updateRightDockFileTreeState,
   updateRightDockProjectState,
@@ -281,6 +281,8 @@ function createLocalGatewayChatRunId(conversationId: string) {
 type ChatPageProps = {
   settings: AppSettings;
   setSettings: (updater: (prev: AppSettings) => AppSettings) => void;
+  /** Reads the authoritative settingsRef (not render-time state) so tools never see a stale snapshot. */
+  getMcpSettings: () => AppSettings["mcp"];
   context: Context;
   setContext: (next: Context) => void;
   onOpenSettings: (section?: SectionId) => void;
@@ -590,8 +592,16 @@ function createWorkspaceProjectFromPath(path: string, kind: WorkspaceProject["ki
 }
 
 export function ChatPage(props: ChatPageProps) {
-  const { settings, setSettings, context, setContext, onOpenSettings, onToggleTheme, appUpdate } =
-    props;
+  const {
+    settings,
+    setSettings,
+    getMcpSettings,
+    context,
+    setContext,
+    onOpenSettings,
+    onToggleTheme,
+    appUpdate,
+  } = props;
   // Monaco reads NLS globals while the lazy editor module imports monaco-editor.
   setPreferredMonacoNlsLocale(settings.locale);
   const effectiveTheme = resolveEffectiveTheme(settings.theme);
@@ -697,19 +707,6 @@ export function ChatPage(props: ChatPageProps) {
     sidebarStore.setScope(sidebarScope);
   }, [sidebarScope, sidebarStore]);
   const historyScopeKey = sidebarScopeKey(sidebarScope);
-  const enabledMcpServers = useMemo(
-    () => settings.mcp.servers.filter((server) => server.enabled),
-    [settings.mcp.servers],
-  );
-  const selectableMcpServers = useMemo(
-    () => enabledMcpServers.filter((server) => server.id.trim()),
-    [enabledMcpServers],
-  );
-  const enabledMcpServerIds = useMemo(
-    () => selectableMcpServers.map((server) => server.id),
-    [selectableMcpServers],
-  );
-
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeView, setActiveView] = useState<"chat" | "skills-hub" | "mcp-hub">("chat");
   const [rightDockOpen, setRightDockOpen] = useState(false);
@@ -1471,8 +1468,19 @@ export function ChatPage(props: ChatPageProps) {
     composerRef.current?.insertGitFileMention(file);
     composerRef.current?.focus();
   }, []);
+  // Guards re-entry while a suggestion is still typing in: the cards stay
+  // disabled and further clicks are ignored until the composer settles.
+  const [isSuggestionTyping, setIsSuggestionTyping] = useState(false);
+  const suggestionTypingRef = useRef(false);
   const handleEmptyStateSuggestion = useCallback((text: string) => {
-    composerRef.current?.typeText(text);
+    const composer = composerRef.current;
+    if (!composer || suggestionTypingRef.current) return;
+    suggestionTypingRef.current = true;
+    setIsSuggestionTyping(true);
+    void composer.typeText(text).finally(() => {
+      suggestionTypingRef.current = false;
+      setIsSuggestionTyping(false);
+    });
   }, []);
   const hideWorkspaceSshTerminalOverlay = useCallback(() => {
     setWorkspaceSshTerminalOpen(false);
@@ -3919,6 +3927,55 @@ export function ChatPage(props: ChatPageProps) {
     }
 
     markConversationRunStarted();
+    // Clear the composer in the same beat as the optimistic user bubble.
+    // Everything below until the runtime turn starts (gateway mark-started
+    // IPC, initial history persist, skills refresh, memory overview read) may
+    // await for seconds; the input box must not keep the sent text visible in
+    // the meantime. Early-failure paths below restore the cleared draft.
+    let composerClearedOnStart = false;
+    let clearedComposerDraft: MentionComposerDraft | null = null;
+    let clearedPendingUploads: PendingUploadedFile[] = [];
+    if (!hasTextOverride && !overrides?.composerDraftOverride) {
+      clearCachedComposerDraft(conversationId);
+    }
+    if (!overrides?.preserveComposerOnStart) {
+      if (isConversationVisible()) {
+        composerClearedOnStart = true;
+        const liveDraft = composerDraft ?? composerRef.current?.getDraft() ?? null;
+        clearedComposerDraft = liveDraft && !liveDraft.isEmpty ? liveDraft : null;
+        clearedPendingUploads = pendingUploadedFiles;
+      }
+      resetVisibleTransientState(conversationId);
+    } else {
+      setConversationErrorState(null);
+      updateConversationRuntimeEntry(conversationId, (prev) => ({
+        ...prev,
+        hookWarning: null,
+      }));
+    }
+    const restoreComposerOnStartFailure = () => {
+      if (!composerClearedOnStart) {
+        return;
+      }
+      const hasStoredUploads =
+        (pendingUploadsByConversationRef.current.get(conversationId) ?? []).length > 0;
+      if (isConversationVisible()) {
+        if (clearedComposerDraft && composerRef.current && !composerRef.current.hasContent()) {
+          composerRef.current.setDraft(clearedComposerDraft);
+        }
+        if (clearedPendingUploads.length > 0 && !hasStoredUploads) {
+          pendingUploadsByConversationRef.current.set(conversationId, clearedPendingUploads);
+          setPendingUploadedFiles(clearedPendingUploads);
+        }
+        return;
+      }
+      if (clearedComposerDraft && !composerDraftCacheRef.current.has(conversationId)) {
+        composerDraftCacheRef.current.set(conversationId, clearedComposerDraft);
+      }
+      if (clearedPendingUploads.length > 0 && !hasStoredUploads) {
+        pendingUploadsByConversationRef.current.set(conversationId, clearedPendingUploads);
+      }
+    };
     if (mirrorsLocalRunToGateway) {
       try {
         await markLocalGatewayRunStarted();
@@ -3935,6 +3992,7 @@ export function ChatPage(props: ChatPageProps) {
         gatewayBridgeEvents.emitError(message, conversationId);
         gatewayBridgeEvents.close();
         markConversationRunStopped("failed");
+        restoreComposerOnStartFailure();
         return false;
       }
     }
@@ -3962,6 +4020,7 @@ export function ChatPage(props: ChatPageProps) {
         gatewayBridgeEvents.emitError(message, conversationId);
         gatewayBridgeEvents.close();
         markConversationRunStopped("failed");
+        restoreComposerOnStartFailure();
         return true;
       }
       try {
@@ -3972,6 +4031,7 @@ export function ChatPage(props: ChatPageProps) {
         gatewayBridgeEvents.emitError(message, conversationId);
         gatewayBridgeEvents.close();
         markConversationRunStopped("failed");
+        restoreComposerOnStartFailure();
         return true;
       }
     } else {
@@ -4159,6 +4219,7 @@ export function ChatPage(props: ChatPageProps) {
         gatewayBridgeEvents.emitError(message, conversationId);
         gatewayBridgeEvents.close();
         markConversationRunStopped("failed");
+        restoreComposerOnStartFailure();
         return true;
       }
 
@@ -4561,19 +4622,6 @@ export function ChatPage(props: ChatPageProps) {
       }
     }
 
-    if (!hasTextOverride && !overrides?.composerDraftOverride) {
-      clearCachedComposerDraft(conversationId);
-    }
-    if (!overrides?.preserveComposerOnStart) {
-      resetVisibleTransientState(conversationId);
-    } else {
-      setConversationErrorState(null);
-      updateConversationRuntimeEntry(conversationId, (prev) => ({
-        ...prev,
-        hookWarning: null,
-      }));
-    }
-
     let gatewayRuntimeFinalState: GatewayRuntimeSnapshotState = "completed";
     try {
       if (effectiveIsAgentMode) {
@@ -4606,12 +4654,10 @@ export function ChatPage(props: ChatPageProps) {
             },
             agentTemplates: settings.agents,
             selectedSystemToolIds: effectiveSelectedSystemToolIds,
-            mcpSettings: settings.mcp,
-            updateMcpSettings: (nextMcp) => {
-              setSettings((prev) => updateMcp(prev, nextMcp));
+            getMcpSettings,
+            applyMcpOps: (ops) => {
+              setSettings((prev) => applyMcpOpsToAppSettings(prev, ops));
             },
-            enabledMcpServerIds,
-            selectableMcpServers,
             remoteWebTunnelsEnabled: settings.remote.enableWebTunnels,
             tunnelPublicBaseUrl: settings.remote.gatewayUrl.trim(),
             sshHosts: settings.ssh.hosts,
@@ -5493,6 +5539,7 @@ export function ChatPage(props: ChatPageProps) {
                 onResendFromEdit={handleResendFromEdit}
                 onOpenSettings={onOpenSettings}
                 onSuggestionSelect={handleEmptyStateSuggestion}
+                suggestionsDisabled={isSuggestionTyping}
               />
 
               <ChatComposerBar

@@ -3307,8 +3307,19 @@ export default function GatewayApp() {
     composerRef.current?.insertGitFileMention(file);
     composerRef.current?.focus();
   }, []);
+  // Guards re-entry while a suggestion is still typing in: the cards stay
+  // disabled and further clicks are ignored until the composer settles.
+  const [isSuggestionTyping, setIsSuggestionTyping] = useState(false);
+  const suggestionTypingRef = useRef(false);
   const handleEmptyStateSuggestion = useCallback((text: string) => {
-    composerRef.current?.typeText(text);
+    const composer = composerRef.current;
+    if (!composer || suggestionTypingRef.current) return;
+    suggestionTypingRef.current = true;
+    setIsSuggestionTyping(true);
+    void composer.typeText(text).finally(() => {
+      suggestionTypingRef.current = false;
+      setIsSuggestionTyping(false);
+    });
   }, []);
   const handleRightDockClose = useCallback(() => {
     setRightDockOpen(false);
@@ -3795,6 +3806,7 @@ export default function GatewayApp() {
                         onLoadUploadedImagePreview={handleLoadUploadedImagePreview}
                         onResendFromEdit={handleResendFromEdit}
                         onSuggestionSelect={handleEmptyStateSuggestion}
+                        suggestionsDisabled={isSuggestionTyping}
                       />
                     </ScrollArea>
                     {conversationOpenState.showOverlay ? (

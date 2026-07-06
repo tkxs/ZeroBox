@@ -90,6 +90,7 @@ type GatewayTranscriptProps = {
     uploadedFiles: PendingUploadedFile[],
   ) => void;
   onSuggestionSelect?: (text: string) => void;
+  suggestionsDisabled?: boolean;
   readOnly?: boolean;
   redactToolContent?: boolean;
 };
@@ -1341,6 +1342,7 @@ export function GatewayTranscript({
   onLoadUploadedImagePreview,
   onResendFromEdit,
   onSuggestionSelect,
+  suggestionsDisabled = false,
   readOnly = false,
   redactToolContent = false,
 }: GatewayTranscriptProps) {
@@ -1378,6 +1380,7 @@ export function GatewayTranscript({
             variant={showNoModelsState ? "no-models" : "start-chat"}
             onOpenSettings={onOpenSettings}
             onSuggestionSelect={readOnly ? undefined : onSuggestionSelect}
+            suggestionsDisabled={suggestionsDisabled}
           />
         </div>
       </div>

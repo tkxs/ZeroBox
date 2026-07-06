@@ -81,12 +81,15 @@ export type ChatEmptyStateProps = {
   variant: "no-models" | "start-chat";
   onOpenSettings?: (section?: SectionId) => void;
   onSuggestionSelect?: (text: string) => void;
+  /** Locks the suggestion cards while a picked prompt is still typing in. */
+  suggestionsDisabled?: boolean;
 };
 
 export function ChatEmptyState({
   variant,
   onOpenSettings,
   onSuggestionSelect,
+  suggestionsDisabled = false,
 }: ChatEmptyStateProps) {
   const { t } = useLocale();
   const period = useGreetingPeriod();
@@ -154,6 +157,7 @@ export function ChatEmptyState({
                 <button
                   key={card.key}
                   type="button"
+                  disabled={suggestionsDisabled}
                   onClick={() => onSuggestionSelect(t(card.promptKey))}
                   onPointerMove={handleCardPointerMove}
                   style={
@@ -162,7 +166,7 @@ export function ChatEmptyState({
                       "--card-accent": card.accent,
                     } as CSSProperties
                   }
-                  className="hero-card-entrance hero-suggest-card group flex items-center gap-3 rounded-xl px-3.5 py-3 text-left backdrop-blur-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                  className="hero-card-entrance hero-suggest-card group flex items-center gap-3 rounded-xl px-3.5 py-3 text-left backdrop-blur-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-55"
                 >
                   <span
                     className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all duration-200 group-hover:-rotate-3 group-hover:scale-110 ${card.chipClassName}`}
