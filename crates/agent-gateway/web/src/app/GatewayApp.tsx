@@ -207,6 +207,9 @@ export default function GatewayApp() {
   const { api, terminalClient, sftpClient, gitClient } = useGatewayClients(token);
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
+  // True only after an authenticated gateway connection has been established
+  // and then dropped; the initial connect (skeleton phase) never disables UI.
+  const [gatewayConnectionLost, setGatewayConnectionLost] = useState(false);
   const [conversationId, setConversationId] = useState("");
   const [chatError, setChatError] = useState<string | null>(null);
   // Sidebar errors raised outside the sidebar store (project removal flow).
@@ -1153,6 +1156,25 @@ export default function GatewayApp() {
       statusRef.current = nextStatus;
       setStatus(nextStatus);
       setStatusError(error);
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [api]);
+
+  useEffect(() => {
+    if (!api) {
+      setGatewayConnectionLost(false);
+      return;
+    }
+    let wasConnected = false;
+    const unsubscribe = api.subscribeConnection((connected) => {
+      if (connected) {
+        wasConnected = true;
+        setGatewayConnectionLost(false);
+      } else if (wasConnected) {
+        setGatewayConnectionLost(true);
+      }
     });
     return () => {
       unsubscribe();
@@ -3579,6 +3601,7 @@ export default function GatewayApp() {
             canShareConversations={canShareHistory}
             sharedConversationCount={sharedHistoryItems.length}
             externalErrorMessage={sidebarActionError}
+            connectionLost={gatewayConnectionLost}
             isLocalDraftConversationId={isLocalDraftConversationId}
             onProjectsCollapsedChange={handleSidebarProjectsCollapsedChange}
             onRecentCollapsedChange={handleSidebarRecentCollapsedChange}

@@ -32,6 +32,19 @@ function selectConversationIndex(snapshot: SidebarSnapshot) {
   return snapshot.byId;
 }
 
+// Transport-shaped list errors merely restate "the gateway socket is down";
+// the page-level banner owns that story, so the sidebar never repeats it —
+// including the stale copy that lingers until the reconnect refetch lands.
+// Mirrors isRecoverableGatewayTransportError in lib/gatewaySocket.ts.
+function isGatewayTransportErrorDetail(detail: string | null | undefined) {
+  const message = (detail ?? "").trim();
+  return (
+    message.startsWith("Gateway WebSocket disconnected") ||
+    message === "Gateway WebSocket is not connected" ||
+    message.startsWith("Gateway transport stalled")
+  );
+}
+
 // Stable identity wrapper so callback props from GatewayApp (recreated per
 // render) never churn effects or the memo'd view rows.
 function useStableCallback<Args extends unknown[], Return>(
@@ -63,6 +76,9 @@ export type GatewaySidebarContainerProps = {
   // GatewayApp-level sidebar errors (project removal flow); store errors are
   // derived locally and take precedence.
   externalErrorMessage: string | null;
+  // Gateway socket dropped after having been connected: the sections are
+  // disabled and error cards are suppressed (the page banner owns messaging).
+  connectionLost: boolean;
   isLocalDraftConversationId: (id: string) => boolean;
   onProjectsCollapsedChange: (collapsed: boolean) => void;
   onRecentCollapsedChange: (collapsed: boolean) => void;
@@ -92,7 +108,8 @@ export type GatewaySidebarContainerProps = {
 };
 
 export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
-  const { store, projects, externalErrorMessage, isLocalDraftConversationId } = props;
+  const { store, projects, externalErrorMessage, connectionLost, isLocalDraftConversationId } =
+    props;
   const { t } = useLocale();
 
   const items = useSidebarSelector(store, selectConversations);
@@ -193,6 +210,9 @@ export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
     [t],
   );
   const errorMessage = useMemo(() => {
+    if (connectionLost) {
+      return null;
+    }
     let lastMutationError: SidebarErrorCode | null = null;
     for (const code of mutationErrors.values()) {
       lastMutationError = code;
@@ -200,11 +220,12 @@ export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
     if (lastMutationError) {
       return translateErrorCode(lastMutationError);
     }
-    if (listState.error) {
+    if (listState.error && !isGatewayTransportErrorDetail(listState.errorDetail)) {
       return listState.errorDetail?.trim() || translateErrorCode(listState.error);
     }
     return externalErrorMessage;
   }, [
+    connectionLost,
     externalErrorMessage,
     listState.error,
     listState.errorDetail,
@@ -234,6 +255,7 @@ export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
       hasMore={listState.hasMore}
       isLoadingMore={listState.isLoadingMore}
       errorMessage={errorMessage}
+      sectionsDisabled={connectionLost}
       renamingId={renamingId}
       renameDraft={renameDraft}
       isOpen={props.isOpen}

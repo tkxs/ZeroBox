@@ -17,6 +17,7 @@
 import type { ActivityStore } from "@/lib/chat/stream/activityStore";
 import { formatConversationTitle } from "@/lib/chatUi";
 import type {
+  AgentStatus,
   ConversationSummary,
   GatewayHistoryEvent,
   HistoryList,
@@ -115,6 +116,7 @@ type WebSidebarApi = {
   deleteHistory(conversationId: string): Promise<void>;
   subscribeHistory(listener: (event: GatewayHistoryEvent) => void): () => void;
   subscribeConnection(listener: (connected: boolean) => void): () => void;
+  subscribeStatus(listener: (status: AgentStatus | null, error: string | null) => void): () => void;
 };
 
 export type WebSidebarBackendDeps = {
@@ -220,9 +222,38 @@ export function createWebSidebarBackend(deps: WebSidebarBackendDeps): SidebarBac
     },
 
     subscribeConnection(listener) {
-      // The client emits booleans already (true on auth, false on drop) and
-      // replays the current state to late subscribers.
-      return api.subscribeConnection((connected) => listener(connected === true));
+      // For the sidebar, "connected" means the whole read path works: the
+      // browser⇄gateway socket is authenticated AND the desktop agent behind
+      // it is online. The agent can drop and return while the socket never
+      // blips (and after a gateway restart the socket recovers before the
+      // agent has re-registered), so folding agent online-ness in here makes
+      // the store's reconnect refetch fire the moment reads can actually
+      // succeed — clearing any stale listError immediately instead of on the
+      // next reconcile tick. Both sources replay their current state to late
+      // subscribers; dedup keeps the store's disconnect latch edge-triggered.
+      let socketConnected = false;
+      let agentOnline = false;
+      let lastEmitted: boolean | null = null;
+      const emit = () => {
+        const next = socketConnected && agentOnline;
+        if (next === lastEmitted) {
+          return;
+        }
+        lastEmitted = next;
+        listener(next);
+      };
+      const unsubscribeConnection = api.subscribeConnection((connected) => {
+        socketConnected = connected === true;
+        emit();
+      });
+      const unsubscribeStatus = api.subscribeStatus((status) => {
+        agentOnline = status?.online === true;
+        emit();
+      });
+      return () => {
+        unsubscribeConnection();
+        unsubscribeStatus();
+      };
     },
 
     getProtectedConversationIds: () => deps.getProtectedConversationIds(),

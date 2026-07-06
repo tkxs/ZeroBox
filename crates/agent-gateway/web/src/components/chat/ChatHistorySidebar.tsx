@@ -19,6 +19,7 @@ import {
 } from "../../lib/settings";
 import { cn } from "../../lib/shared/utils";
 import {
+  AlertCircle,
   ChevronRight,
   Edit3,
   Folder,
@@ -62,6 +63,9 @@ type ChatHistorySidebarProps = {
   hasMore: boolean;
   isLoadingMore: boolean;
   errorMessage: string | null;
+  // Disables the workspace + recent-conversation sections as one block (used
+  // while the gateway connection is lost); the header actions stay usable.
+  sectionsDisabled?: boolean;
   renamingId: string | null;
   renameDraft: string;
   isOpen: boolean;
@@ -1017,32 +1021,6 @@ function HistoryListLoadingSkeleton() {
   );
 }
 
-function SidebarStateCard(props: {
-  title: string;
-  description?: string;
-  tone?: "default" | "error";
-}) {
-  const { title, description, tone = "default" } = props;
-
-  return (
-    <div
-      className={cn(
-        "rounded-2xl border px-3 py-3 text-sm",
-        tone === "error"
-          ? "border-destructive/20 bg-destructive/5 text-destructive"
-          : "border-border/60 bg-background/70 text-muted-foreground",
-      )}
-    >
-      <div
-        className={cn("font-medium", tone === "error" ? "text-destructive" : "text-foreground/85")}
-      >
-        {title}
-      </div>
-      {description ? <div className="mt-1 text-xs leading-5">{description}</div> : null}
-    </div>
-  );
-}
-
 export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHistorySidebarProps) {
   const {
     items,
@@ -1055,6 +1033,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     hasMore,
     isLoadingMore,
     errorMessage,
+    sectionsDisabled = false,
     renamingId,
     renameDraft,
     isOpen,
@@ -1655,9 +1634,12 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
         <div
           ref={sidebarSectionsRef}
           style={{ gridTemplateRows: sidebarSectionLayout.gridTemplateRows }}
+          aria-disabled={sectionsDisabled || undefined}
+          inert={sectionsDisabled}
           className={cn(
             "grid min-h-0 flex-1 content-start",
             isProjectSectionResizing ? undefined : SIDEBAR_SECTION_ROWS_TRANSITION_CLASS,
+            sectionsDisabled && "pointer-events-none select-none opacity-50",
           )}
         >
           {showProjects ? (
@@ -1828,7 +1810,22 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                   {t("chat.history.syncing")}
                 </span>
               ) : null}
-              <div className="rounded-full border border-border/60 bg-background/80 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+              <div
+                role={errorMessage ? "status" : undefined}
+                title={errorMessage ? `${t("chat.historyReadFailed")}: ${errorMessage}` : undefined}
+                className={cn(
+                  "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                  errorMessage
+                    ? "border-destructive/40 bg-destructive/10 text-destructive"
+                    : "border-border/60 bg-background/80 text-muted-foreground",
+                )}
+              >
+                {errorMessage ? (
+                  <AlertCircle
+                    className="h-3 w-3 shrink-0"
+                    aria-label={t("chat.historyReadFailed")}
+                  />
+                ) : null}
                 {Math.max(totalItems, items.length)}
               </div>
               {canShareConversations ? (
@@ -1863,19 +1860,10 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                 : "translate-y-0 opacity-100",
             )}
           >
-            {/* Render priority: error banner ABOVE rows (never replacing
-                them); skeleton only while loading with nothing cached; rows
-                whenever present; empty state only when authoritatively
-                empty. */}
-            {errorMessage ? (
-              <div className="shrink-0 px-3 pb-2">
-                <SidebarStateCard
-                  title={t("chat.historyReadFailed")}
-                  description={errorMessage}
-                  tone="error"
-                />
-              </div>
-            ) : null}
+            {/* Render priority: read failures surface as the red count badge
+                in the section header (never a card replacing rows); skeleton
+                only while loading with nothing cached; rows whenever present;
+                empty state only when authoritatively empty. */}
             <div
               ref={historyScrollRef}
               aria-busy={listStatus === "loading" || listStatus === "syncing" || isLoadingMore}
