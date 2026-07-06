@@ -1798,14 +1798,14 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
           <div
             ref={recentHeaderRef}
             className={cn(
-              "flex items-center justify-between px-3 pb-2",
+              "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 pb-2",
               showProjects ? "border-t border-border/35 pt-0.5" : "pt-3",
             )}
           >
             <button
               type="button"
               aria-expanded={!recentCollapsed}
-              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => onRecentCollapsedChange?.(!recentCollapsed)}
             >
               <ChevronRight
