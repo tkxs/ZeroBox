@@ -11,6 +11,7 @@ import {
 import { createPortal } from "react-dom";
 import { getFileTypeIcon } from "../../../components/chat/fileTypeIcons";
 import { mentionChipClassName } from "../../../components/chat/mentionChipStyles";
+import { SkillIcon } from "../../../components/icons";
 import { useLocale } from "../../../i18n";
 
 import {
@@ -734,7 +735,7 @@ function GitFileMentionChip({ file }: { file: GitFileDisplayReference }) {
 function SkillMentionChip({ name }: { name: string }) {
   return (
     <span title={`Skill: ${name}`} className={mentionChipClassName("skill")}>
-      <span className="text-[10px] font-semibold opacity-70">$</span>
+      <SkillIcon className="h-3 w-3 shrink-0 self-center" />
       {name}
     </span>
   );

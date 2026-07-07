@@ -10,6 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { getFileTypeIcon } from "../../components/chat/fileTypeIcons";
+import { SkillIcon } from "../../components/icons";
 import { useLocale } from "../../i18n";
 
 import {
@@ -780,7 +781,7 @@ function SkillMentionChip({ name }: { name: string }) {
       title={`Skill: ${name}`}
       className="mention-chip mx-0.5 inline-flex items-baseline gap-1 rounded bg-violet-500/15 px-1.5 text-violet-700 align-baseline whitespace-nowrap dark:text-violet-300"
     >
-      <span className="text-[10px] font-semibold opacity-70">$</span>
+      <SkillIcon className="h-3 w-3 shrink-0 self-center" />
       {name}
     </span>
   );

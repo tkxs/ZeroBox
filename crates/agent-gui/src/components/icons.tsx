@@ -198,6 +198,9 @@ function SkillIconSource({ title, ...props }: SVGProps<SVGSVGElement> & { title?
   );
 }
 
+/** Raw markup mirror of SkillIconSource, for imperative DOM builders (e.g. mention chips). */
+export const SKILL_ICON_SVG_MARKUP = `<svg viewBox="620 505 1725 1725" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><g transform="translate(0,2600) scale(0.1,-0.1)" fill="currentColor" stroke="none"><path d="${skillIconOuterPath}"/><path d="${skillIconInnerPath}"/><path d="${skillIconStarPath}"/></g></svg>`;
+
 function GeminiIconSource({ title, ...props }: SVGProps<SVGSVGElement> & { title?: string }) {
   const idPrefix = `gemini-${useId().replaceAll(":", "")}`;
   const shapeId = `${idPrefix}-shape`;

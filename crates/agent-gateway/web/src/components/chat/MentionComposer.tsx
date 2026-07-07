@@ -30,6 +30,7 @@ import {
 import { extractClipboardFiles } from "../../lib/clipboardFiles";
 import { cn } from "../../lib/shared/utils";
 import { invokeFs } from "../../lib/tools/fsBackend";
+import { SKILL_ICON_SVG_MARKUP, SkillIcon } from "../icons";
 import { getFileTypeIcon, getFileTypeIconSvg } from "./fileTypeIcons";
 
 /* ------------------------------------------------------------------ */
@@ -542,6 +543,10 @@ function createGitHubMentionIcon() {
   return createMentionIcon(GITHUB_ICON_SVG);
 }
 
+function createSkillMentionIcon() {
+  return createMentionIcon(SKILL_ICON_SVG_MARKUP);
+}
+
 function isComposerChipElement(node: Node | null): node is HTMLElement {
   return (
     node instanceof HTMLElement &&
@@ -847,10 +852,7 @@ function createSkillMentionChip(skill: MentionComposerSkillMention) {
     "mention-chip inline-flex items-baseline gap-1 rounded bg-violet-500/15 px-1.5 mx-0.5 text-violet-700 dark:text-violet-300 align-baseline whitespace-nowrap select-none";
   chip.title = skill.description ? `${skill.name}\n${skill.description}` : skill.name;
 
-  const sigil = document.createElement("span");
-  sigil.textContent = "$";
-  sigil.className = "text-[10px] font-semibold opacity-70";
-  chip.appendChild(sigil);
+  chip.appendChild(createSkillMentionIcon());
   chip.appendChild(document.createTextNode(skill.name));
   return chip;
 }
@@ -1259,11 +1261,7 @@ function Popup({
                       : "bg-foreground/[0.04] dark:bg-white/[0.05]",
                 )}
               >
-                {Icon ? (
-                  <Icon width={12} height={12} />
-                ) : (
-                  <span className="text-[11px] font-semibold">$</span>
-                )}
+                {Icon ? <Icon width={12} height={12} /> : <SkillIcon width={12} height={12} />}
               </span>
               <span className="min-w-0 flex-1 truncate">
                 <span className="font-medium tracking-tight text-foreground/95">{title}</span>
