@@ -426,9 +426,49 @@ fn ssh_keyboard_interactive_message_combines_server_fields() {
         instructions: "Enter code".to_string(),
         prompt: "OTP:".to_string(),
         echo: false,
+        answer_mode: SshPromptAnswerMode::KeyboardInteractive,
     });
 
     assert_eq!(message, "Verification\nEnter code\nOTP:");
+}
+
+#[test]
+fn ssh_password_fallback_prompt_targets_password_auth() {
+    let host = RuntimeSshHostConfig {
+        id: "prod".to_string(),
+        name: "Production".to_string(),
+        host: "prod.example.com".to_string(),
+        port: 22,
+        username: "deploy".to_string(),
+        auth_type: "keyboardInteractive".to_string(),
+        password: String::new(),
+        private_key: String::new(),
+        private_key_path: String::new(),
+        private_key_passphrase: String::new(),
+        proxy: crate::commands::settings::RuntimeSshProxyConfig {
+            proxy_type: String::new(),
+            url: String::new(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+            password_configured: false,
+        },
+    };
+
+    let first = password_fallback_prompt_data(&host, false);
+    assert_eq!(first.answer_mode, SshPromptAnswerMode::Password);
+    assert!(!first.echo);
+    assert_eq!(
+        ssh_keyboard_interactive_message(&first),
+        "deploy@prod.example.com's password:"
+    );
+
+    let retry = password_fallback_prompt_data(&host, true);
+    assert_eq!(retry.answer_mode, SshPromptAnswerMode::Password);
+    assert_eq!(
+        ssh_keyboard_interactive_message(&retry),
+        "Permission denied, please try again.\ndeploy@prod.example.com's password:"
+    );
 }
 
 #[test]
@@ -527,7 +567,7 @@ fn ssh_proxy_parser_resolves_http_and_socks5_endpoints() {
         host: "prod.example.com".to_string(),
         port: 22,
         username: "deploy".to_string(),
-        auth_type: "agent".to_string(),
+        auth_type: "keyboardInteractive".to_string(),
         password: String::new(),
         private_key: String::new(),
         private_key_path: String::new(),

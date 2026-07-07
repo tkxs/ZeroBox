@@ -33,15 +33,15 @@ function host(overrides = {}) {
   };
 }
 
-test("SSH tunnel panel treats agent hosts as credential ready", () => {
-  const agentHost = host({
-    authType: "agent",
+test("SSH tunnel panel treats keyboard-interactive hosts as credential ready", () => {
+  const keyboardInteractiveHost = host({
+    authType: "keyboardInteractive",
     passwordConfigured: false,
     privateKeyConfigured: false,
   });
 
-  assert.equal(panel.hostSecretReady(agentHost), true);
-  assert.equal(panel.hostStatusMessage(agentHost, (key) => key), "");
+  assert.equal(panel.hostSecretReady(keyboardInteractiveHost), true);
+  assert.equal(panel.hostStatusMessage(keyboardInteractiveHost, (key) => key), "");
 });
 
 test("SSH tunnel panel does not disable hosts only because proxy is configured", () => {

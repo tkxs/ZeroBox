@@ -11,10 +11,10 @@ import {
   List,
   Lock,
   Pencil,
-  Plug,
   Plus,
   Server,
   Shield,
+  Terminal,
   Trash2,
   Upload,
 } from "../../components/icons";
@@ -75,7 +75,7 @@ function endpointLabel(host: SshHostConfig) {
 
 function authLabel(host: Pick<SshHostConfig, "authType">, t: (key: string) => string) {
   if (host.authType === "privateKey") return t("settings.sshAuthPrivateKey");
-  if (host.authType === "agent") return t("settings.sshAuthAgent");
+  if (host.authType === "keyboardInteractive") return t("settings.sshAuthKeyboardInteractive");
   return t("settings.sshAuthPassword");
 }
 
@@ -147,7 +147,7 @@ function SshHostModal(props: {
   const isEditing = Boolean(initialData);
   const isPasswordAuth = authType === "password";
   const isPrivateKeyAuth = authType === "privateKey";
-  const isAgentAuth = authType === "agent";
+  const isKeyboardInteractiveAuth = authType === "keyboardInteractive";
   const passwordAuthPanelStyle: CSSProperties = {
     maxHeight: isPasswordAuth ? "7rem" : "0rem",
     opacity: isPasswordAuth ? 1 : 0,
@@ -354,28 +354,30 @@ function SshHostModal(props: {
               </button>
               <button
                 type="button"
-                onClick={() => setAuthType("agent")}
+                onClick={() => setAuthType("keyboardInteractive")}
                 className={`group relative flex items-center gap-3 rounded-xl border px-3 py-3 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 ${
-                  isAgentAuth
+                  isKeyboardInteractiveAuth
                     ? "border-emerald-500/40 bg-emerald-500/[0.06] shadow-sm"
                     : "border-border/60 bg-card hover:border-border hover:bg-muted/20"
                 }`}
               >
-                <Plug
+                <Terminal
                   className={`h-4 w-4 shrink-0 text-emerald-500 transition-transform duration-200 ${
-                    isAgentAuth ? "scale-110" : "group-hover:scale-105"
+                    isKeyboardInteractiveAuth ? "scale-110" : "group-hover:scale-105"
                   }`}
                 />
                 <div className="min-w-0">
-                  <div className="text-sm font-medium">{t("settings.sshAuthAgent")}</div>
+                  <div className="text-sm font-medium">
+                    {t("settings.sshAuthKeyboardInteractive")}
+                  </div>
                   <div className="text-xs text-muted-foreground">
-                    {t("settings.sshAuthAgentHint")}
+                    {t("settings.sshAuthKeyboardInteractiveHint")}
                   </div>
                 </div>
                 <Check
                   aria-hidden="true"
                   className={`ml-auto h-4 w-4 shrink-0 text-emerald-500 transition-all duration-200 ${
-                    isAgentAuth ? "scale-100 opacity-100" : "scale-75 opacity-0"
+                    isKeyboardInteractiveAuth ? "scale-100 opacity-100" : "scale-75 opacity-0"
                   }`}
                 />
               </button>
@@ -786,10 +788,9 @@ function SshHostCard(props: {
   const { t } = useLocale();
   const showKeyPath = host.authType === "privateKey" && host.privateKeyPath.trim().length > 0;
   const showKeyConfigured = host.authType === "privateKey" && host.privateKeyConfigured;
-  const showAgentConfigured = host.authType === "agent";
   const showProxy =
     host.proxy.url.trim().length > 0 || host.proxy.port > 0 || host.proxy.passwordConfigured;
-  const hasMeta = showKeyPath || showKeyConfigured || showAgentConfigured;
+  const hasMeta = showKeyPath || showKeyConfigured;
   const hasFooter = hasMeta || resetStatus;
 
   const actions = (
@@ -843,7 +844,6 @@ function SshHostCard(props: {
     <div className="flex flex-wrap items-center gap-1.5">
       {showKeyPath ? <PromptTag label={host.privateKeyPath} muted /> : null}
       {showKeyConfigured ? <PromptTag label={t("settings.sshPrivateKeyConfigured")} muted /> : null}
-      {showAgentConfigured ? <PromptTag label={t("settings.sshAgentConfigured")} muted /> : null}
     </div>
   );
 

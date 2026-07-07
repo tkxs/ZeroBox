@@ -132,7 +132,6 @@ pub struct TerminalSshSessionInfo {
     pub project_path_key: String,
     pub cwd: String,
     pub running: bool,
-    pub host_id: String,
     pub sftp_enabled: bool,
 }
 

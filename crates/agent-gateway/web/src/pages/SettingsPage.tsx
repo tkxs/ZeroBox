@@ -8,6 +8,7 @@ import {
   Cpu,
   Key,
   Settings2,
+  Wrench,
   Zap,
 } from "../components/icons";
 
@@ -20,6 +21,7 @@ import { ProvidersSection } from "./settings/ProvidersSection";
 import { RemoteSection } from "./settings/RemoteSection";
 import { SshSection } from "./settings/SshSection";
 import { SystemSettingsForm } from "./settings/SystemSettingsForm";
+import { SystemToolsSection } from "./settings/SystemToolsSection";
 import type { SectionId, SettingsPageProps } from "./settings/types";
 
 function getSaveIndicator(state: SettingsPageProps["saveState"], t: (key: string) => string) {
@@ -91,6 +93,7 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "settings.groupGeneral",
     items: [
       { id: "system", icon: <Settings2 className="h-4 w-4" /> },
+      { id: "systemTools", icon: <Wrench className="h-4 w-4" /> },
       { id: "providers", icon: <Cpu className="h-4 w-4" /> },
       { id: "agents", icon: <BookOpen className="h-4 w-4" /> },
     ],
@@ -129,6 +132,7 @@ export function SettingsPage(props: SettingsPageProps) {
 
   const sectionLabels: Record<SectionId, string> = {
     system: t("settings.navSystem"),
+    systemTools: t("settings.navSystemTools"),
     providers: t("settings.navProviders"),
     agents: t("settings.navAgents"),
     ssh: t("settings.navSsh"),
@@ -169,6 +173,8 @@ export function SettingsPage(props: SettingsPageProps) {
         return <ProvidersSection settings={settings} setSettings={setSettings} />;
       case "system":
         return <SystemSettingsForm settings={settings} setSettings={setSettings} />;
+      case "systemTools":
+        return <SystemToolsSection settings={settings} setSettings={setSettings} />;
       case "hooks":
         return <HooksSection settings={settings} setSettings={setSettings} />;
       case "cron":

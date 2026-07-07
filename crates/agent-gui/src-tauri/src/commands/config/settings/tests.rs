@@ -391,18 +391,18 @@ mod tests {
     }
 
     #[test]
-    fn save_ssh_agent_host_clears_credential_secret_state() {
+    fn save_ssh_keyboard_interactive_host_clears_credential_secret_state() {
         let mut conn = open_memory_db();
         save_ssh(
             &mut conn,
             json!({
                 "hosts": [
                     {
-                        "id": "agent-prod",
-                        "name": "Agent Production",
+                        "id": "kbi-prod",
+                        "name": "Keyboard Interactive Production",
                         "host": "prod.example.com",
                         "username": "deploy",
-                        "authType": "agent",
+                        "authType": "keyboardInteractive",
                         "password": "old-password",
                         "passwordConfigured": true,
                         "privateKey": "old-key",
@@ -421,13 +421,13 @@ mod tests {
                 ]
             }),
         )
-        .expect("save agent ssh settings");
+        .expect("save keyboard-interactive ssh settings");
 
         let loaded = load_ssh(&conn)
             .expect("load ssh settings")
             .expect("ssh settings should exist");
         let host = &loaded["hosts"][0];
-        assert_eq!(host["authType"], "agent");
+        assert_eq!(host["authType"], "keyboardInteractive");
         assert_eq!(host["password"], "");
         assert_eq!(host["passwordConfigured"], false);
         assert_eq!(host["privateKey"], "");
@@ -449,6 +449,36 @@ mod tests {
     }
 
     #[test]
+    fn initialize_schema_migrates_legacy_agent_auth_to_password() {
+        let conn = open_memory_db();
+        conn.execute(
+            "
+            INSERT INTO ssh_settings (
+                host_id, name, description, host, port, username, auth_type,
+                password, password_configured, private_key, private_key_path,
+                private_key_configured, private_key_passphrase,
+                private_key_passphrase_configured, proxy_json, sort_index, updated_at
+            )
+            VALUES ('legacy', 'Legacy', '', 'legacy.example.com', 22, 'deploy', 'agent',
+                '', 0, '', '', 0, '', 0, '{}', 0, 0)
+            ",
+            [],
+        )
+        .expect("insert legacy agent host");
+
+        initialize_schema(&conn).expect("re-run schema initialization");
+
+        let auth_type: String = conn
+            .query_row(
+                "SELECT auth_type FROM ssh_settings WHERE host_id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated auth type");
+        assert_eq!(auth_type, "password");
+    }
+
+    #[test]
     fn ssh_patch_delete_preserves_concurrent_hosts_and_associations() {
         let mut conn = open_memory_db();
         save_ssh(
@@ -467,7 +497,7 @@ mod tests {
                         "name": "Staging",
                         "host": "staging.example.com",
                         "username": "deploy",
-                        "authType": "agent"
+                        "authType": "keyboardInteractive"
                     }
                 ],
                 "projectHostAssociations": {
@@ -621,7 +651,7 @@ mod tests {
                     "name": "Prod",
                     "host": "prod.example.com",
                     "username": "deploy",
-                    "authType": "agent"
+                    "authType": "keyboardInteractive"
                 }]
             }),
         )

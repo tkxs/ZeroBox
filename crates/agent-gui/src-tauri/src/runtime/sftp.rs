@@ -15,8 +15,7 @@ use crate::runtime::project_path::{
     project_path_key as normalize_project_path_key, project_path_keys_equal,
 };
 use crate::runtime::terminal::{
-    open_sftp_connection_for_host, TerminalSessionRegistry, TerminalSftpConnection,
-    TerminalSshSessionInfo,
+    TerminalSessionRegistry, TerminalSftpConnection, TerminalSshSessionInfo,
 };
 
 const TRANSFER_BUFFER_BYTES: usize = 64 * 1024;
@@ -107,9 +106,16 @@ pub struct SftpActionResponse {
     pub transfer: Option<SftpTransferState>,
 }
 
+struct SftpCachedConnection {
+    // Terminal SSH connection id the SFTP channel was opened on; a reconnect
+    // bumps the id and makes this cached channel dead.
+    connection_id: usize,
+    connection: Arc<tokio::sync::Mutex<TerminalSftpConnection>>,
+}
+
 pub struct SftpSessionRegistry {
     terminal_registry: Arc<TerminalSessionRegistry>,
-    sessions: Mutex<HashMap<String, Arc<tokio::sync::Mutex<TerminalSftpConnection>>>>,
+    sessions: Mutex<HashMap<String, SftpCachedConnection>>,
     transfers: Mutex<HashMap<String, Arc<SftpTransferTask>>>,
     transfer_states: Mutex<HashMap<String, SftpTransferState>>,
     app_handle: Mutex<Option<AppHandle>>,
@@ -653,12 +659,16 @@ impl SftpSessionRegistry {
         if session_id.is_empty() {
             return Err("session_id is required".to_string());
         }
+        // SFTP rides on the terminal session's authenticated connection; a
+        // cached channel from a previous connection (pre-reconnect) is dead.
+        let current_connection_id = self.terminal_registry.ssh_connection_id(&session_id)?;
         if let Some(existing) = self
             .sessions
             .lock()
             .map_err(|_| "SFTP session registry poisoned".to_string())?
             .get(&session_id)
-            .cloned()
+            .filter(|cached| cached.connection_id == current_connection_id)
+            .map(|cached| Arc::clone(&cached.connection))
         {
             return Ok(existing);
         }
@@ -670,13 +680,21 @@ impl SftpSessionRegistry {
         if !info.running {
             return Err("SSH session is not connected".to_string());
         }
-        let connection = Arc::new(tokio::sync::Mutex::new(
-            open_sftp_connection_for_host(&info.host_id).await?,
-        ));
+        let (connection, connection_id) = self
+            .terminal_registry
+            .open_ssh_sftp_session(&session_id)
+            .await?;
+        let connection = Arc::new(tokio::sync::Mutex::new(connection));
         self.sessions
             .lock()
             .map_err(|_| "SFTP session registry poisoned".to_string())?
-            .insert(session_id, Arc::clone(&connection));
+            .insert(
+                session_id,
+                SftpCachedConnection {
+                    connection_id,
+                    connection: Arc::clone(&connection),
+                },
+            );
         Ok(connection)
     }
 

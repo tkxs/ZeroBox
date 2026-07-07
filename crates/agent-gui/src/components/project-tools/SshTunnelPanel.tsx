@@ -76,7 +76,7 @@ function endpointLabel(host: SshHostConfig) {
 
 function authLabel(host: Pick<SshHostConfig, "authType">, t: (key: string) => string) {
   if (host.authType === "privateKey") return t("settings.sshAuthPrivateKey");
-  if (host.authType === "agent") return t("settings.sshAuthAgent");
+  if (host.authType === "keyboardInteractive") return t("settings.sshAuthKeyboardInteractive");
   return t("settings.sshAuthPassword");
 }
 
@@ -90,7 +90,7 @@ function hostHasProxy(host: SshHostConfig) {
 }
 
 export function hostSecretReady(host: SshHostConfig) {
-  if (host.authType === "agent") return true;
+  if (host.authType === "keyboardInteractive") return true;
   if (host.authType === "privateKey") {
     return (
       host.privateKey.trim().length > 0 ||
@@ -168,8 +168,6 @@ function HostMetaTags(props: { host: SshHostConfig }) {
     tags.push(host.privateKeyPath.trim());
   } else if (host.authType === "privateKey" && host.privateKeyConfigured) {
     tags.push(t("settings.sshPrivateKeyConfigured"));
-  } else if (host.authType === "agent") {
-    tags.push(t("settings.sshAgentConfigured"));
   }
   if (host.privateKeyPassphraseConfigured) {
     tags.push(t("settings.sshPrivateKeyPassphraseConfigured"));
@@ -264,6 +262,16 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
     if (canShowCreateButton || view !== "create") return;
     setView("list");
   }, [canShowCreateButton, view]);
+
+  // Create/list errors are transient feedback for the visible panel. Clearing
+  // on deactivation (not activation) keeps them from greeting the user on a
+  // later reopen while still surfacing failures that land while the tab is
+  // put away (e.g. an in-flight create that fails after switching tabs).
+  useEffect(() => {
+    if (active) return;
+    setCreateError(null);
+    setListError(null);
+  }, [active]);
 
   useEffect(() => {
     if (!active) return;
@@ -383,6 +391,18 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
     },
     [finishCreateFlow, onSessionSnapshot],
   );
+
+  // A failure from a previous create attempt is stale once the form is
+  // reopened or retargeted at another host.
+  const openCreateView = useCallback(() => {
+    setCreateError(null);
+    setView("create");
+  }, []);
+
+  const selectCreateHost = useCallback((hostId: string) => {
+    setCreateHostId(hostId);
+    setCreateError(null);
+  }, []);
 
   const toggleHost = (hostId: string) => {
     const current = associatedHostIds.filter((id) => hosts.some((host) => host.id === id));
@@ -776,7 +796,7 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                         return (
                           <DropdownMenuItem
                             key={host.id}
-                            onSelect={() => setCreateHostId(host.id)}
+                            onSelect={() => selectCreateHost(host.id)}
                             className={cn(
                               "group/item flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none transition-all data-[highlighted]:translate-x-0.5 data-[highlighted]:bg-emerald-500/10 data-[highlighted]:text-foreground",
                               selected && "bg-emerald-500/10 text-foreground",
@@ -917,7 +937,7 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:border-border/60 hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 title={t("projectTools.newSshTunnel")}
                 aria-label={t("projectTools.newSshTunnel")}
-                onClick={() => setView("create")}
+                onClick={openCreateView}
               >
                 <ConnectionIcon height="1em" />
               </button>
@@ -998,7 +1018,7 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                       variant="default"
                       size="sm"
                       className="h-7 rounded-lg px-2.5 text-xs"
-                      onClick={() => setView("create")}
+                      onClick={openCreateView}
                     >
                       {t("projectTools.newSshTunnel")}
                     </Button>
@@ -1199,6 +1219,7 @@ export function SshTunnelPanel(props: SshTunnelPanelProps) {
                 onChange={(event) => setPromptAnswer(event.currentTarget.value)}
                 className="mt-3 h-10 w-full rounded-lg border border-border/70 bg-background/80 px-3 text-[11px] text-foreground outline-none transition-colors placeholder:text-[11px] placeholder:text-muted-foreground/70 focus-visible:border-emerald-500/50 focus-visible:ring-1 focus-visible:ring-emerald-500/20"
                 type={prompt.answerEcho ? "text" : "password"}
+                aria-label={t("projectTools.sshTunnelAuthPromptTitle")}
                 autoFocus
               />
             ) : null}

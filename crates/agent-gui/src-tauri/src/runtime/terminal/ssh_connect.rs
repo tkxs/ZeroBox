@@ -14,8 +14,10 @@ use crate::commands::settings::{
 
 use super::*;
 
+/// An SFTP subsystem channel opened on a terminal SSH session's connection.
+/// It does not own the connection: the terminal session runtime does, and the
+/// SFTP session dies with it (reconnects invalidate it via the connection id).
 pub(crate) struct TerminalSftpConnection {
-    pub(crate) _handle: client::Handle<LiveAgentSshClient>,
     pub(crate) session: russh_sftp::client::SftpSession,
 }
 
@@ -66,7 +68,7 @@ pub(crate) enum ResolvedSshAuth {
         key: String,
         passphrase: Option<String>,
     },
-    Agent,
+    KeyboardInteractive,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

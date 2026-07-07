@@ -4,7 +4,7 @@ fn validate_ssh_auth_type(value: Option<&Value>, label: &str) -> Result<String, 
         .map(str::trim)
         .unwrap_or("password");
     match auth_type {
-        "password" | "privateKey" | "agent" => Ok(auth_type.to_string()),
+        "password" | "privateKey" | "keyboardInteractive" => Ok(auth_type.to_string()),
         other => Err(format!("{label}.authType 不支持：{other}")),
     }
 }
@@ -117,35 +117,35 @@ fn validate_and_normalize_ssh_host(
     let private_key = extract_optional_string(&host, "privateKey");
     let private_key_path = extract_optional_string(&host, "privateKeyPath");
     let private_key_passphrase = extract_optional_string(&host, "privateKeyPassphrase");
-    let is_agent_auth = auth_type == "agent";
-    let password = if is_agent_auth {
+    let is_keyboard_interactive_auth = auth_type == "keyboardInteractive";
+    let password = if is_keyboard_interactive_auth {
         String::new()
     } else {
         password
     };
-    let private_key = if is_agent_auth {
+    let private_key = if is_keyboard_interactive_auth {
         String::new()
     } else {
         private_key
     };
-    let private_key_path = if is_agent_auth {
+    let private_key_path = if is_keyboard_interactive_auth {
         String::new()
     } else {
         private_key_path
     };
-    let private_key_passphrase = if is_agent_auth {
+    let private_key_passphrase = if is_keyboard_interactive_auth {
         String::new()
     } else {
         private_key_passphrase
     };
-    let password_configured = !is_agent_auth
+    let password_configured = !is_keyboard_interactive_auth
         && (extract_bool_with_default(&host, "passwordConfigured", label, false)?
             || !password.is_empty());
-    let private_key_configured = !is_agent_auth
+    let private_key_configured = !is_keyboard_interactive_auth
         && (extract_bool_with_default(&host, "privateKeyConfigured", label, false)?
             || !private_key.is_empty()
             || !private_key_path.is_empty());
-    let private_key_passphrase_configured = !is_agent_auth
+    let private_key_passphrase_configured = !is_keyboard_interactive_auth
         && (extract_bool_with_default(&host, "privateKeyPassphraseConfigured", label, false)?
             || !private_key_passphrase.is_empty());
     let proxy = validate_and_normalize_ssh_proxy(host.get("proxy"), label)?;

@@ -5,6 +5,7 @@ export type SetSettingsFn = (updater: (prev: AppSettings) => AppSettings) => voi
 
 export type SectionId =
   | "system"
+  | "systemTools"
   | "providers"
   | "agents"
   | "ssh"

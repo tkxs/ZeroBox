@@ -100,6 +100,8 @@ pub(crate) fn initialize_schema(conn: &Connection) -> Result<(), String> {
             payload_json TEXT NOT NULL,
             updated_at INTEGER NOT NULL
         );
+        -- 'agent' 登录方式已移除，遗留配置回退为密码登录（与前端 normalize 的未知值兜底一致）
+        UPDATE ssh_settings SET auth_type = 'password' WHERE auth_type = 'agent';
         ",
     )
     .map_err(|e| format!("初始化设置表失败：{e}"))?;

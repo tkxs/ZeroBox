@@ -120,21 +120,22 @@ function redactSshSettingsForWebStorage(ssh: AppSettings["ssh"]): AppSettings["s
   return {
     projectHostAssociations: ssh.projectHostAssociations,
     hosts: ssh.hosts.map((host) => {
-      const isAgentAuth = host.authType === "agent";
+      const isKeyboardInteractiveAuth = host.authType === "keyboardInteractive";
       return {
         ...host,
         password: "",
         passwordConfigured:
-          !isAgentAuth && (host.password.trim().length > 0 || host.passwordConfigured === true),
+          !isKeyboardInteractiveAuth &&
+          (host.password.trim().length > 0 || host.passwordConfigured === true),
         privateKey: "",
         privateKeyConfigured:
-          !isAgentAuth &&
+          !isKeyboardInteractiveAuth &&
           (host.privateKey.trim().length > 0 ||
             host.privateKeyPath.trim().length > 0 ||
             host.privateKeyConfigured === true),
         privateKeyPassphrase: "",
         privateKeyPassphraseConfigured:
-          !isAgentAuth &&
+          !isKeyboardInteractiveAuth &&
           (host.privateKeyPassphrase.trim().length > 0 ||
             host.privateKeyPassphraseConfigured === true),
         proxy: {
@@ -168,10 +169,12 @@ export function collectSshSecretUpdates(
   for (const host of ssh.hosts) {
     const id = host.id.trim();
     if (!id) continue;
-    if (host.authType === "agent") continue;
-    const password = host.password.trim();
-    const privateKey = host.privateKey.trim();
-    const privateKeyPassphrase = host.privateKeyPassphrase.trim();
+    // keyboardInteractive hosts store no login secrets, but proxy credentials
+    // are independent of the auth type and must still sync.
+    const isKeyboardInteractiveAuth = host.authType === "keyboardInteractive";
+    const password = isKeyboardInteractiveAuth ? "" : host.password.trim();
+    const privateKey = isKeyboardInteractiveAuth ? "" : host.privateKey.trim();
+    const privateKeyPassphrase = isKeyboardInteractiveAuth ? "" : host.privateKeyPassphrase.trim();
     const proxyPassword = host.proxy.password.trim();
     const update: GatewaySshSecretUpdates[string] = {};
     if (password) update.password = password;
@@ -205,7 +208,7 @@ function collectChangedSshSecretUpdates(
 
   for (const host of next.hosts) {
     const id = host.id.trim();
-    if (!id || host.authType === "agent") continue;
+    if (!id) continue;
     const previous = previousHostsById.get(id);
     const update: GatewaySshSecretUpdates[string] = {};
 
@@ -561,22 +564,22 @@ function mergeSyncedSshSettings(
     hosts: normalized.hosts.map((host) => {
       const currentHost = currentById.get(host.id);
       const update = secretUpdates[host.id];
-      const isAgentAuth = host.authType === "agent";
+      const isKeyboardInteractiveAuth = host.authType === "keyboardInteractive";
       const hasPasswordUpdate = hasSecretUpdateField(update, "password");
       const hasPrivateKeyUpdate = hasSecretUpdateField(update, "privateKey");
       const hasPrivateKeyPassphraseUpdate = hasSecretUpdateField(update, "privateKeyPassphrase");
       const hasProxyPasswordUpdate = hasSecretUpdateField(update, "proxyPassword");
-      const password = isAgentAuth
+      const password = isKeyboardInteractiveAuth
         ? ""
         : hasPasswordUpdate
           ? readSecret(update?.password)
           : host.password.trim() || currentHost?.password || "";
-      const privateKey = isAgentAuth
+      const privateKey = isKeyboardInteractiveAuth
         ? ""
         : hasPrivateKeyUpdate
           ? readSecret(update?.privateKey)
           : host.privateKey.trim() || currentHost?.privateKey || "";
-      const privateKeyPassphrase = isAgentAuth
+      const privateKeyPassphrase = isKeyboardInteractiveAuth
         ? ""
         : hasPrivateKeyPassphraseUpdate
           ? readSecret(update?.privateKeyPassphrase)
@@ -588,7 +591,7 @@ function mergeSyncedSshSettings(
         ...host,
         password,
         passwordConfigured:
-          !isAgentAuth &&
+          !isKeyboardInteractiveAuth &&
           (hasPasswordUpdate
             ? password.length > 0
             : password.length > 0 ||
@@ -596,7 +599,7 @@ function mergeSyncedSshSettings(
               currentHost?.passwordConfigured === true),
         privateKey,
         privateKeyConfigured:
-          !isAgentAuth &&
+          !isKeyboardInteractiveAuth &&
           (hasPrivateKeyUpdate
             ? privateKey.length > 0 || host.privateKeyPath.trim().length > 0
             : privateKey.length > 0 ||
@@ -605,7 +608,7 @@ function mergeSyncedSshSettings(
               currentHost?.privateKeyConfigured === true),
         privateKeyPassphrase,
         privateKeyPassphraseConfigured:
-          !isAgentAuth &&
+          !isKeyboardInteractiveAuth &&
           (hasPrivateKeyPassphraseUpdate
             ? privateKeyPassphrase.length > 0
             : privateKeyPassphrase.length > 0 ||
@@ -678,7 +681,7 @@ function applySyncedSshPatch(
 
   for (const [id, update] of Object.entries(secretUpdates)) {
     const host = hostsById.get(id);
-    if (!host || host.authType === "agent") continue;
+    if (!host) continue;
     if (host.authType === "password" && hasSecretUpdateField(update, "password")) {
       host.password = readSecret(update.password);
       host.passwordConfigured = host.password.length > 0;

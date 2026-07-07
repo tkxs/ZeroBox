@@ -3,8 +3,6 @@ use russh::ChannelMsg;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::commands::settings::load_runtime_ssh_host;
-
 use super::*;
 
 pub(crate) async fn open_ssh_shell_channel(
@@ -34,61 +32,48 @@ pub(crate) async fn open_ssh_shell_channel(
     Ok(channel)
 }
 
-pub(crate) async fn open_sftp_connection_for_host(
-    ssh_host_id: &str,
-) -> Result<TerminalSftpConnection, String> {
-    let host_config = load_runtime_ssh_host(ssh_host_id)?
-        .ok_or_else(|| format!("SSH host not found: {}", ssh_host_id.trim()))?;
-    if host_config.host.trim().is_empty() {
-        return Err("SSH host is required".to_string());
-    }
-    if host_config.username.trim().is_empty() {
-        return Err("SSH username is required".to_string());
-    }
-
-    let auth = resolve_ssh_auth_material(&host_config)?;
-    let captured_host_key = Arc::new(tokio::sync::Mutex::new(None::<CapturedHostKey>));
-    let mut handle = match connect_ssh_handle(&host_config, Arc::clone(&captured_host_key)).await {
-        Ok(handle) => handle,
-        Err(error) => {
-            if captured_host_key.lock().await.is_some() {
-                return Err("SSH host key requires confirmation before opening SFTP".to_string());
-            }
-            return Err(error);
-        }
-    };
-
-    match authenticate_ssh_handle(&mut handle, &host_config, auth).await? {
-        SshAuthOutcome::Authenticated => {}
-        SshAuthOutcome::KeyboardInteractivePrompt(_) => {
-            let _ = handle
-                .disconnect(
-                    russh::Disconnect::ByApplication,
-                    "Keyboard-interactive SFTP authentication requires Bash prompt first",
-                    "en",
-                )
-                .await;
-            return Err(
-                "SSH keyboard-interactive authentication requires opening Bash first".to_string(),
-            );
-        }
+impl TerminalSessionRegistry {
+    /// Opens an SFTP subsystem channel on the SSH session's existing
+    /// authenticated connection. No re-authentication happens, so this works
+    /// for every auth type including keyboard-interactive. The returned
+    /// connection id identifies the underlying connection: after a reconnect
+    /// the id changes and cached SFTP sessions must be reopened.
+    pub(crate) async fn open_ssh_sftp_session(
+        &self,
+        session_id: &str,
+    ) -> Result<(TerminalSftpConnection, usize), String> {
+        let entry = self.entry(session_id)?;
+        let TerminalSessionBackend::Ssh { runtime } = &entry.backend else {
+            return Err("terminal session is not an SSH connection".to_string());
+        };
+        let connection_id = runtime.current_connection_id();
+        let channel = {
+            let handle = runtime.handle.lock().await;
+            let Some(handle) = handle.as_ref() else {
+                return Err("SSH connection is not connected".to_string());
+            };
+            handle
+                .channel_open_session()
+                .await
+                .map_err(|error| format!("SFTP channel open failed: {error}"))?
+        };
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|error| format!("SFTP subsystem request failed: {error}"))?;
+        let session = russh_sftp::client::SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|error| format!("SFTP session failed: {error}"))?;
+        Ok((TerminalSftpConnection { session }, connection_id))
     }
 
-    let channel = handle
-        .channel_open_session()
-        .await
-        .map_err(|error| format!("SFTP channel open failed: {error}"))?;
-    channel
-        .request_subsystem(true, "sftp")
-        .await
-        .map_err(|error| format!("SFTP subsystem request failed: {error}"))?;
-    let session = russh_sftp::client::SftpSession::new(channel.into_stream())
-        .await
-        .map_err(|error| format!("SFTP session failed: {error}"))?;
-    Ok(TerminalSftpConnection {
-        _handle: handle,
-        session,
-    })
+    pub(crate) fn ssh_connection_id(&self, session_id: &str) -> Result<usize, String> {
+        let entry = self.entry(session_id)?;
+        let TerminalSessionBackend::Ssh { runtime } = &entry.backend else {
+            return Err("terminal session is not an SSH connection".to_string());
+        };
+        Ok(runtime.current_connection_id())
+    }
 }
 
 pub(crate) async fn run_ssh_exec_channel(

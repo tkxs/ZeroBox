@@ -1,6 +1,4 @@
 use russh::client;
-use russh::keys::agent::client::{AgentClient, AgentStream};
-use russh::keys::agent::AgentIdentity;
 use russh::keys::ssh_key::HashAlg;
 use russh::keys::PrivateKeyWithHashAlg;
 use russh::MethodKind;
@@ -15,8 +13,8 @@ use super::*;
 pub(crate) fn resolve_ssh_auth_material(
     host: &RuntimeSshHostConfig,
 ) -> Result<ResolvedSshAuth, String> {
-    if host.auth_type == "agent" {
-        Ok(ResolvedSshAuth::Agent)
+    if host.auth_type == "keyboardInteractive" {
+        Ok(ResolvedSshAuth::KeyboardInteractive)
     } else if host.auth_type == "privateKey" {
         let key = if !host.private_key.trim().is_empty() {
             host.private_key.trim().to_string()
@@ -270,119 +268,50 @@ pub(crate) async fn authenticate_ssh_handle(
             }
             Err("SSH authentication failed".to_string())
         }
-        ResolvedSshAuth::Agent => authenticate_ssh_handle_with_agent(handle, host).await,
-    }
-}
-
-pub(crate) async fn authenticate_ssh_handle_with_agent(
-    handle: &mut client::Handle<LiveAgentSshClient>,
-    host: &RuntimeSshHostConfig,
-) -> Result<SshAuthOutcome, String> {
-    let mut agent = connect_ssh_agent().await?;
-    let identities = agent
-        .request_identities()
-        .await
-        .map_err(|error| format!("SSH agent identity lookup failed: {error}"))?;
-    if identities.is_empty() {
-        return Err("SSH agent has no identities".to_string());
-    }
-
-    let mut can_continue_with_kbi = false;
-    let mut last_error = String::new();
-    for identity in identities {
-        let result =
-            authenticate_ssh_agent_identity(handle, host.username.as_str(), &identity, &mut agent)
-                .await;
-        let result = match result {
-            Ok(result) => result,
-            Err(error) => {
-                last_error = error;
-                continue;
-            }
-        };
-        if result.success() {
-            return Ok(SshAuthOutcome::Authenticated);
-        }
-        can_continue_with_kbi |= auth_result_can_continue_with_kbi(&result);
-    }
-
-    if can_continue_with_kbi {
-        let response = handle
-            .authenticate_keyboard_interactive_start(host.username.as_str(), None::<String>)
-            .await
-            .map_err(|error| format!("SSH keyboard-interactive authentication failed: {error}"))?;
-        return continue_keyboard_interactive_auth(handle, response, None).await;
-    }
-
-    if last_error.is_empty() {
-        Err("SSH agent authentication failed".to_string())
-    } else {
-        Err(format!("SSH agent authentication failed: {last_error}"))
-    }
-}
-
-pub(crate) async fn authenticate_ssh_agent_identity(
-    handle: &mut client::Handle<LiveAgentSshClient>,
-    username: &str,
-    identity: &AgentIdentity,
-    agent: &mut AgentClient<Box<dyn AgentStream + Send + Unpin>>,
-) -> Result<client::AuthResult, String> {
-    match identity {
-        AgentIdentity::PublicKey { key, .. } => handle
-            .authenticate_publickey_with(username, key.clone(), Some(HashAlg::Sha256), agent)
-            .await
-            .map_err(|error| error.to_string()),
-        AgentIdentity::Certificate { certificate, .. } => handle
-            .authenticate_certificate_with(
-                username,
-                certificate.clone(),
-                Some(HashAlg::Sha256),
-                agent,
-            )
-            .await
-            .map_err(|error| error.to_string()),
-    }
-}
-
-pub(crate) async fn connect_ssh_agent(
-) -> Result<AgentClient<Box<dyn AgentStream + Send + Unpin>>, String> {
-    #[cfg(windows)]
-    {
-        let mut errors = Vec::new();
-        match AgentClient::connect_pageant().await {
-            Ok(agent) => return Ok(agent.dynamic()),
-            Err(error) => errors.push(format!("Pageant: {error}")),
-        }
-        if let Ok(sock) = std::env::var("SSH_AUTH_SOCK") {
-            let sock = sock.trim();
-            if !sock.is_empty() {
-                match AgentClient::connect_named_pipe(sock).await {
-                    Ok(agent) => return Ok(agent.dynamic()),
-                    Err(error) => errors.push(format!("SSH_AUTH_SOCK named pipe: {error}")),
+        ResolvedSshAuth::KeyboardInteractive => {
+            let response = handle
+                .authenticate_keyboard_interactive_start(host.username.as_str(), None::<String>)
+                .await
+                .map_err(|error| {
+                    format!("SSH keyboard-interactive authentication failed: {error}")
+                })?;
+            // Servers with keyboard-interactive disabled (e.g. sshd's
+            // `KbdInteractiveAuthentication no`) reject the method before any
+            // prompt round. Fall back to asking the user for the password
+            // interactively when the server still allows password auth.
+            if let client::KeyboardInteractiveAuthResponse::Failure {
+                remaining_methods, ..
+            } = &response
+            {
+                if remaining_methods.contains(&MethodKind::Password) {
+                    return Ok(SshAuthOutcome::KeyboardInteractivePrompt(
+                        password_fallback_prompt_data(host, false),
+                    ));
                 }
+                return Err(
+                    "SSH keyboard-interactive authentication is not supported by this server"
+                        .to_string(),
+                );
             }
+            continue_keyboard_interactive_auth(handle, response, None).await
         }
-        match AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await {
-            Ok(agent) => return Ok(agent.dynamic()),
-            Err(error) => errors.push(format!("OpenSSH named pipe: {error}")),
-        }
-        Err(format!(
-            "SSH agent is not available ({})",
-            errors.join("; ")
-        ))
     }
+}
 
-    #[cfg(unix)]
-    {
-        AgentClient::connect_env()
-            .await
-            .map(|agent| agent.dynamic())
-            .map_err(|error| format!("SSH agent is not available: {error}"))
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        Err("SSH agent is not supported on this platform".to_string())
+pub(crate) fn password_fallback_prompt_data(
+    host: &RuntimeSshHostConfig,
+    retry: bool,
+) -> KeyboardInteractivePromptData {
+    KeyboardInteractivePromptData {
+        name: String::new(),
+        instructions: if retry {
+            "Permission denied, please try again.".to_string()
+        } else {
+            String::new()
+        },
+        prompt: format!("{}@{}'s password:", host.username.trim(), host.host.trim()),
+        echo: false,
+        answer_mode: SshPromptAnswerMode::Password,
     }
 }
 
@@ -473,6 +402,7 @@ pub(crate) async fn continue_keyboard_interactive_auth(
                             instructions,
                             prompt: prompt.prompt,
                             echo: prompt.echo,
+                            answer_mode: SshPromptAnswerMode::KeyboardInteractive,
                         },
                     ));
                 }

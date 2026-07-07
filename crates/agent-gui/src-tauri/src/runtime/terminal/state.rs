@@ -150,7 +150,17 @@ pub(crate) enum PendingSshPrompt {
         title: String,
         size: TerminalSize,
         handle: client::Handle<LiveAgentSshClient>,
+        answer_mode: SshPromptAnswerMode,
     },
+}
+
+/// How the answer to an interactive SSH prompt must be submitted: as a
+/// keyboard-interactive INFO_RESPONSE, or as a plain password auth request
+/// (fallback for servers that reject the keyboard-interactive method).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SshPromptAnswerMode {
+    KeyboardInteractive,
+    Password,
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +169,7 @@ pub(crate) struct KeyboardInteractivePromptData {
     pub(crate) instructions: String,
     pub(crate) prompt: String,
     pub(crate) echo: bool,
+    pub(crate) answer_mode: SshPromptAnswerMode,
 }
 
 pub(crate) enum SshAuthOutcome {

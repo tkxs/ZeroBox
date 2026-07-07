@@ -127,7 +127,7 @@ fn redact_ssh_host_secret(host: Value) -> Result<Value, String> {
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or("password");
-    let is_agent_auth = auth_type == "agent";
+    let is_keyboard_interactive_auth = auth_type == "keyboardInteractive";
     let password_configured =
         match payload.remove("password") {
             Some(Value::String(value)) => !value.trim().is_empty(),
@@ -153,15 +153,15 @@ fn redact_ssh_host_secret(host: Value) -> Result<Value, String> {
     );
     payload.insert(
         "passwordConfigured".to_string(),
-        Value::Bool(!is_agent_auth && password_configured),
+        Value::Bool(!is_keyboard_interactive_auth && password_configured),
     );
     payload.insert(
         "privateKeyConfigured".to_string(),
-        Value::Bool(!is_agent_auth && private_key_configured),
+        Value::Bool(!is_keyboard_interactive_auth && private_key_configured),
     );
     payload.insert(
         "privateKeyPassphraseConfigured".to_string(),
-        Value::Bool(!is_agent_auth && private_key_passphrase_configured),
+        Value::Bool(!is_keyboard_interactive_auth && private_key_passphrase_configured),
     );
     if let Some(proxy) = payload.remove("proxy") {
         if !matches!(proxy, Value::Null) {

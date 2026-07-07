@@ -1,4 +1,5 @@
 use russh::client;
+use russh::MethodKind;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::time::timeout;
@@ -72,24 +73,38 @@ impl TerminalSessionRegistry {
                 title,
                 size,
                 mut handle,
-            } => {
-                let response = handle
-                    .authenticate_keyboard_interactive_respond(vec![answer.unwrap_or_default()])
+                answer_mode,
+            } => match answer_mode {
+                SshPromptAnswerMode::KeyboardInteractive => {
+                    let response = handle
+                        .authenticate_keyboard_interactive_respond(vec![answer.unwrap_or_default()])
+                        .await
+                        .map_err(|error| {
+                            format!("SSH keyboard-interactive response failed: {error}")
+                        })?;
+                    self.continue_ssh_keyboard_interactive(
+                        request,
+                        host_config,
+                        title,
+                        size,
+                        handle,
+                        response,
+                        None,
+                    )
                     .await
-                    .map_err(|error| {
-                        format!("SSH keyboard-interactive response failed: {error}")
-                    })?;
-                self.continue_ssh_keyboard_interactive(
-                    request,
-                    host_config,
-                    title,
-                    size,
-                    handle,
-                    response,
-                    None,
-                )
-                .await
-            }
+                }
+                SshPromptAnswerMode::Password => {
+                    self.continue_ssh_password_fallback(
+                        request,
+                        host_config,
+                        title,
+                        size,
+                        handle,
+                        answer.unwrap_or_default(),
+                    )
+                    .await
+                }
+            },
         }
     }
 
@@ -450,6 +465,71 @@ impl TerminalSessionRegistry {
         }
     }
 
+    /// Interactive password fallback: the server rejected the
+    /// keyboard-interactive method itself, so the prompt answer is submitted
+    /// as a regular password auth request instead of an INFO_RESPONSE.
+    pub(crate) async fn continue_ssh_password_fallback(
+        self: &Arc<Self>,
+        request: PendingSshConnectRequest,
+        host_config: RuntimeSshHostConfig,
+        title: String,
+        size: TerminalSize,
+        mut handle: client::Handle<LiveAgentSshClient>,
+        password: String,
+    ) -> Result<TerminalSshCreateResponse, String> {
+        let result = handle
+            .authenticate_password(host_config.username.as_str(), password)
+            .await
+            .map_err(|error| format!("SSH password authentication failed: {error}"))?;
+        if result.success() {
+            return self
+                .finish_create_ssh_session(request, host_config, title, size, handle)
+                .await;
+        }
+        // A second factor may still be requested via keyboard-interactive
+        // (partial success), otherwise re-prompt while the server keeps
+        // password auth open; the server enforces its own attempt limit.
+        if auth_result_can_continue_with_kbi(&result) {
+            let response = handle
+                .authenticate_keyboard_interactive_start(
+                    host_config.username.as_str(),
+                    None::<String>,
+                )
+                .await
+                .map_err(|error| {
+                    format!("SSH keyboard-interactive authentication failed: {error}")
+                })?;
+            return self
+                .continue_ssh_keyboard_interactive(
+                    request,
+                    host_config,
+                    title,
+                    size,
+                    handle,
+                    response,
+                    None,
+                )
+                .await;
+        }
+        if let client::AuthResult::Failure {
+            remaining_methods, ..
+        } = &result
+        {
+            if remaining_methods.contains(&MethodKind::Password) {
+                let prompt_data = password_fallback_prompt_data(&host_config, true);
+                return self.ssh_keyboard_interactive_response(
+                    request,
+                    host_config,
+                    title,
+                    size,
+                    handle,
+                    prompt_data,
+                );
+            }
+        }
+        Err("SSH password authentication failed".to_string())
+    }
+
     pub(crate) fn ssh_keyboard_interactive_response(
         self: &Arc<Self>,
         request: PendingSshConnectRequest,
@@ -484,6 +564,7 @@ impl TerminalSessionRegistry {
                     title,
                     size,
                     handle,
+                    answer_mode: prompt_data.answer_mode,
                 },
             );
         self.schedule_ssh_prompt_timeout(prompt_id);
@@ -589,7 +670,6 @@ impl TerminalSessionRegistry {
             project_path_key: record.project_path_key,
             cwd: record.cwd,
             running: record.running,
-            host_id: ssh.host_id,
             sftp_enabled: ssh.sftp_enabled,
         })
     }

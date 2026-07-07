@@ -70,7 +70,7 @@ export const RIGHT_DOCK_TOOL_KINDS = ["fileTree", "gitReview", "tunnel", "sshTun
 
 export type RightDockToolKind = (typeof RIGHT_DOCK_TOOL_KINDS)[number];
 
-export type RightDockTabKind = RightDockToolKind | "terminal";
+export type RightDockTabKind = RightDockToolKind | "terminal" | "backgroundTasks";
 
 export type RightDockToolTab = {
   openedAt: number;
@@ -177,7 +177,7 @@ export type AgentPromptTemplate = {
   enabled: boolean;
 };
 
-export type SshAuthType = "password" | "privateKey" | "agent";
+export type SshAuthType = "password" | "privateKey" | "keyboardInteractive";
 export type SshProxyType = "socks5" | "http";
 
 export type SshProxyConfig = {
@@ -1088,7 +1088,7 @@ export function normalizeAgentPromptTemplate(input: unknown): AgentPromptTemplat
 function normalizeSshAuthType(input: unknown): SshAuthType {
   switch (input) {
     case "privateKey":
-    case "agent":
+    case "keyboardInteractive":
       return input;
     default:
       return "password";
@@ -1132,18 +1132,20 @@ export function normalizeSshHostConfig(input: unknown): SshHostConfig {
   const name =
     typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : host || "未命名 SSH";
   const authType = normalizeSshAuthType(obj.authType);
-  const password = authType === "agent" ? "" : normalizeOptionalText(obj.password);
-  const privateKey = authType === "agent" ? "" : normalizeOptionalText(obj.privateKey);
-  const privateKeyPath = authType === "agent" ? "" : normalizeOptionalText(obj.privateKeyPath);
+  const password = authType === "keyboardInteractive" ? "" : normalizeOptionalText(obj.password);
+  const privateKey =
+    authType === "keyboardInteractive" ? "" : normalizeOptionalText(obj.privateKey);
+  const privateKeyPath =
+    authType === "keyboardInteractive" ? "" : normalizeOptionalText(obj.privateKeyPath);
   const privateKeyPassphrase =
-    authType === "agent" ? "" : normalizeOptionalText(obj.privateKeyPassphrase);
+    authType === "keyboardInteractive" ? "" : normalizeOptionalText(obj.privateKeyPassphrase);
   const passwordConfigured =
-    authType !== "agent" && (password.length > 0 || obj.passwordConfigured === true);
+    authType !== "keyboardInteractive" && (password.length > 0 || obj.passwordConfigured === true);
   const privateKeyConfigured =
-    authType !== "agent" &&
+    authType !== "keyboardInteractive" &&
     (privateKey.length > 0 || privateKeyPath.length > 0 || obj.privateKeyConfigured === true);
   const privateKeyPassphraseConfigured =
-    authType !== "agent" &&
+    authType !== "keyboardInteractive" &&
     (privateKeyPassphrase.length > 0 || obj.privateKeyPassphraseConfigured === true);
 
   return {

@@ -429,17 +429,17 @@ test("ssh settings sync redacts stored secrets and carries one-shot secret updat
   });
 });
 
-test("ssh agent hosts normalize without credential secrets or secret updates", () => {
+test("ssh keyboard-interactive hosts normalize without credential secrets or secret updates", () => {
   installWindow();
   const appSettings = settings.normalizeSettings({
     ssh: {
       hosts: [
         {
-          id: "agent-prod",
-          name: "Agent Production",
+          id: "kbi-prod",
+          name: "Keyboard Interactive Production",
           host: "prod.example.com",
           username: "deploy",
-          authType: "agent",
+          authType: "keyboardInteractive",
           password: "old-password",
           passwordConfigured: true,
           privateKey: "old-key",
@@ -460,7 +460,7 @@ test("ssh agent hosts normalize without credential secrets or secret updates", (
   });
 
   const host = appSettings.ssh.hosts[0];
-  assert.equal(host.authType, "agent");
+  assert.equal(host.authType, "keyboardInteractive");
   assert.equal(host.password, "");
   assert.equal(host.passwordConfigured, false);
   assert.equal(host.privateKey, "");
@@ -472,12 +472,36 @@ test("ssh agent hosts normalize without credential secrets or secret updates", (
   const payload = settingsSync.buildGatewaySettingsSyncPayload(appSettings, {
     includeProviderApiKeyUpdates: true,
   });
-  assert.equal(payload.sshSecretUpdates, undefined);
+  assert.deepEqual(payload.sshSecretUpdates, {
+    "kbi-prod": { proxyPassword: "proxy-password" },
+  });
   assert.equal(payload.ssh.hosts[0].passwordConfigured, false);
   assert.equal(payload.ssh.hosts[0].privateKeyConfigured, false);
   assert.equal(payload.ssh.hosts[0].privateKeyPassphraseConfigured, false);
   assert.equal(payload.ssh.hosts[0].proxy.password, "");
   assert.equal(payload.ssh.hosts[0].proxy.passwordConfigured, true);
+});
+
+test("legacy ssh agent hosts fall back to password auth", () => {
+  installWindow();
+  const appSettings = settings.normalizeSettings({
+    ssh: {
+      hosts: [
+        {
+          id: "legacy-agent",
+          name: "Legacy Agent",
+          host: "legacy.example.com",
+          username: "deploy",
+          authType: "agent",
+        },
+      ],
+    },
+  });
+
+  const host = appSettings.ssh.hosts[0];
+  assert.equal(host.authType, "password");
+  assert.equal(host.password, "");
+  assert.equal(host.passwordConfigured, false);
 });
 
 test("ssh settings sync merges one-shot secret updates into existing hosts", () => {

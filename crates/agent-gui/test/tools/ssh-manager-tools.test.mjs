@@ -438,6 +438,104 @@ test("SSHManager can require an existing session without implicitly creating one
   ]);
 });
 
+test("SSHManager never dials keyboard-interactive hosts itself", async () => {
+  const kbiHost = {
+    ...SSH_HOST,
+    id: "host-kbi",
+    name: "Jump",
+    authType: "keyboardInteractive",
+    password: "",
+    privateKey: "",
+    privateKeyPath: "",
+    privateKeyPassphrase: "",
+  };
+  const kbiSession = createSshSession({
+    id: "ssh-kbi-running",
+    ssh: { ...createSshSession().ssh, hostId: "host-kbi", authType: "keyboardInteractive" },
+  });
+  const invocations = [];
+  let listedSessions = [];
+  const loader = createTsModuleLoader({
+    mocks: {
+      "@tauri-apps/api/core": {
+        async invoke(command, args) {
+          invocations.push({ command, args });
+          if (command === "terminal_list") {
+            return { sessions: listedSessions };
+          }
+          if (command === "terminal_ssh_exec") {
+            return {
+              sessionId: args.session_id,
+              command: args.command,
+              exitCode: 0,
+              stdout: "ok\n",
+              stderr: "",
+              timedOut: false,
+            };
+          }
+          throw new Error(`unexpected invoke ${command}`);
+        },
+      },
+    },
+  });
+  const { createSSHManagerTools } = loader.loadModule("src/lib/tools/sshManagerTools.ts");
+  const bundle = createSSHManagerTools({
+    enabled: true,
+    runtimeScope: "chat",
+    workdir: "/workspace",
+    projectPathKey: "/workspace",
+    hosts: [kbiHost],
+    associatedHostIds: ["host-kbi"],
+  });
+
+  // create_session is refused outright, without touching the terminal runtime.
+  const created = await bundle.executeToolCall(
+    createToolCall({ action: "create_session", host_id: "host-kbi" }),
+  );
+  assert.equal(created.isError, true);
+  assert.match(created.content[0].text, /键盘交互/);
+  assert.deepEqual(invocations, []);
+
+  // exec without a running session errors instead of implicitly connecting.
+  const noSession = await bundle.executeToolCall(
+    createToolCall({ action: "exec", host_id: "host-kbi", command: "pwd" }),
+  );
+  assert.equal(noSession.isError, true);
+  assert.match(noSession.content[0].text, /键盘交互/);
+  assert.deepEqual(
+    invocations.map((call) => call.command),
+    ["terminal_list"],
+  );
+
+  // exec with a user-opened running session reuses it.
+  invocations.length = 0;
+  listedSessions = [kbiSession];
+  const reused = await bundle.executeToolCall(
+    createToolCall({ action: "exec", host_id: "host-kbi", command: "whoami" }),
+  );
+  assert.equal(reused.isError, false);
+  assert.deepEqual(
+    invocations.map((call) => call.command),
+    ["terminal_list", "terminal_ssh_exec"],
+  );
+  assert.equal(invocations[1].args.session_id, "ssh-kbi-running");
+  assert.equal(reused.details.session_reused, true);
+
+  // session_strategy=new never dials either.
+  invocations.length = 0;
+  const forcedNew = await bundle.executeToolCall(
+    createToolCall({
+      action: "exec",
+      host_id: "host-kbi",
+      session_strategy: "new",
+      command: "pwd",
+    }),
+  );
+  assert.equal(forcedNew.isError, true);
+  assert.match(forcedNew.content[0].text, /键盘交互/);
+  assert.deepEqual(invocations, []);
+});
+
 test("SSHManager rejects conflicting session_id and new session strategy", async () => {
   const invocations = [];
   const loader = createTsModuleLoader({

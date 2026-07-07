@@ -121,7 +121,7 @@ type ResolvedSshSession = {
 const SSH_MANAGER_TOOL: Tool = {
   name: "SSHManager",
   description:
-    'Manage SSH sessions and remote SFTP files for SSH hosts explicitly associated with the current project. Use host_id from list_hosts. If list_hosts reports credential=saved, LiveAgent already has the configured password/private key/passphrase; do not ask the user to paste credentials into chat, and call create_session, exec, or SFTP actions directly. If list_hosts reports credential=missing, ask the user to configure credentials in Settings > SSH instead of requesting secrets in chat. Default session strategy is reuse_or_create: exec and SFTP reuse the same running session for that host before LiveAgent creates a visible session. To intentionally run multiple SSH sessions, call create_session or set session_strategy="new", then use the returned session_id for follow-up operations. Use session_strategy="require_existing" when you want to fail instead of implicitly creating a session. Do not combine session_id with session_strategy="new". Authentication prompts, unknown host keys, changed host keys, and MFA must be completed by the user in the SSH Tunnel tab before retrying.',
+    'Manage SSH sessions and remote SFTP files for SSH hosts explicitly associated with the current project. Use host_id from list_hosts. If list_hosts reports credential=saved, LiveAgent already has the configured password/private key/passphrase; do not ask the user to paste credentials into chat, and call create_session, exec, or SFTP actions directly. If list_hosts reports credential=missing, ask the user to configure credentials in Settings > SSH instead of requesting secrets in chat. If list_hosts reports credential=interactive, the host uses keyboard-interactive login: SSHManager never connects such hosts itself — create_session fails, and exec/SFTP only reuse a session the user already opened; if none is running, ask the user to connect in the SSH Tunnel tab first. Default session strategy is reuse_or_create: exec and SFTP reuse the same running session for that host before LiveAgent creates a visible session. To intentionally run multiple SSH sessions, call create_session or set session_strategy="new", then use the returned session_id for follow-up operations. Use session_strategy="require_existing" when you want to fail instead of implicitly creating a session. Do not combine session_id with session_strategy="new". Authentication prompts, unknown host keys, changed host keys, and MFA must be completed by the user in the SSH Tunnel tab before retrying.',
   parameters: Type.Object({
     action: Type.Union(
       [
@@ -300,7 +300,7 @@ function normalizeSession(input: RawTerminalSession): SshManagerSessionSummary |
 }
 
 function hostCredentialConfigured(host: SshHostConfig) {
-  if (host.authType === "agent") return true;
+  if (host.authType === "keyboardInteractive") return true;
   if (host.authType === "privateKey") {
     return (
       host.privateKey.trim().length > 0 ||
@@ -322,7 +322,12 @@ function hostSummary(host: SshHostConfig) {
     port: host.port || 22,
     authType: host.authType,
     credentialConfigured,
-    credentialStatus: credentialConfigured ? "saved" : "missing",
+    credentialStatus:
+      host.authType === "keyboardInteractive"
+        ? "interactive"
+        : credentialConfigured
+          ? "saved"
+          : "missing",
   };
 }
 
@@ -336,6 +341,10 @@ function formatSessionLine(session: SshManagerSessionSummary) {
 
 function promptErrorMessage() {
   return "请先在 SSH 隧道 Tab 手动完成连接/信任/MFA 后重试。";
+}
+
+function keyboardInteractiveConnectErrorMessage() {
+  return "该主机使用键盘交互登录，SSHManager 不会自行发起连接；请先在 SSH 隧道 Tab 建立连接，再复用运行中的会话。";
 }
 
 function okResult(params: {
@@ -512,6 +521,12 @@ async function resolveSession(params: {
       throw new Error("No reusable SSH session exists for this host in the current project.");
     }
   }
+  // Keyboard-interactive login needs the user to answer server prompts, which
+  // the tool path cannot do: never dial such hosts, only reuse sessions the
+  // user already opened in the SSH Tunnel tab (handled above).
+  if (host.authType === "keyboardInteractive") {
+    throw new Error(keyboardInteractiveConnectErrorMessage());
+  }
   await params.onNewConnectionStarted?.();
   const session = await createSession({
     host,
@@ -580,6 +595,7 @@ async function executeSSHManager(
           ? [
               "Authorized SSH hosts:",
               "credential=saved means LiveAgent already has the configured SSH credential; use create_session directly and do not ask the user for that password/key.",
+              "credential=interactive means the host logs in via keyboard-interactive prompts: SSHManager will not connect it itself; ask the user to open the session in the SSH Tunnel tab, then reuse the running session for exec and SFTP.",
               ...hosts.map(formatHostLine),
             ].join("\n")
           : "No authorized SSH hosts.",
@@ -610,6 +626,9 @@ async function executeSSHManager(
       const host = allowedHosts.get(hostId);
       if (!host) {
         throw new Error("SSH host is not associated with the current project.");
+      }
+      if (host.authType === "keyboardInteractive") {
+        throw new Error(keyboardInteractiveConnectErrorMessage());
       }
       const title = normalizeOptionalString(args.title) || undefined;
       const cols = normalizeOptionalPositiveInt(args.cols, 20, 400);
