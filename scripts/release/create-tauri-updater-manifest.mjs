@@ -89,6 +89,13 @@ if (platforms["windows-x86_64-nsis"]) {
   platforms["windows-x86_64"] = platforms["windows-x86_64-msi"];
 }
 
+// The updater falls back to the bare `{os}-{arch}` key when the binary lacks
+// the bundler's bundle-type marker, and its unknown-bundle install path treats
+// the payload as an AppImage, so the bare key must point at the AppImage asset.
+if (platforms["linux-x86_64-appimage"]) {
+  platforms["linux-x86_64"] = platforms["linux-x86_64-appimage"];
+}
+
 if (Object.keys(platforms).length === 0) {
   console.error("No updater artifacts with matching .sig files were found.");
   process.exit(1);

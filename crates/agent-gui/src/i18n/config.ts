@@ -976,6 +976,9 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.aboutUpdateAvailableDesc": "该版本已通过 updater 签名清单校验，可以安装。",
     "settings.aboutUpToDate": "已是最新版本",
     "settings.aboutUpToDateDesc": "当前通道没有比本机更新的 Release。",
+    "settings.aboutManualUpdate": "发现新版本（需手动更新）",
+    "settings.aboutManualUpdateDesc":
+      "更新清单中没有匹配当前安装方式的自动更新包，请打开 Release 页面下载新版本手动安装。",
     "settings.aboutUpdaterNotConfigured": "更新未配置",
     "settings.aboutUpdaterNotConfiguredDesc":
       "Release 构建需要注入 updater 公钥后才能检查和安装更新。",
@@ -2698,6 +2701,9 @@ export const translations: Record<Locale, Record<string, string>> = {
       "This version passed updater manifest validation and can be installed.",
     "settings.aboutUpToDate": "Up to date",
     "settings.aboutUpToDateDesc": "No newer Release is available in the current channel.",
+    "settings.aboutManualUpdate": "New version available (manual update)",
+    "settings.aboutManualUpdateDesc":
+      "The update manifest has no auto-update package matching this installation. Open the Release page to download and install the new version manually.",
     "settings.aboutUpdaterNotConfigured": "Updater not configured",
     "settings.aboutUpdaterNotConfiguredDesc":
       "Release builds must embed the updater public key before updates can be checked and installed.",

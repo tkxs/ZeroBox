@@ -16,6 +16,7 @@ export type AppUpdateCheckResult = {
   releaseUrl?: string | null;
   repository: string;
   message?: string | null;
+  manualDownload?: boolean;
 };
 
 export type AppUpdateStatus =
