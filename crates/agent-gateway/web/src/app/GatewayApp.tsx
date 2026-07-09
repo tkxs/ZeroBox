@@ -1456,7 +1456,7 @@ export default function GatewayApp() {
   // transitions busy → idle (run finished), run the quiet enrich refresh so
   // the settled tail's user bubbles gain their persisted messageRef (edit
   // affordance) without waiting for a history upsert to race the idle gate.
-  // The upsert-while-idle path below stays as the backstop for the
+  // The upsert-while-idle effect below stays as the backstop for the
   // persist-after-done ordering.
   const previousDisplayedBusyRef = useRef({ id: "", busy: false });
   useEffect(() => {
@@ -1479,6 +1479,32 @@ export default function GatewayApp() {
     displayedConversationId,
     refreshDisplayedConversationHistorySnapshot,
   ]);
+
+  // The upsert-while-idle backstop: the desktop reports run completion before
+  // its post-run history flush lands, so the busy→idle enrich above can fetch
+  // a window that misses the reply. Once the flush lands the desktop publishes
+  // a history upsert — re-run the quiet enrich for the displayed conversation
+  // so a turn holding stale or adopted-nothing content converges without a
+  // re-open. The refresh itself re-checks displayed + idle around the fetch.
+  useEffect(() => {
+    if (!api) {
+      return;
+    }
+    return api.subscribeHistory((event) => {
+      if (event.kind !== "upsert") {
+        return;
+      }
+      const conversationIdValue = event.conversation_id.trim();
+      if (
+        !conversationIdValue ||
+        resolveVisibleConversationId(selectedHistoryIdRef.current, conversationIdRef.current) !==
+          conversationIdValue
+      ) {
+        return;
+      }
+      void refreshDisplayedConversationHistorySnapshot(conversationIdValue, api);
+    });
+  }, [api, refreshDisplayedConversationHistorySnapshot]);
 
   // --- Two-phase conversation open (controller deps) ------------------------
   // Phase 1: paint the message tail fast. Sets the selection state

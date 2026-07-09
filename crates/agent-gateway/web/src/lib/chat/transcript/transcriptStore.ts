@@ -84,6 +84,25 @@ function readEventClientRequestId(event: ConversationStreamEvent): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+// Assistant-side content carriers (everything applyDelta folds into a turn's
+// entries, except the slot-guarded user_message). Lifecycle events —
+// run_started/run_finished/run_queued/rebased/snapshot/tool_status — are not
+// content and must always apply.
+function isContentDeltaEventType(type: string): boolean {
+  switch (type) {
+    case "token":
+    case "thinking":
+    case "tool_call":
+    case "tool_call_delta":
+    case "tool_result":
+    case "hosted_search":
+    case "error":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export function createTranscriptStore(options?: {
   // A stray run_finished arrived for a non-active run while a run is
   // streaming: the local view of the run topology diverged from the gateway
@@ -640,6 +659,10 @@ export function createTranscriptStore(options?: {
     // A completed (re)subscribe is the convergence point: re-arm the
     // divergence signal so a later stray burst can trigger another resync.
     divergenceSignaled = false;
+    // Runs whose settled turn kept its streamed entries across a reset (the
+    // replay cannot rebuild them from the start): their replayed content
+    // deltas must not re-apply on top of the kept entries.
+    const suppressedReplayDeltaRuns = new Set<string>();
     if (result.reset) {
       // Seq continuity broke (gateway restart / buffer gap). Folded and
       // settled turns hold finished content with stable ids — fold, never
@@ -657,18 +680,45 @@ export function createTranscriptStore(options?: {
         }
         if (turn.phase === "streaming") {
           changed = true;
+          const replayRebuildsRun =
+            turn.runId !== "" &&
+            result.events.some(
+              (event) => event.type === "run_started" && readEventRunId(event) === turn.runId,
+            );
           if (result.activity && result.activity.runId === turn.runId) {
             // Still running server-side: the snapshot/replay rebuilds the
             // content into this same turn object. When the incoming snapshot
             // targets this run, keep the delta-built entries so the rebuild
             // can compare per-tool-call progress instead of starting blind.
-            return result.snapshot?.runId === turn.runId ? turn : { ...turn, entries: [] };
+            // Without a snapshot or a from-the-start replay the rebuild is
+            // partial: mark it stale so the post-run enrich adopts the
+            // persisted reply wholesale.
+            if (result.snapshot?.runId === turn.runId) {
+              return turn;
+            }
+            return { ...turn, entries: [], contentStale: !replayRebuildsRun };
           }
-          // The run ended while this client was away and the replay may
-          // not cover it any more: settle the turn (never strand it as a
-          // pending zombie) so the idle enrich can adopt its persisted
-          // reply from history.
-          return { ...turn, entries: [], phase: "settled" as const };
+          // The run ended while this client was away: settle the turn (never
+          // strand it as a pending zombie).
+          if (result.activity) {
+            // Superseded by the now-active run: rebuild this turn's content
+            // from history via the idle enrich after the active run settles
+            // (that busy window outlasts the desktop's post-run flush).
+            return { ...turn, entries: [], phase: "settled" as const };
+          }
+          // Nothing is running server-side, so the enrich fires immediately
+          // and can race the desktop's post-run flush. Clear the content only
+          // when the replay rebuilds it from the run's start — otherwise the
+          // kept streamed entries are the reply's only copy. They may still
+          // be incomplete, so they are marked stale: the enrich adopts the
+          // persisted reply wholesale once the flush lands.
+          if (replayRebuildsRun || turn.entries.length === 0) {
+            return { ...turn, entries: [], phase: "settled" as const };
+          }
+          if (turn.runId !== "") {
+            suppressedReplayDeltaRuns.add(turn.runId);
+          }
+          return { ...turn, phase: "settled" as const, contentStale: true };
         }
         return turn;
       });
@@ -704,6 +754,19 @@ export function createTranscriptStore(options?: {
       setToolStatus(null, false);
     }
     for (const event of result.events) {
+      if (
+        suppressedReplayDeltaRuns.size > 0 &&
+        isContentDeltaEventType(event.type) &&
+        suppressedReplayDeltaRuns.has(readEventRunId(event))
+      ) {
+        // The turn kept its streamed entries; re-applying a partial replay
+        // tail would double-append. Only advance the idempotency cursor.
+        const seq = readEventSeq(event);
+        if (seq > lastSeq) {
+          lastSeq = seq;
+        }
+        continue;
+      }
       applyOne(event);
     }
     lastSeq = Math.max(lastSeq, result.latestSeq);
