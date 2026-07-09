@@ -69,6 +69,46 @@ test("release updater manifest embeds generated notes and platform signatures", 
       manifest.platforms["windows-x86_64-nsis"],
     );
     assert.equal(manifest.platforms["linux-x86_64-appimage"].signature, "sig-linux");
+    assert.deepEqual(
+      manifest.platforms["linux-x86_64"],
+      manifest.platforms["linux-x86_64-appimage"],
+    );
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+test("release updater manifest omits generic Linux fallback without an AppImage", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "liveagent-release-"));
+  try {
+    writeAssetPair(dir, "LiveAgent-v9.9.9-Linux-x86_64.deb", "sig-linux-deb");
+
+    const outputPath = path.join(dir, "latest.json");
+    const result = spawnSync(
+      process.execPath,
+      [manifestScript, dir, outputPath],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          GITHUB_REPOSITORY: "Stack-Cairn/LiveAgent",
+          RELEASE_TAG: "v9.9.9",
+        },
+        encoding: "utf8",
+      },
+    );
+
+    assert.equal(
+      result.status,
+      0,
+      `manifest script failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+
+    const manifest = JSON.parse(readFileSync(outputPath, "utf8"));
+    assert.equal(manifest.platforms["linux-x86_64-deb"].signature, "sig-linux-deb");
+    // The updater's unknown-bundle install path treats the payload as an
+    // AppImage, so the bare key must never alias a deb/rpm package.
+    assert.equal(manifest.platforms["linux-x86_64"], undefined);
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }

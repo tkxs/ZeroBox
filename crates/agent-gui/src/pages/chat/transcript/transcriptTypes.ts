@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import type { MutableRefObject } from "react";
 
 import type {
   HistoryMessageRef,
@@ -8,13 +8,15 @@ import type { LiveTranscriptStore } from "../../../lib/chat/conversation/liveTra
 import type { PendingUploadedFile } from "../../../lib/chat/messages/uploadedFiles";
 import type { GitClient } from "../../../lib/git/types";
 import type { SectionId } from "../../settings/types";
+import type { ScrollFollowHandle } from "../hooks/useScrollFollow";
 
 export type ChatTranscriptProps = {
   conversationId: string;
   workspaceRoot?: string;
   gitClient?: GitClient | null;
-  scrollAreaRef: RefObject<HTMLDivElement | null>;
-  bottomRef: RefObject<HTMLDivElement | null>;
+  // ChatPage reaches the transcript's scroll-follow engine through this
+  // handle (force-follow on conversation reset / run start).
+  followRef: MutableRefObject<ScrollFollowHandle | null>;
   hasModels: boolean;
   historyItems: RenderTimelineItem[];
   isHistorySwitching: boolean;

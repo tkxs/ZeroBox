@@ -22,6 +22,7 @@ const loader = createWebModuleLoader({
         return { type: "Streamdown", props };
       },
       defaultRemarkPlugins: {},
+      defaultRehypePlugins: {},
     },
     "./ui/button": {
       Button(props) {

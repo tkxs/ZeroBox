@@ -163,52 +163,133 @@ export function getCurrentRightDockActiveTab(
   return visibleTabs.find((tab) => tab.id === effectiveActiveTabId)?.kind ?? "terminal";
 }
 
-export function getReorderedTabIdsFromPointer(
-  container: HTMLElement | null,
-  draggedId: string,
-  clientX: number,
-) {
-  if (!container) return null;
-  const tabElements = Array.from(
-    container.querySelectorAll<HTMLElement>("[data-project-tools-tab-id]"),
-  );
-  const currentIds = tabElements
-    .map((element) => element.dataset.projectToolsTabId ?? "")
-    .filter(Boolean);
-  if (!currentIds.includes(draggedId)) return null;
+// --- Tab drag engine ------------------------------------------------------
+// All drag math runs against an immutable slot snapshot taken when the drag
+// crosses the start threshold. The DOM order stays frozen for the whole
+// gesture (tabs move via transform only), so these functions are monotonic in
+// pointer position and can never oscillate the way live-DOM midpoint checks
+// did when neighbouring tabs had different widths.
 
-  const idsWithoutDragged = currentIds.filter((id) => id !== draggedId);
-  let insertIndex = idsWithoutDragged.length;
-  let visibleIndex = 0;
-  for (const element of tabElements) {
-    const id = element.dataset.projectToolsTabId ?? "";
-    if (!id || id === draggedId) continue;
-    const rect = element.getBoundingClientRect();
-    if (clientX < rect.left + rect.width / 2) {
-      insertIndex = visibleIndex;
-      break;
-    }
-    visibleIndex += 1;
+export type RightDockTabSlot = {
+  id: string;
+  // Content-coordinate left edge (independent of the strip's scrollLeft).
+  left: number;
+  width: number;
+};
+
+// Insertion index for the dragged tab among the remaining tabs, given the
+// dragged tab's clamped drag offset. A neighbour is crossed when the dragged
+// tab's LEADING edge passes that neighbour's frozen midpoint: the left edge
+// going leftwards, the right edge going rightwards. Comparing the dragged
+// CENTER against midpoints would leave the first/last slot unreachable
+// whenever the dragged tab is wider than the edge tab, because
+// clampTabDragOffset stops the dragged edges at the strip content bounds and
+// the center then can't travel past the edge tab's midpoint.
+export function computeTabDragInsertIndex(
+  slots: readonly RightDockTabSlot[],
+  draggedId: string,
+  draggedOffset: number,
+) {
+  const draggedIndex = slots.findIndex((slot) => slot.id === draggedId);
+  const dragged = slots[draggedIndex];
+  if (!dragged) return 0;
+  const draggedLeft = dragged.left + draggedOffset;
+  const draggedRight = draggedLeft + dragged.width;
+  let index = 0;
+  for (let slotIndex = 0; slotIndex < slots.length; slotIndex += 1) {
+    if (slotIndex === draggedIndex) continue;
+    const slot = slots[slotIndex];
+    if (!slot) continue;
+    const midpoint = slot.left + slot.width / 2;
+    const staysBefore =
+      slotIndex < draggedIndex ? midpoint <= draggedLeft : midpoint < draggedRight;
+    if (staysBefore) index += 1;
   }
-  return [
-    ...idsWithoutDragged.slice(0, insertIndex),
-    draggedId,
-    ...idsWithoutDragged.slice(insertIndex),
-  ];
+  return index;
 }
 
-export function autoScrollTabsForPointer(container: HTMLElement | null, clientX: number) {
-  if (!container) return;
-  const maxScrollLeft = container.scrollWidth - container.clientWidth;
-  if (maxScrollLeft <= 1) return;
-  const rect = container.getBoundingClientRect();
-  const edgeSize = 32;
-  const scrollStep = 18;
-  if (clientX < rect.left + edgeSize) {
-    container.scrollLeft = Math.max(0, container.scrollLeft - scrollStep);
-  } else if (clientX > rect.right - edgeSize) {
-    container.scrollLeft = Math.min(maxScrollLeft, container.scrollLeft + scrollStep);
+// Final id order produced by dropping the dragged tab at `insertIndex` among
+// the remaining ids.
+export function applyTabDragInsertIndex(
+  order: readonly string[],
+  draggedId: string,
+  insertIndex: number,
+) {
+  const others = order.filter((id) => id !== draggedId);
+  if (others.length === order.length) return [...order];
+  const index = Math.max(0, Math.min(others.length, insertIndex));
+  return [...others.slice(0, index), draggedId, ...others.slice(index)];
+}
+
+// translateX per non-dragged tab while the dragged tab hovers at
+// `insertIndex`: tabs between the origin and the target slot slide by one
+// dragged-tab width (plus gap) to open the drop gap.
+export function computeTabShiftOffsets(
+  slots: readonly RightDockTabSlot[],
+  draggedId: string,
+  insertIndex: number,
+  gap: number,
+) {
+  const draggedIndex = slots.findIndex((slot) => slot.id === draggedId);
+  const dragged = slots[draggedIndex];
+  if (!dragged) return {};
+  const step = dragged.width + gap;
+  const shifts: Record<string, number> = {};
+  let otherIndex = 0;
+  for (let index = 0; index < slots.length; index += 1) {
+    if (index === draggedIndex) continue;
+    const slot = slots[index];
+    if (!slot) continue;
+    if (index < draggedIndex && otherIndex >= insertIndex) {
+      shifts[slot.id] = step;
+    } else if (index > draggedIndex && otherIndex < insertIndex) {
+      shifts[slot.id] = -step;
+    }
+    otherIndex += 1;
   }
+  return shifts;
+}
+
+// Keeps the dragged tab inside the strip's content bounds.
+export function clampTabDragOffset(
+  slots: readonly RightDockTabSlot[],
+  draggedId: string,
+  offset: number,
+) {
+  const dragged = slots.find((slot) => slot.id === draggedId);
+  if (!dragged) return 0;
+  let minLeft = dragged.left;
+  let maxRight = dragged.left + dragged.width;
+  for (const slot of slots) {
+    minLeft = Math.min(minLeft, slot.left);
+    maxRight = Math.max(maxRight, slot.left + slot.width);
+  }
+  const minOffset = minLeft - dragged.left;
+  const maxOffset = maxRight - dragged.width - dragged.left;
+  return Math.min(maxOffset, Math.max(minOffset, offset));
+}
+
+export const TAB_AUTO_SCROLL_EDGE_PX = 40;
+export const TAB_AUTO_SCROLL_MAX_STEP_PX = 12;
+
+// Per-frame auto-scroll velocity while dragging: zero in the middle of the
+// strip, ramping up with pointer depth into either edge zone so the scroll
+// speed follows intent instead of stepping per pointermove event.
+export function computeTabAutoScrollVelocity(
+  containerLeft: number,
+  containerRight: number,
+  clientX: number,
+) {
+  const edge = Math.min(TAB_AUTO_SCROLL_EDGE_PX, Math.max(8, (containerRight - containerLeft) / 4));
+  if (clientX < containerLeft + edge) {
+    const depth = Math.min(1, (containerLeft + edge - clientX) / edge);
+    return -(1 + depth * (TAB_AUTO_SCROLL_MAX_STEP_PX - 1));
+  }
+  if (clientX > containerRight - edge) {
+    const depth = Math.min(1, (clientX - (containerRight - edge)) / edge);
+    return 1 + depth * (TAB_AUTO_SCROLL_MAX_STEP_PX - 1);
+  }
+  return 0;
 }
 
 export function reorderTabIdsByKeyboard(tabIds: readonly string[], tabId: string, key: string) {

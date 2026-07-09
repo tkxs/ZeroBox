@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ChevronRight, Loader2, Sparkles } from "../../../../components/icons";
 import { LiveMarkdown, Markdown } from "../../../../components/Markdown";
 import { useLocale } from "../../../../i18n";
 import type { UiRound } from "../../../../lib/chat/messages/uiMessages";
 import { normalizeLiveToolStatus, VIBING_STATUS } from "../../../../lib/chat/page/chatPageHelpers";
+import { useScrollFollow } from "../../hooks/useScrollFollow";
 import { groupRoundBlocks } from "./assistantBubbleUtils";
 import { HostedSearchGroupView } from "./HostedSearchGroupView";
 import { CompactingText, VibingText } from "./StatusText";
@@ -13,157 +14,24 @@ import { getNativeDisplayImagePayload, NativeDisplayImageBlock } from "./ToolIma
 import { ToolTraceGroup } from "./ToolTraceGroup";
 import { UsagePanel } from "./UsagePanel";
 
-const THINKING_SCROLL_BOTTOM_THRESHOLD_PX = 2;
-const THINKING_USER_SCROLL_INTENT_WINDOW_MS = 500;
-
-function getThinkingScrollBottomGap(viewport: HTMLElement) {
-  return Math.max(0, viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight);
-}
-
-function isThinkingScrollAtBottom(viewport: HTMLElement) {
-  return getThinkingScrollBottomGap(viewport) <= THINKING_SCROLL_BOTTOM_THRESHOLD_PX;
-}
-
-function hasThinkingScrollOverflow(viewport: HTMLElement) {
-  return viewport.scrollHeight - viewport.clientHeight > THINKING_SCROLL_BOTTOM_THRESHOLD_PX;
-}
-
-function useStickyBottomScroll(
-  viewportRef: { current: HTMLPreElement | null },
-  options: { enabled: boolean; contentKey: string },
-) {
-  const { enabled, contentKey } = options;
-  const shouldStickRef = useRef(true);
-  const scrollFrameRef = useRef<number | null>(null);
-  const userScrollIntentUntilRef = useRef(0);
-  const touchYRef = useRef<number | null>(null);
-  const previousContentKeyRef = useRef(contentKey);
-
-  const cancelScheduledScroll = useCallback(() => {
-    if (scrollFrameRef.current === null || typeof window === "undefined") {
-      scrollFrameRef.current = null;
-      return;
-    }
-    window.cancelAnimationFrame(scrollFrameRef.current);
-    scrollFrameRef.current = null;
-  }, []);
-
-  const scrollToBottom = useCallback(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    viewport.scrollTop = viewport.scrollHeight;
-    shouldStickRef.current = true;
-  }, [viewportRef]);
-
-  const scheduleScrollToBottom = useCallback(() => {
-    if (scrollFrameRef.current !== null || typeof window === "undefined") {
-      return;
-    }
-    scrollFrameRef.current = window.requestAnimationFrame(() => {
-      scrollFrameRef.current = null;
-      if (!shouldStickRef.current) return;
-      scrollToBottom();
-    });
-  }, [scrollToBottom]);
-
-  useEffect(() => {
-    if (!enabled) {
-      shouldStickRef.current = true;
-      cancelScheduledScroll();
-      return;
-    }
-
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-
-    shouldStickRef.current = true;
-    scheduleScrollToBottom();
-
-    const markUserScrollIntent = () => {
-      userScrollIntentUntilRef.current = Date.now() + THINKING_USER_SCROLL_INTENT_WINDOW_MS;
-    };
-
-    const hasRecentUserScrollIntent = () => Date.now() <= userScrollIntentUntilRef.current;
-
-    const syncStickyState = () => {
-      if (isThinkingScrollAtBottom(viewport)) {
-        shouldStickRef.current = true;
-      } else if (hasRecentUserScrollIntent()) {
-        shouldStickRef.current = false;
-      }
-    };
-
-    const handleScroll = () => {
-      syncStickyState();
-    };
-
-    const handleWheel = (event: WheelEvent) => {
-      markUserScrollIntent();
-      if (event.deltaY < 0 && hasThinkingScrollOverflow(viewport)) {
-        shouldStickRef.current = false;
-      }
-    };
-
-    const handleTouchStart = (event: TouchEvent) => {
-      touchYRef.current = event.touches[0]?.clientY ?? null;
-      markUserScrollIntent();
-    };
-
-    const handleTouchMove = (event: TouchEvent) => {
-      const nextY = event.touches[0]?.clientY ?? null;
-      const previousY = touchYRef.current;
-      markUserScrollIntent();
-      if (
-        hasThinkingScrollOverflow(viewport) &&
-        (previousY === null ||
-          nextY === null ||
-          nextY > previousY + 1 ||
-          !isThinkingScrollAtBottom(viewport))
-      ) {
-        shouldStickRef.current = false;
-      }
-      touchYRef.current = nextY;
-    };
-
-    const handlePointerDown = () => {
-      markUserScrollIntent();
-    };
-
-    viewport.addEventListener("scroll", handleScroll, { passive: true });
-    viewport.addEventListener("wheel", handleWheel, { passive: true });
-    viewport.addEventListener("touchstart", handleTouchStart, { passive: true });
-    viewport.addEventListener("touchmove", handleTouchMove, { passive: true });
-    viewport.addEventListener("pointerdown", handlePointerDown, { passive: true });
-
-    return () => {
-      viewport.removeEventListener("scroll", handleScroll);
-      viewport.removeEventListener("wheel", handleWheel);
-      viewport.removeEventListener("touchstart", handleTouchStart);
-      viewport.removeEventListener("touchmove", handleTouchMove);
-      viewport.removeEventListener("pointerdown", handlePointerDown);
-      cancelScheduledScroll();
-      touchYRef.current = null;
-    };
-  }, [cancelScheduledScroll, enabled, scheduleScrollToBottom, viewportRef]);
-
-  useEffect(() => {
-    const contentChanged = previousContentKeyRef.current !== contentKey;
-    previousContentKeyRef.current = contentKey;
-    if (!contentChanged || !enabled || !shouldStickRef.current) return;
-    scheduleScrollToBottom();
-  });
-
-  useEffect(() => () => cancelScheduledScroll(), [cancelScheduledScroll]);
-}
-
 function ThinkingBlock({ text, open }: { text: string; open?: boolean }) {
   const hasText = /\S/.test(text || "");
   const { t } = useLocale();
   const [isOpen, setIsOpen] = useState(typeof open === "boolean" ? open : false);
   const userInteractedRef = useRef(false);
-  const thinkingPreRef = useRef<HTMLPreElement | null>(null);
+  const [thinkingPre, setThinkingPre] = useState<HTMLPreElement | null>(null);
+  const [thinkingContent, setThinkingContent] = useState<HTMLElement | null>(null);
 
-  useStickyBottomScroll(thinkingPreRef, { enabled: isOpen && hasText, contentKey: text });
+  // Same engine as the transcript viewport, minus the reattach zone (there is
+  // no reserve band inside the <pre>). The ResizeObserver target must be the
+  // inner content element: once max-h-64 clamps the <pre>, its border box
+  // stops resizing while scrollHeight keeps growing.
+  useScrollFollow({
+    viewport: thinkingPre,
+    content: thinkingContent,
+    enabled: isOpen && hasText,
+    config: { reattachZonePx: 0 },
+  });
 
   useEffect(() => {
     if (!userInteractedRef.current && typeof open === "boolean") {
@@ -193,10 +61,12 @@ function ThinkingBlock({ text, open }: { text: string; open?: boolean }) {
       {isOpen ? (
         <div className="border-t border-border/30 px-3 pb-3 pt-2">
           <pre
-            ref={thinkingPreRef}
+            ref={setThinkingPre}
             className="thinking-block-pre max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-muted/40 p-3 text-[12.5px] leading-relaxed text-muted-foreground"
           >
-            {text}
+            <code ref={setThinkingContent} className="block font-[inherit]">
+              {text}
+            </code>
           </pre>
         </div>
       ) : null}

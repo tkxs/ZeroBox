@@ -120,7 +120,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.runtime.thinkingOn": "Thinking 已开启",
     "chat.runtime.thinkingOff": "Thinking 已关闭",
     "chat.runtime.thinkingUnavailable": "当前模型不支持 Thinking",
-    "chat.runtime.thinkingTooltip": "切换 Thinking",
+    "chat.runtime.thinkingTooltip": "Thinking",
     "chat.runtime.webSearchOn": "联网搜索已开启",
     "chat.runtime.webSearchOff": "联网搜索已关闭",
     "chat.runtime.webSearchTooltip": "联网搜索",
@@ -132,8 +132,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.runtime.tunnelSettingsSyncing": "正在同步桌面端设置",
     "chat.runtime.reasoning": "思考程度",
     "chat.emptyRound": "（无回复）",
-    "chat.inputHint": "输入消息，@ 引用文件，Enter 发送，Shift+Enter 换行",
-    "chat.inputHintWithSkills": "输入消息，@ 引用文件，$ 引用Skills，Enter 发送，Shift+Enter 换行",
+    "chat.inputHint": "输入消息，@ 引用文件，提示词可队列发送...",
+    "chat.inputHintWithSkills": "输入消息，@ 引用文件，$ 引用Skills，提示词可队列发送...",
     "chat.compactingContext": "正在压缩上下文",
     "chat.compactingContextWait": "正在压缩上下文，请稍候...",
     "chat.editMessage": "编辑消息",
@@ -583,6 +583,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "git.branchSelector.noRepositoryFound": "未找到 Git 仓库。",
     "git.branchSelector.localBranches": "本地分支",
     "git.branchSelector.remoteBranches": "远端分支",
+    "git.branchSelector.moreRemoteBranches": "还有 {count} 个远端分支未显示",
     "git.branchSelector.newBranchPlaceholder": "new-branch",
     "git.branchSelector.create": "创建",
     "git.branchSelector.createNewBranch": "创建新分支",
@@ -749,6 +750,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "workspaceFilePreview.zoomIn": "放大",
     "workspaceFilePreview.rotateImage": "旋转图片",
     "workspaceFilePreview.imageCounter": "{index} / {total}",
+    "workspaceFilePreview.imageUnavailable": "图片暂不可用",
 
     /* ── Settings Nav ── */
     "settings.navSystem": "系统设置",
@@ -975,6 +977,9 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.aboutUpdateAvailableDesc": "该版本已通过 updater 签名清单校验，可以安装。",
     "settings.aboutUpToDate": "已是最新版本",
     "settings.aboutUpToDateDesc": "当前通道没有比本机更新的 Release。",
+    "settings.aboutManualUpdate": "发现新版本（需手动更新）",
+    "settings.aboutManualUpdateDesc":
+      "更新清单中没有匹配当前安装方式的自动更新包，请打开 Release 页面下载新版本手动安装。",
     "settings.aboutUpdaterNotConfigured": "更新未配置",
     "settings.aboutUpdaterNotConfiguredDesc":
       "Release 构建需要注入 updater 公钥后才能检查和安装更新。",
@@ -2286,6 +2291,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "git.branchSelector.noRepositoryFound": "No Git repository found.",
     "git.branchSelector.localBranches": "Local Branches",
     "git.branchSelector.remoteBranches": "Remote Branches",
+    "git.branchSelector.moreRemoteBranches": "{count} more remote branches not shown",
     "git.branchSelector.newBranchPlaceholder": "new-branch",
     "git.branchSelector.create": "Create",
     "git.branchSelector.createNewBranch": "Create New Branch",
@@ -2456,6 +2462,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "workspaceFilePreview.zoomIn": "Zoom in",
     "workspaceFilePreview.rotateImage": "Rotate image",
     "workspaceFilePreview.imageCounter": "{index} / {total}",
+    "workspaceFilePreview.imageUnavailable": "Image unavailable",
 
     /* ── Settings Nav ── */
     "settings.navSystem": "System",
@@ -2696,6 +2703,9 @@ export const translations: Record<Locale, Record<string, string>> = {
       "This version passed updater manifest validation and can be installed.",
     "settings.aboutUpToDate": "Up to date",
     "settings.aboutUpToDateDesc": "No newer Release is available in the current channel.",
+    "settings.aboutManualUpdate": "New version available (manual update)",
+    "settings.aboutManualUpdateDesc":
+      "The update manifest has no auto-update package matching this installation. Open the Release page to download and install the new version manually.",
     "settings.aboutUpdaterNotConfigured": "Updater not configured",
     "settings.aboutUpdaterNotConfiguredDesc":
       "Release builds must embed the updater public key before updates can be checked and installed.",

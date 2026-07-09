@@ -124,6 +124,18 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
   const worktreeDiffSignatureRef = useRef("");
   const refreshInFlightRef = useRef(false);
   const historyInFlightRef = useRef(false);
+  // Coalescing markers: a silent reload that yields to an in-flight request
+  // must run again once that request settles — the in-flight one was issued
+  // earlier, so its response is staler than whatever triggered the reload.
+  // Dropping the reload outright would let the older response land last and
+  // stick (no poll exists to heal it in push environments).
+  const refreshQueuedRef = useRef(false);
+  const historyQueuedRef = useRef(false);
+  const diffQueuedRef = useRef(false);
+  // Invalidation hints arriving while a git mutation is running are parked
+  // here and flushed after the operation's own refresh, because the hint has
+  // already been consumed from the tracker and would otherwise be lost.
+  const pendingBusyInvalidationRef = useRef<WorkspaceInvalidationHint | null>(null);
   const operationNoticeIdRef = useRef(0);
   const statusLoadedRef = useRef(false);
   const historyLoadedRef = useRef(false);
@@ -144,6 +156,10 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
     diffInFlightRequestIdRef.current = 0;
     refreshInFlightRef.current = false;
     historyInFlightRef.current = false;
+    refreshQueuedRef.current = false;
+    historyQueuedRef.current = false;
+    diffQueuedRef.current = false;
+    pendingBusyInvalidationRef.current = null;
     statusSignatureRef.current = "";
     historySignatureRef.current = "";
     branchDiffSignatureRef.current = "";
@@ -243,6 +259,7 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
   const clearDiffs = useCallback(() => {
     diffRequestIdRef.current += 1;
     diffInFlightRequestIdRef.current = 0;
+    diffQueuedRef.current = false;
     diffPathRef.current = "";
     branchDiffSignatureRef.current = "";
     worktreeDiffSignatureRef.current = "";
@@ -255,15 +272,18 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
   const loadDiffForPath = useCallback(
     async (path: string, options: GitRefreshOptions = {}) => {
       const cleanPath = path.trim();
-      // Silent reloads never preempt anything in flight; interactive loads
-      // bump the request id below, so a pending silent result lands as a
-      // no-op instead of swallowing the user's request.
+      // Silent reloads never preempt anything in flight (preempting would
+      // strand the interactive spinner); instead they are coalesced into one
+      // queued rerun that fires after the in-flight request settles, so a
+      // post-mutation reload can never lose to an older in-flight response.
       if (options.silent && diffInFlightRequestIdRef.current !== 0) {
+        diffQueuedRef.current = true;
         return;
       }
       const requestId = diffRequestIdRef.current + 1;
       diffRequestIdRef.current = requestId;
       diffInFlightRequestIdRef.current = requestId;
+      diffQueuedRef.current = false;
       if (!options.silent) {
         setBranchError("");
         setError("");
@@ -330,6 +350,15 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
           if (!options.silent) {
             setDiffLoading(false);
           }
+          // Drain a coalesced silent reload. The id guard above proves no
+          // newer request replaced this one, so the selection is unchanged.
+          if (diffQueuedRef.current) {
+            diffQueuedRef.current = false;
+            const queuedPath = selectedPathRef.current;
+            if (queuedPath) {
+              void loadDiffForPath(queuedPath, { silent: true, force: false });
+            }
+          }
         }
       }
     },
@@ -340,14 +369,17 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
     async (options: GitRefreshOptions = {}) => {
       const silent = options.silent === true;
       const force = options.force !== false;
-      // A silent refresh yields to whatever is already in flight; an
-      // interactive one preempts it (the bumped request id turns the stale
-      // response into a no-op).
+      // A silent refresh yields to whatever is already in flight but queues a
+      // rerun for when it settles (the in-flight response is staler than this
+      // refresh's trigger); an interactive one preempts it (the bumped
+      // request id turns the stale response into a no-op).
       if (silent && refreshInFlightRef.current) {
+        refreshQueuedRef.current = true;
         return;
       }
       const requestId = ++refreshRequestIdRef.current;
       refreshInFlightRef.current = true;
+      refreshQueuedRef.current = false;
       if (!gitClient || !cwd.trim()) {
         statusSignatureRef.current = "";
         setState(emptyGitRepositoryState(cwd));
@@ -406,6 +438,12 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
           refreshInFlightRef.current = false;
           if (!silent) {
             setLoading(false);
+          }
+          // Drain a coalesced silent refresh that arrived while this request
+          // was in flight (id guard: no newer request replaced this one).
+          if (refreshQueuedRef.current) {
+            refreshQueuedRef.current = false;
+            void refresh({ silent: true, force: false });
           }
         }
       }
@@ -491,12 +529,20 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
       const silent = options.silent === true;
       const force = options.force !== false;
       // Silent refreshes and appends yield to an in-flight request; an
-      // interactive reload preempts it via the bumped request id.
+      // interactive reload preempts it via the bumped request id. A yielded
+      // silent reload is queued (not dropped): the in-flight response is
+      // staler than whatever triggered it.
       if ((silent || append) && historyInFlightRef.current) {
+        if (!append) {
+          historyQueuedRef.current = true;
+        }
         return;
       }
       const requestId = ++historyRequestIdRef.current;
       historyInFlightRef.current = true;
+      if (!append) {
+        historyQueuedRef.current = false;
+      }
       const skip = append ? historyCommitsRef.current.length : 0;
       // Reloads keep the already-paginated window: after "load more", a
       // refresh re-requests every loaded page instead of collapsing back to
@@ -524,6 +570,10 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
         setHistoryLoading(true);
         setHistoryError("");
         setHistoryLoadMoreError("");
+        // An interactive reload preempts any in-flight append (whose finally
+        // is skipped by the id guard), so its spinner must be cleared here or
+        // the load-more row stays stuck in its loading state.
+        setHistoryLoadingMore(false);
       }
       try {
         const response = await gitClient.log(cwd, {
@@ -554,6 +604,11 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
             ...existingCommits,
             ...response.commits.filter((commit) => !existingShas.has(commit.sha)),
           ];
+          // Keep the history signature in step with the widened window;
+          // otherwise the next silent reload of the same commits reads as a
+          // change and needlessly resets the list, the details cache and the
+          // selected commit diff.
+          historySignatureRef.current = gitHistorySignature(nextCommits, nextHistoryGraphState);
           historyCommitsRef.current = nextCommits;
           setHistoryCommits(nextCommits);
           setHistoryGraphState(nextHistoryGraphState);
@@ -635,6 +690,12 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
           } else if (!silent) {
             setHistoryLoading(false);
           }
+          // Drain a coalesced silent reload that arrived while this request
+          // was in flight (id guard: no newer request replaced this one).
+          if (historyQueuedRef.current) {
+            historyQueuedRef.current = false;
+            void loadHistory({ silent: true, force: false });
+          }
         }
       }
     },
@@ -686,9 +747,19 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
 
   const handleWorkspaceInvalidate = useCallback(
     (hint: WorkspaceInvalidationHint) => {
-      // Our own mutations refresh explicitly once they finish; while one is
-      // running the follow-up refresh covers the incoming activity.
-      if (busyRef.current) return;
+      // The hint is already consumed from the tracker, so while one of our
+      // own mutations is running it must be parked rather than dropped:
+      // activity landing after the operation's follow-up refresh sampled the
+      // repository would otherwise be lost for good. The park is flushed
+      // right after the operation finishes.
+      if (busyRef.current) {
+        const pending = pendingBusyInvalidationRef.current;
+        pendingBusyInvalidationRef.current = {
+          fs: (pending?.fs ?? false) || hint.fs,
+          git: (pending?.git ?? false) || hint.git,
+        };
+        return;
+      }
       if (reviewModeRef.current === "history" && hint.git) {
         void loadHistory({ silent: true, force: false });
       } else {
@@ -697,6 +768,13 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
     },
     [loadHistory, refresh],
   );
+
+  const flushPendingBusyInvalidation = useCallback(() => {
+    const pending = pendingBusyInvalidationRef.current;
+    if (!pending || busyRef.current) return;
+    pendingBusyInvalidationRef.current = null;
+    handleWorkspaceInvalidate(pending);
+  }, [handleWorkspaceInvalidate]);
 
   useWorkspaceInvalidation({
     client: workspaceActivityClient,
@@ -792,6 +870,7 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
         return false;
       } finally {
         finishGitOperation(name);
+        flushPendingBusyInvalidation();
       }
     },
     [
@@ -799,6 +878,7 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
       canWrite,
       cwd,
       finishGitOperation,
+      flushPendingBusyInvalidation,
       gitClient,
       loadHistory,
       openRemoteSetup,
@@ -851,12 +931,14 @@ export function useGitReviewData(options: UseGitReviewDataOptions) {
       return false;
     } finally {
       finishGitOperation(operationName);
+      flushPendingBusyInvalidation();
     }
   }, [
     beginGitOperation,
     canWrite,
     cwd,
     finishGitOperation,
+    flushPendingBusyInvalidation,
     gitClient,
     loadHistory,
     refresh,

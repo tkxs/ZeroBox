@@ -19,6 +19,12 @@ type SystemUploadedReadableFileInput = {
   contentBase64: string;
 };
 
+type UploadTarget = {
+  targetConversationId: string;
+  targetWorkdir: string;
+  remainingFileSlots: number;
+};
+
 type UsePendingUploadsParams = {
   isAgentMode: boolean;
   workdir: string;
@@ -62,29 +68,21 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
   } = params;
   const [pendingUploadedFiles, setPendingUploadedFiles] = useState<PendingUploadedFile[]>([]);
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
-  const activeUploadTasksRef = useRef(0);
+  const uploadTaskActiveRef = useRef(false);
+  const pendingUploadsByConversationRef = useRef(new Map<string, PendingUploadedFile[]>());
+  const pendingUploadedFilesRef = useRef(pendingUploadedFiles);
+  // Render-assigned mirrors: an in-flight import settling between a render
+  // and its effects must still see the latest mode/workdir when it decides
+  // whether its result is stale.
+  const isAgentModeRef = useRef(isAgentMode);
+  isAgentModeRef.current = isAgentMode;
+  const workdirRef = useRef(workdir);
+  workdirRef.current = workdir;
   const uploadContextRef = useRef<{
     isAgentMode: boolean;
     workdir: string;
     conversationId: string;
   } | null>(null);
-  const pendingUploadsByConversationRef = useRef(new Map<string, PendingUploadedFile[]>());
-  const pendingUploadedFilesRef = useRef(pendingUploadedFiles);
-
-  useEffect(() => {
-    pendingUploadedFilesRef.current = pendingUploadedFiles;
-  }, [pendingUploadedFiles]);
-
-  const beginUploadTask = useCallback(() => {
-    activeUploadTasksRef.current += 1;
-    setIsUploadingFiles(true);
-    return () => {
-      activeUploadTasksRef.current = Math.max(0, activeUploadTasksRef.current - 1);
-      if (activeUploadTasksRef.current === 0) {
-        setIsUploadingFiles(false);
-      }
-    };
-  }, []);
 
   const getPendingUploadsForConversation = useCallback(
     (conversationId: string) => {
@@ -100,6 +98,9 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
     [currentConversationIdRef],
   );
 
+  // The single write path: keeps the per-conversation map, the synchronous
+  // read ref, and the rendered state in step within the same tick. Every
+  // pending-uploads mutation (including the consumers') must go through it.
   const setPendingUploadsForConversation = useCallback(
     (conversationId: string, nextFiles: PendingUploadedFile[]) => {
       const targetConversationId = conversationId.trim();
@@ -152,7 +153,7 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
     setPendingUploadsForConversation(conversationId, []);
   }, [isAgentMode, workdir, conversationId, setPendingUploadsForConversation]);
 
-  const captureUploadTarget = useCallback(() => {
+  const captureUploadTarget = useCallback((): UploadTarget | null => {
     const targetConversationId = currentConversationIdRef.current.trim();
     if (!targetConversationId) {
       setErrorMessage("请先选择或创建会话后再上传文件。");
@@ -160,7 +161,6 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
     }
 
     const currentTargetUploads = getPendingUploadsForConversation(targetConversationId);
-    setPendingUploadsForConversation(targetConversationId, currentTargetUploads);
     const remainingFileSlots = Math.max(0, MAX_UPLOAD_FILES - currentTargetUploads.length);
     if (remainingFileSlots === 0) {
       addNotify("warning", `最多上传 ${MAX_UPLOAD_FILES} 个文件，已忽略多余文件`);
@@ -177,17 +177,24 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
     currentConversationIdRef,
     getPendingUploadsForConversation,
     setErrorMessage,
-    setPendingUploadsForConversation,
     workdir,
   ]);
 
   const appendImportedFiles = useCallback(
     (
-      conversationId: string,
+      target: UploadTarget,
       result: SystemPickReadableFilesResponse,
       emptySelectionMessage: string,
     ) => {
-      const targetConversationId = conversationId.trim();
+      const { targetConversationId, targetWorkdir } = target;
+      const isTargetDisplayed = currentConversationIdRef.current.trim() === targetConversationId;
+      // An import that settles after its upload context was invalidated must
+      // not resurrect cleared attachments: the files landed under the old
+      // workdir, so their relative paths are stale there.
+      if (!isAgentModeRef.current || (isTargetDisplayed && workdirRef.current !== targetWorkdir)) {
+        addNotify("warning", "上传目标已失效，已忽略本次导入的文件");
+        return;
+      }
       if (result.files.length === 0 && result.skipped.length === 0) {
         return;
       }
@@ -197,14 +204,13 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
         if (merged.length > MAX_UPLOAD_FILES) {
           addNotify("warning", `最多上传 ${MAX_UPLOAD_FILES} 个文件，已忽略多余文件`);
         }
-        const next = merged.slice(0, MAX_UPLOAD_FILES);
-        setPendingUploadsForConversation(targetConversationId, next);
-        if (currentConversationIdRef.current.trim() === targetConversationId) {
+        setPendingUploadsForConversation(targetConversationId, merged.slice(0, MAX_UPLOAD_FILES));
+        if (isTargetDisplayed) {
           composerRef.current?.focus();
         }
       }
       if (result.files.length === 0 && result.skipped.length > 0) {
-        if (currentConversationIdRef.current.trim() === targetConversationId) {
+        if (isTargetDisplayed) {
           setErrorMessage(`${emptySelectionMessage}：\n${result.skipped.join("\n")}`);
         } else {
           addNotify("warning", `${emptySelectionMessage}：\n${result.skipped.join("\n")}`);
@@ -225,58 +231,15 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
     ],
   );
 
-  const pickReadableFiles = useCallback(async () => {
-    if (activeUploadTasksRef.current > 0) {
-      addNotify("warning", "当前正在上传文件，请稍候");
-      return;
-    }
-    if (!isAgentMode) {
-      setErrorMessage("文件上传仅在 tools 模式可用。");
-      return;
-    }
-    if (!workdir) {
-      setErrorMessage("请先在项目栏选择或创建项目后再上传文件。");
-      return;
-    }
-
-    const uploadTarget = captureUploadTarget();
-    if (!uploadTarget) {
-      return;
-    }
-    const { targetConversationId, targetWorkdir, remainingFileSlots } = uploadTarget;
-
-    const finishUploadTask = beginUploadTask();
-    try {
-      const result = await invoke<SystemPickReadableFilesResponse>("system_pick_readable_files", {
-        workdir: targetWorkdir,
-        maxFiles: remainingFileSlots,
-      });
-      appendImportedFiles(targetConversationId, result, "所选文件均不受当前 Read 支持");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (currentConversationIdRef.current.trim() === targetConversationId) {
-        setErrorMessage(message || "导入文件失败");
-      } else {
-        addNotify("warning", message || "导入文件失败");
-      }
-    } finally {
-      finishUploadTask();
-    }
-  }, [
-    addNotify,
-    appendImportedFiles,
-    beginUploadTask,
-    captureUploadTarget,
-    currentConversationIdRef,
-    isAgentMode,
-    setErrorMessage,
-    workdir,
-  ]);
-
-  const importReadableFilePaths = useCallback(
-    async (paths: string[]) => {
-      if (paths.length === 0) return;
-      if (activeUploadTasksRef.current > 0) {
+  // Shared import skeleton: single-flight guard, mode/workdir preconditions,
+  // busy state, result merge, and error routing to the owning conversation.
+  const runUploadTask = useCallback(
+    async (task: {
+      emptySelectionMessage: string;
+      errorFallback: string;
+      importer: (target: UploadTarget) => Promise<SystemPickReadableFilesResponse>;
+    }) => {
+      if (uploadTaskActiveRef.current) {
         addNotify("warning", "当前正在上传文件，请稍候");
         return;
       }
@@ -293,30 +256,27 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
       if (!uploadTarget) {
         return;
       }
-      const { targetConversationId, targetWorkdir, remainingFileSlots } = uploadTarget;
 
-      const finishUploadTask = beginUploadTask();
+      uploadTaskActiveRef.current = true;
+      setIsUploadingFiles(true);
       try {
-        const result = await invoke<SystemPickReadableFilesResponse>(
-          "system_import_readable_file_paths",
-          { workdir: targetWorkdir, paths, maxFiles: remainingFileSlots },
-        );
-        appendImportedFiles(targetConversationId, result, "拖入文件均不受当前 Read 支持");
+        const result = await task.importer(uploadTarget);
+        appendImportedFiles(uploadTarget, result, task.emptySelectionMessage);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (currentConversationIdRef.current.trim() === targetConversationId) {
-          setErrorMessage(message || "导入文件失败");
+        if (currentConversationIdRef.current.trim() === uploadTarget.targetConversationId) {
+          setErrorMessage(message || task.errorFallback);
         } else {
-          addNotify("warning", message || "导入文件失败");
+          addNotify("warning", message || task.errorFallback);
         }
       } finally {
-        finishUploadTask();
+        uploadTaskActiveRef.current = false;
+        setIsUploadingFiles(false);
       }
     },
     [
       addNotify,
       appendImportedFiles,
-      beginUploadTask,
       captureUploadTarget,
       currentConversationIdRef,
       isAgentMode,
@@ -325,65 +285,62 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
     ],
   );
 
+  const pickReadableFiles = useCallback(
+    () =>
+      runUploadTask({
+        emptySelectionMessage: "所选文件均不受当前 Read 支持",
+        errorFallback: "导入文件失败",
+        importer: ({ targetWorkdir, remainingFileSlots }) =>
+          invoke<SystemPickReadableFilesResponse>("system_pick_readable_files", {
+            workdir: targetWorkdir,
+            maxFiles: remainingFileSlots,
+          }),
+      }),
+    [runUploadTask],
+  );
+
+  const importReadableFilePaths = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) return;
+      await runUploadTask({
+        emptySelectionMessage: "拖入文件均不受当前 Read 支持",
+        errorFallback: "导入文件失败",
+        importer: ({ targetWorkdir, remainingFileSlots }) =>
+          invoke<SystemPickReadableFilesResponse>("system_import_readable_file_paths", {
+            workdir: targetWorkdir,
+            paths,
+            maxFiles: remainingFileSlots,
+          }),
+      });
+    },
+    [runUploadTask],
+  );
+
   const importReadableFiles = useCallback(
     async (files: File[]) => {
       if (files.length === 0) return;
-      if (activeUploadTasksRef.current > 0) {
-        addNotify("warning", "当前正在上传文件，请稍候");
-        return;
-      }
-      if (!isAgentMode) {
-        setErrorMessage("文件上传仅在 tools 模式可用。");
-        return;
-      }
-      if (!workdir) {
-        setErrorMessage("请先在项目栏选择或创建项目后再上传文件。");
-        return;
-      }
-
-      const uploadTarget = captureUploadTarget();
-      if (!uploadTarget) {
-        return;
-      }
-      const { targetConversationId, targetWorkdir, remainingFileSlots } = uploadTarget;
-
-      const importBatch = files.slice(0, remainingFileSlots);
-      const ignoredForLimit = files.length - importBatch.length;
-      const finishUploadTask = beginUploadTask();
-      try {
-        const uploadFiles = await Promise.all(importBatch.map(fileToUploadInput));
-        const result = await invoke<SystemPickReadableFilesResponse>(
-          "system_import_uploaded_readable_files",
-          { workdir: targetWorkdir, files: uploadFiles, maxFiles: remainingFileSlots },
-        );
-        appendImportedFiles(targetConversationId, result, "剪贴板文件均不受当前 Read 支持");
-        if (ignoredForLimit > 0) {
-          addNotify(
-            "warning",
-            `最多上传 ${MAX_UPLOAD_FILES} 个文件，已忽略 ${ignoredForLimit} 个额外文件`,
-          );
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (currentConversationIdRef.current.trim() === targetConversationId) {
-          setErrorMessage(message || "导入剪贴板文件失败");
-        } else {
-          addNotify("warning", message || "导入剪贴板文件失败");
-        }
-      } finally {
-        finishUploadTask();
-      }
+      await runUploadTask({
+        emptySelectionMessage: "剪贴板文件均不受当前 Read 支持",
+        errorFallback: "导入剪贴板文件失败",
+        importer: async ({ targetWorkdir, remainingFileSlots }) => {
+          const importBatch = files.slice(0, remainingFileSlots);
+          const ignoredForLimit = files.length - importBatch.length;
+          if (ignoredForLimit > 0) {
+            addNotify(
+              "warning",
+              `最多上传 ${MAX_UPLOAD_FILES} 个文件，已忽略 ${ignoredForLimit} 个额外文件`,
+            );
+          }
+          const uploadFiles = await Promise.all(importBatch.map(fileToUploadInput));
+          return invoke<SystemPickReadableFilesResponse>("system_import_uploaded_readable_files", {
+            workdir: targetWorkdir,
+            files: uploadFiles,
+            maxFiles: remainingFileSlots,
+          });
+        },
+      });
     },
-    [
-      addNotify,
-      appendImportedFiles,
-      beginUploadTask,
-      captureUploadTarget,
-      currentConversationIdRef,
-      isAgentMode,
-      setErrorMessage,
-      workdir,
-    ],
+    [addNotify, runUploadTask],
   );
 
   const removePendingUpload = useCallback(
@@ -400,8 +357,8 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
   return {
     isUploadingFiles,
     pendingUploadedFiles,
-    setPendingUploadedFiles,
-    pendingUploadsByConversationRef,
+    getPendingUploadsForConversation,
+    setPendingUploadsForConversation,
     pickReadableFiles,
     importReadableFilePaths,
     importReadableFiles,

@@ -19,9 +19,8 @@ type UseEditResendParams = {
   isConversationHydrating: boolean;
   isConversationHydrationFailed: boolean;
   currentConversationIdRef: MutableRefObject<string>;
-  pendingUploadsByConversationRef: MutableRefObject<Map<string, PendingUploadedFile[]>>;
   composerRef: MutableRefObject<MentionComposerHandle | null>;
-  setPendingUploadedFiles: (files: PendingUploadedFile[]) => void;
+  setPendingUploadsForConversation: (conversationId: string, files: PendingUploadedFile[]) => void;
   updateConversationRuntimeEntry: (
     conversationId: string,
     updater: (prev: ConversationRuntimeEntry) => ConversationRuntimeEntry,
@@ -45,9 +44,8 @@ export function useEditResend(params: UseEditResendParams) {
     isConversationHydrating,
     isConversationHydrationFailed,
     currentConversationIdRef,
-    pendingUploadsByConversationRef,
     composerRef,
-    setPendingUploadedFiles,
+    setPendingUploadsForConversation,
     updateConversationRuntimeEntry,
     invalidateSubagentsForConversation,
     sendActionRef,
@@ -78,15 +76,7 @@ export function useEditResend(params: UseEditResendParams) {
           }).then(() => undefined);
         },
       };
-      if (uploadedFiles.length > 0) {
-        pendingUploadsByConversationRef.current.set(
-          currentConversationIdRef.current,
-          uploadedFiles,
-        );
-      } else {
-        pendingUploadsByConversationRef.current.delete(currentConversationIdRef.current);
-      }
-      setPendingUploadedFiles(uploadedFiles);
+      setPendingUploadsForConversation(currentConversationIdRef.current, uploadedFiles);
       composerRef.current?.clear();
       updateConversationRuntimeEntry(currentConversationIdRef.current, (prev) => ({
         ...prev,
@@ -100,8 +90,7 @@ export function useEditResend(params: UseEditResendParams) {
       isConversationHydrationFailed,
       isConversationHydrating,
       isSending,
-      pendingUploadsByConversationRef,
-      setPendingUploadedFiles,
+      setPendingUploadsForConversation,
       invalidateSubagentsForConversation,
       updateConversationRuntimeEntry,
     ],

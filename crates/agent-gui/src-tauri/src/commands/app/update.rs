@@ -26,6 +26,7 @@ pub struct AppUpdateCheckResponse {
     release_url: Option<String>,
     repository: String,
     message: Option<String>,
+    manual_download: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -91,6 +92,16 @@ fn release_channel(release: &SelectedRelease) -> AppUpdateChannel {
 
 fn version_from_tag(tag_name: &str) -> String {
     tag_name.trim().trim_start_matches('v').to_string()
+}
+
+fn is_newer_version(remote: &str, current: &str) -> bool {
+    match (
+        semver::Version::parse(remote),
+        semver::Version::parse(current),
+    ) {
+        (Ok(remote), Ok(current)) => remote > current,
+        _ => !remote.is_empty() && remote != current,
+    }
 }
 
 fn github_url_with_segments<'a>(
@@ -163,7 +174,7 @@ fn release_link_from_attributes(element: &BytesStart<'_>) -> Result<Option<Strin
         let attr =
             attr.map_err(|error| format!("failed to parse release feed link attribute: {error}"))?;
         let value = attr
-            .decode_and_unescape_value(element.decoder())
+            .decoded_and_normalized_value(quick_xml::XmlVersion::default(), element.decoder())
             .map_err(|error| format!("failed to decode release feed link attribute: {error}"))?
             .into_owned();
         match attr.key.as_ref() {
@@ -338,6 +349,7 @@ fn no_update_response(
         release_url: None,
         repository,
         message: None,
+        manual_download: false,
     }
 }
 
@@ -363,7 +375,25 @@ fn response_for_release(
         release_url: release.html_url.clone(),
         repository,
         message: None,
+        manual_download: false,
     }
+}
+
+/// The manifest has no `platforms` entry matching this install format (for
+/// example a Linux binary without the bundler's bundle-type marker looks up
+/// the bare `linux-x86_64` key). Auto-update cannot proceed, but the release
+/// info from the feed still tells the user whether a newer version exists.
+fn missing_platform_response(
+    app: &AppHandle,
+    repository: String,
+    release: &SelectedRelease,
+    error: tauri_plugin_updater::Error,
+) -> AppUpdateCheckResponse {
+    let mut response = response_for_release(app, repository, release, false, None, None, None);
+    response.manual_download =
+        is_newer_version(&version_from_tag(&release.tag_name), &current_version(app));
+    response.message = Some(error.to_string());
+    response
 }
 
 async fn select_release_manifest(
@@ -448,10 +478,16 @@ pub async fn app_update_check(
         ));
     };
     let updater = build_updater(&app, &release.manifest_url)?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|error| format!("failed to check for updates: {error}"))?;
+    let update = match updater.check().await {
+        Ok(update) => update,
+        Err(
+            error @ (tauri_plugin_updater::Error::TargetNotFound(_)
+            | tauri_plugin_updater::Error::TargetsNotFound(_)),
+        ) => {
+            return Ok(missing_platform_response(&app, repository, &release, error));
+        }
+        Err(error) => return Err(format!("failed to check for updates: {error}")),
+    };
 
     Ok(match update {
         Some(update) => response_for_release(
@@ -486,10 +522,16 @@ pub async fn app_update_install(
         ));
     };
     let updater = build_updater(&app, &release.manifest_url)?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|error| format!("failed to check for updates: {error}"))?;
+    let update = match updater.check().await {
+        Ok(update) => update,
+        Err(
+            error @ (tauri_plugin_updater::Error::TargetNotFound(_)
+            | tauri_plugin_updater::Error::TargetsNotFound(_)),
+        ) => {
+            return Ok(missing_platform_response(&app, repository, &release, error));
+        }
+        Err(error) => return Err(format!("failed to check for updates: {error}")),
+    };
 
     let Some(update) = update else {
         return Ok(response_for_release(
@@ -604,6 +646,19 @@ mod tests {
             "https://github.com/Stack-Cairn/LiveAgent/releases/download/v0.1.2-beta.1/latest.json"
         );
         assert!(selected[0].prerelease);
+    }
+
+    #[test]
+    fn is_newer_version_compares_semver() {
+        assert!(is_newer_version("0.1.2", "0.1.1"));
+        assert!(!is_newer_version("0.1.1", "0.1.1"));
+        assert!(!is_newer_version("0.1.0", "0.1.1"));
+        // Semver prereleases sort below their release version.
+        assert!(!is_newer_version("0.1.2-beta.1", "0.1.2"));
+        assert!(is_newer_version("0.1.2-beta.1", "0.1.1"));
+        // Unparseable versions fall back to inequality.
+        assert!(is_newer_version("nightly-2", "nightly-1"));
+        assert!(!is_newer_version("", "0.1.1"));
     }
 
     #[test]

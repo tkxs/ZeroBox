@@ -1233,15 +1233,49 @@
     --tw-exit-translate-y: initial;
   }
 
+  /* `backwards` (not `both`): a filled forwards animation would keep holding
+   * transform after it ends and suppress the item highlight translate. */
   .composer-reasoning-dropdown[data-state="open"] .composer-reasoning-item {
-    animation: composerReasoningItemIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: composerReasoningItemIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) backwards;
   }
 
-  /* Chat header model selector animations */
+  /* Branch selector dropdown shares the reasoning-select motion. */
+  .composer-branch-dropdown[data-state="open"] {
+    animation: composerReasoningDropdownIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    transform-origin: var(--radix-dropdown-menu-content-transform-origin, bottom left);
+  }
+
+  .composer-branch-dropdown[data-state="closed"] {
+    animation: composerReasoningDropdownOut 0.12s cubic-bezier(0.4, 0, 1, 1) forwards;
+    transform-origin: var(--radix-dropdown-menu-content-transform-origin, bottom left);
+  }
+
+  /* Chat header model selector: grow out of the trigger with a soft slide.
+   * Radix keeps the popup mounted while the data-state="closed" animation
+   * plays, so exit stays keyframe-driven; `forwards` holds the final frame
+   * until unmount. */
+  .model-selector-dropdown {
+    /* Slide from the anchor side; flipped placement overrides per data-side. */
+    --model-menu-slide-y: -6px;
+    transform-origin: var(--radix-dropdown-menu-content-transform-origin, top left);
+  }
+
+  .model-selector-dropdown[data-side="top"] {
+    --model-menu-slide-y: 6px;
+  }
+
+  .model-selector-dropdown[data-state="open"] {
+    animation: modelSelectorDropdownIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .model-selector-dropdown[data-state="closed"] {
+    animation: modelSelectorDropdownOut 0.12s cubic-bezier(0.4, 0, 1, 1) forwards;
+  }
+
   @keyframes modelSelectorDropdownIn {
     from {
       opacity: 0;
-      transform: translateY(6px) scale(0.98);
+      transform: translateY(var(--model-menu-slide-y)) scale(0.96);
     }
     to {
       opacity: 1;
@@ -1256,39 +1290,25 @@
     }
     to {
       opacity: 0;
-      transform: translateY(4px) scale(0.985);
+      transform: translateY(calc(var(--model-menu-slide-y) / 2)) scale(0.98);
     }
+  }
+
+  /* `backwards` (not `both`): a filled forwards animation would keep holding
+   * transform after it ends and suppress the item highlight translate. */
+  .model-selector-dropdown[data-state="open"] .model-selector-item {
+    animation: modelSelectorItemIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) backwards;
   }
 
   @keyframes modelSelectorItemIn {
     from {
       opacity: 0;
-      transform: translateY(4px);
+      transform: translateY(calc(var(--model-menu-slide-y) / 2));
     }
     to {
       opacity: 1;
       transform: translateY(0);
     }
-  }
-
-  .model-selector-dropdown[data-state="open"] {
-    animation: modelSelectorDropdownIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
-    transform-origin: top left;
-    --tw-enter-opacity: initial;
-    --tw-enter-scale: initial;
-    --tw-enter-translate-y: initial;
-  }
-
-  .model-selector-dropdown[data-state="closed"] {
-    animation: modelSelectorDropdownOut 0.12s cubic-bezier(0.4, 0, 1, 1);
-    transform-origin: top left;
-    --tw-exit-opacity: initial;
-    --tw-exit-scale: initial;
-    --tw-exit-translate-y: initial;
-  }
-
-  .model-selector-dropdown[data-state="open"] .model-selector-item {
-    animation: modelSelectorItemIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -1297,6 +1317,7 @@
     .composer-dropdown [role="menuitem"],
     .composer-reasoning-dropdown,
     .composer-reasoning-item,
+    .composer-branch-dropdown,
     .model-selector-dropdown,
     .model-selector-item {
       animation: none !important;

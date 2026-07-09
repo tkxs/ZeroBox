@@ -24,6 +24,7 @@ const loader = createTsModuleLoader({
         return { type: "Streamdown", props };
       },
       defaultRemarkPlugins: {},
+      defaultRehypePlugins: {},
     },
     "@tauri-apps/plugin-opener": {
       openUrl() {

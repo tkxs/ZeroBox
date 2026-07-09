@@ -114,22 +114,12 @@ export type RunTextConversationTurnParams = {
   getRequestController: () => AbortController;
   renewRequestController: () => AbortController;
   resetLiveTranscript: (store: LiveTranscriptStore) => void;
-  appendDraftAssistantText: (
-    delta: string,
-    store: LiveTranscriptStore,
-    shouldAutoScroll?: boolean,
-  ) => void;
+  appendDraftAssistantText: (delta: string, store: LiveTranscriptStore) => void;
   batchLiveRoundsUpdate: (
     updater: (prev: LiveRound[]) => LiveRound[],
     store: LiveTranscriptStore,
-    shouldAutoScroll?: boolean,
   ) => void;
-  updateGatewayBridgeToolStatus: (
-    status: string | null,
-    visible: boolean,
-    isCompaction?: boolean,
-  ) => void;
-  isConversationVisible: () => boolean;
+  updateGatewayBridgeToolStatus: (status: string | null, isCompaction?: boolean) => void;
   commitVisibleAbortedConversation: () => boolean;
   updateConversationRuntimeEntry: (
     conversationId: string,
@@ -173,7 +163,6 @@ export async function runTextConversationTurn(params: RunTextConversationTurnPar
     appendDraftAssistantText,
     batchLiveRoundsUpdate,
     updateGatewayBridgeToolStatus,
-    isConversationVisible,
     commitVisibleAbortedConversation,
     updateConversationRuntimeEntry,
     persistConversationWithHistorySync,
@@ -215,7 +204,6 @@ export async function runTextConversationTurn(params: RunTextConversationTurnPar
           },
         })),
       transcriptStore,
-      isConversationVisible(),
     );
   }
 
@@ -223,23 +211,19 @@ export async function runTextConversationTurn(params: RunTextConversationTurnPar
 
   function ensureTextLiveRound(round: number) {
     textModeUsesLiveRounds = true;
-    batchLiveRoundsUpdate(
-      (prev) => {
-        if (prev.some((item) => item.round === round)) return prev;
-        return [
-          ...prev,
-          {
-            key: `${Date.now()}-${round}`,
-            round,
-            blocks: [],
-            runningToolCallIds: [],
-            thinkingOpen: false,
-          },
-        ];
-      },
-      transcriptStore,
-      isConversationVisible(),
-    );
+    batchLiveRoundsUpdate((prev) => {
+      if (prev.some((item) => item.round === round)) return prev;
+      return [
+        ...prev,
+        {
+          key: `${Date.now()}-${round}`,
+          round,
+          blocks: [],
+          runningToolCallIds: [],
+          thinkingOpen: false,
+        },
+      ];
+    }, transcriptStore);
   }
 
   function updateHostedSearch(hostedSearch: HostedSearchBlock, round: number, existingText = "") {
@@ -267,7 +251,6 @@ export async function runTextConversationTurn(params: RunTextConversationTurnPar
           ),
         ),
       transcriptStore,
-      isConversationVisible(),
     );
   }
 
@@ -309,7 +292,7 @@ export async function runTextConversationTurn(params: RunTextConversationTurnPar
     while (!finalAssistant) {
       const nativeWebSearchStatusController = createDeferredProviderNativeWebSearchStatus({
         status: nativeWebSearchStatus,
-        onStatus: (status) => updateGatewayBridgeToolStatus(status, isConversationVisible()),
+        onStatus: (status) => updateGatewayBridgeToolStatus(status),
       });
       try {
         finalAssistant = await streamAssistantMessage({
@@ -330,10 +313,9 @@ export async function runTextConversationTurn(params: RunTextConversationTurnPar
                     appendTextDeltaToRound(collapseThinking(target), delta),
                   ),
                 transcriptStore,
-                isConversationVisible(),
               );
             } else {
-              appendDraftAssistantText(delta, transcriptStore, isConversationVisible());
+              appendDraftAssistantText(delta, transcriptStore);
             }
             streamedAssistantText += delta;
             protectionCheckChars += delta.length;
@@ -365,11 +347,7 @@ export async function runTextConversationTurn(params: RunTextConversationTurnPar
             if (!decision.shouldCompact) return;
             compactionRequested = true;
             protectionCompactionStatusText = buildProtectionCompactionStatus(decision);
-            updateGatewayBridgeToolStatus(
-              protectionCompactionStatusText,
-              isConversationVisible(),
-              true,
-            );
+            updateGatewayBridgeToolStatus(protectionCompactionStatusText, true);
             getRequestController().abort();
           },
           onHostedSearch: (hostedSearch) => {

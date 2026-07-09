@@ -463,16 +463,14 @@ export default function GatewayApp() {
 
   const {
     pendingUploadedFiles,
-    pendingUploadedFilesRef,
-    pendingUploadsByConversationRef,
     isUploadingFiles,
-    isUploadingFilesRef,
     isFileDropActive,
     fileInputRef,
-    setIsUploadingFiles,
+    setUploadingFiles,
     getPendingUploadsForConversation,
     setPendingUploadsForConversation,
     updatePendingUploadsForConversation,
+    moveConversationUploads,
     clearPendingUploads,
     handleImportReadableFiles,
     handleFileDragEnter,
@@ -652,7 +650,7 @@ export default function GatewayApp() {
     }
     if (
       getConversationTranscriptEntryCount(conversationIdValue) > 0 ||
-      pendingUploadedFilesRef.current.length > 0
+      getPendingUploadsForConversation(conversationIdValue).length > 0
     ) {
       return;
     }
@@ -660,9 +658,9 @@ export default function GatewayApp() {
   }, [
     activeWorkspaceProjectPath,
     getConversationTranscriptEntryCount,
+    getPendingUploadsForConversation,
     isAgentMode,
     isConversationBusy,
-    pendingUploadedFilesRef,
   ]);
 
   // Quiet history refresh for the displayed conversation: fetch → parse →
@@ -762,11 +760,7 @@ export default function GatewayApp() {
         composerDraftCacheRef.current.delete(previousId);
         composerDraftCacheRef.current.set(nextId, cachedComposerDraft);
       }
-      const pendingUploads = pendingUploadsByConversationRef.current.get(previousId);
-      if (pendingUploads !== undefined) {
-        pendingUploadsByConversationRef.current.delete(previousId);
-        pendingUploadsByConversationRef.current.set(nextId, pendingUploads);
-      }
+      moveConversationUploads(previousId, nextId);
       if (chatQueueConversationIdRef.current === previousId) {
         chatQueueConversationIdRef.current = nextId;
       }
@@ -806,7 +800,7 @@ export default function GatewayApp() {
         });
       }
     },
-    [pendingUploadsByConversationRef, sidebarStore, transcriptStoreRegistry],
+    [moveConversationUploads, sidebarStore, transcriptStoreRegistry],
   );
 
   const ensureTunnelToolTab = useCallback(
@@ -1861,7 +1855,7 @@ export default function GatewayApp() {
     if (isAgentMode && draft.largePastes.length > 0) {
       setChatError(null);
       isImportingPastedTextRef.current = true;
-      setIsUploadingFiles(true);
+      setUploadingFiles(true);
       try {
         const imported = await importPastedTextsAsFiles({
           token,
@@ -1872,7 +1866,7 @@ export default function GatewayApp() {
         uploadedFiles = mergePendingUploadedFiles(files, imported.files);
       } finally {
         isImportingPastedTextRef.current = false;
-        setIsUploadingFiles(false);
+        setUploadingFiles(false);
       }
     }
 
@@ -1956,9 +1950,7 @@ export default function GatewayApp() {
           if (!composerRef.current?.hasContent()) {
             composerRef.current?.setDraft(draft);
           }
-          if (
-            (pendingUploadsByConversationRef.current.get(conversationIdValue) ?? []).length === 0
-          ) {
+          if (getPendingUploadsForConversation(conversationIdValue).length === 0) {
             setPendingUploadsForConversation(conversationIdValue, uploadedFiles);
           }
         }
@@ -1973,7 +1965,7 @@ export default function GatewayApp() {
         if (!composerRef.current?.hasContent()) {
           composerRef.current?.setDraft(draft);
         }
-        if ((pendingUploadsByConversationRef.current.get(conversationIdValue) ?? []).length === 0) {
+        if (getPendingUploadsForConversation(conversationIdValue).length === 0) {
           setPendingUploadsForConversation(conversationIdValue, uploadedFiles);
         }
       }
@@ -2354,7 +2346,7 @@ export default function GatewayApp() {
               transcriptStoreRegistry.remove(conversationId);
               conversationWorkdirsRef.current.delete(conversationId);
               clearCachedComposerDraft(conversationId);
-              pendingUploadsByConversationRef.current.delete(conversationId);
+              setPendingUploadsForConversation(conversationId, []);
             }
           }
           if (terminalSessionsToClose.length > 0 && terminalClient) {
@@ -2409,6 +2401,7 @@ export default function GatewayApp() {
       settings.remote.enableWebTerminal,
       settings.locale,
       settings.system,
+      setPendingUploadsForConversation,
       sidebarStore,
       startNewConversation,
       terminalClient,
@@ -2493,7 +2486,7 @@ export default function GatewayApp() {
         transcriptStoreRegistry.remove(id);
         conversationWorkdirsRef.current.delete(id);
         composerDraftCacheRef.current.delete(id);
-        pendingUploadsByConversationRef.current.delete(id);
+        setPendingUploadsForConversation(id, []);
         if (id === displayedId) {
           displayedRemoved = true;
         }
@@ -2517,7 +2510,7 @@ export default function GatewayApp() {
     [
       activeWorkspaceProjectPath,
       isAgentMode,
-      pendingUploadsByConversationRef,
+      setPendingUploadsForConversation,
       transcriptStoreRegistry,
     ],
   );
@@ -2527,7 +2520,7 @@ export default function GatewayApp() {
       transcriptStoreRegistry.remove(id);
       conversationWorkdirsRef.current.delete(id);
       composerDraftCacheRef.current.delete(id);
-      pendingUploadsByConversationRef.current.delete(id);
+      setPendingUploadsForConversation(id, []);
       if (conversationIdRef.current === id || selectedHistoryIdRef.current === id) {
         startNewConversation({
           workdir: isAgentMode ? activeWorkspaceProjectPath || undefined : undefined,
@@ -2537,7 +2530,7 @@ export default function GatewayApp() {
     [
       activeWorkspaceProjectPath,
       isAgentMode,
-      pendingUploadsByConversationRef,
+      setPendingUploadsForConversation,
       transcriptStoreRegistry,
     ],
   );
@@ -3877,49 +3870,41 @@ export default function GatewayApp() {
                       void (async () => {
                         try {
                           const draft = composerRef.current?.getDraft() ?? null;
-                          let text = draft
-                            ? (isAgentMode && draft.largePastes.length > 0
-                                ? draft.textWithoutLargePastes
-                                : buildTextFromComposerDraft(draft)
-                              ).trim()
-                            : "";
-                          let files = pendingUploadedFiles;
-
-                          if (isAgentMode && draft && draft.largePastes.length > 0) {
-                            setChatError(null);
-                            isImportingPastedTextRef.current = true;
-                            setIsUploadingFiles(true);
-                            try {
-                              const imported = await importPastedTextsAsFiles({
-                                token,
-                                workdir: displayedConversationWorkdir,
-                                pastes: draft.largePastes,
-                              });
-                              text = buildTextFromComposerDraft(
-                                draft,
-                                imported.fileByPasteId,
-                              ).trim();
-                              files = mergePendingUploadedFiles(files, imported.files);
-                            } catch (error) {
-                              setChatError(asErrorMessage(error, "大段粘贴内容导入失败"));
-                              return;
-                            } finally {
-                              isImportingPastedTextRef.current = false;
-                              setIsUploadingFiles(false);
-                            }
+                          // Capture the send target before the paste import
+                          // awaits: switching conversations mid-import must
+                          // not reroute the message or clear the composer of
+                          // the newly displayed conversation.
+                          const sendConversationId = getDisplayedConversationId();
+                          let text: string;
+                          let files: PendingUploadedFile[];
+                          try {
+                            const materialized = draft
+                              ? await materializeComposerDraftForSend(
+                                  draft,
+                                  pendingUploadedFiles,
+                                  displayedConversationWorkdir,
+                                )
+                              : { text: "", uploadedFiles: pendingUploadedFiles };
+                            text = materialized.text;
+                            files = materialized.uploadedFiles;
+                          } catch (error) {
+                            setChatError(asErrorMessage(error, "大段粘贴内容导入失败"));
+                            return;
                           }
 
                           if (!text && files.length === 0) {
                             return;
                           }
-                          const uploadConversationId = getDisplayedConversationId();
-                          composerRef.current?.clear();
-                          setPendingUploadsForConversation(uploadConversationId, []);
+                          if (getDisplayedConversationId() === sendConversationId) {
+                            composerRef.current?.clear();
+                          }
+                          setPendingUploadsForConversation(sendConversationId, []);
                           void sendChat(text, {
+                            conversationId: sendConversationId,
                             uploadedFiles: files,
                             runtimeControls: chatRuntimeControlsForCurrentProvider,
                           }).catch(() => {
-                            updatePendingUploadsForConversation(uploadConversationId, (current) =>
+                            updatePendingUploadsForConversation(sendConversationId, (current) =>
                               mergePendingUploadedFiles(current, files),
                             );
                           });

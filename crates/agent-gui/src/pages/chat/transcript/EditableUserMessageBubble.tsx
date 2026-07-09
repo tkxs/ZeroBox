@@ -2,7 +2,6 @@ import { memo, useEffect, useRef, useState } from "react";
 
 import { useLocale } from "../../../i18n";
 import type { PendingUploadedFile } from "../../../lib/chat/messages/uploadedFiles";
-import { resolveNearestScrollViewport } from "../utils/chatScrollViewport";
 import { UserAttachmentCards } from "./UserAttachmentCards";
 
 export const EditableUserMessageBubble = memo(function EditableUserMessageBubble(props: {
@@ -24,7 +23,7 @@ export const EditableUserMessageBubble = memo(function EditableUserMessageBubble
     if (!textarea) {
       return;
     }
-    const viewport = resolveNearestScrollViewport(textarea);
+    const viewport = textarea.closest<HTMLDivElement>("[data-scroll-viewport]");
     const scrollTopBeforeFocus = viewport?.scrollTop ?? null;
     const restoreViewportScroll = () => {
       if (viewport && scrollTopBeforeFocus !== null) {

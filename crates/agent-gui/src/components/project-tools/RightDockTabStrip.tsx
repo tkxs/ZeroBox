@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useLocale } from "../../i18n";
 import type { RightDockTabKind } from "../../lib/settings";
 import { cn } from "../../lib/shared/utils";
@@ -6,6 +6,7 @@ import type { TerminalSession } from "../../lib/terminal/types";
 import { Check, Cpu, Terminal, X } from "../icons";
 import { formatTerminalSessionTitle, type RightDockVisibleTab } from "./rightDockModel";
 import { getRightDockToolDefinition, type RightDockSingletonTabKind } from "./rightDockRegistry";
+import type { RightDockTabDragProps } from "./useRightDockTabReorder";
 
 type RightDockTabStripProps = {
   tabs: RightDockVisibleTab[];
@@ -19,6 +20,8 @@ type RightDockTabStripProps = {
   closingSessionIds: ReadonlySet<string>;
   draggingTabId: string;
   renderTabDragHandle: (tabId: string, label: string) => ReactNode;
+  getTabDragProps: (tabId: string) => RightDockTabDragProps;
+  getTabDragStyle: (tabId: string) => CSSProperties | undefined;
   consumeSuppressedTabClick: (tabId: string) => boolean;
   onActivateTab: (tabId: string) => void;
   onActivateTerminalSession: (session: TerminalSession) => void;
@@ -26,20 +29,31 @@ type RightDockTabStripProps = {
   onCloseTerminalRequest: (session: TerminalSession) => void;
 };
 
-type ToolTabOptions = {
-  tab: Extract<RightDockVisibleTab, { kind: RightDockSingletonTabKind }>;
+// One descriptor per tab regardless of kind, so every tab shares a single
+// renderer: identical geometry, drag surface, and close-button behaviour.
+type DockTabDescriptor = {
+  id: string;
   label: string;
+  icon: ReactNode;
+  isActive: boolean;
+  // undefined: no status dot; true: running (emerald); false: idle (muted).
+  running?: boolean;
+  isPendingClose?: boolean;
   closeLabel: string;
   closeTitle: string;
-  icon: ReactNode;
+  closeIcon?: ReactNode;
+  closeDisabled?: boolean;
+  onActivate: () => void;
   onClose: () => void;
 };
 
+// NOTE: `transform` is deliberately absent from the transition list — drag
+// positioning drives `transform` via inline styles with its own transitions.
 const TAB_BASE_CLASS =
-  "project-tools-panel-tab group relative flex h-8 max-w-[12rem] shrink-0 select-none items-center gap-1 rounded-md border border-transparent px-1.5 text-xs text-muted-foreground transition-[background-color,border-color,color,opacity,transform,box-shadow] hover:bg-muted/80 hover:text-foreground";
+  "project-tools-panel-tab group relative flex h-8 max-w-[12rem] shrink-0 select-none items-center gap-1 rounded-md border border-transparent px-1.5 text-xs text-muted-foreground transition-[background-color,border-color,color,opacity,box-shadow] hover:bg-muted/80 hover:text-foreground";
 
 const CLOSE_BUTTON_CLASS =
-  "relative z-10 ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-background hover:text-foreground focus-visible:bg-background focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100";
+  "relative z-10 ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-background hover:text-foreground focus-visible:bg-background focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50";
 
 export function RightDockTabStrip(props: RightDockTabStripProps) {
   const {
@@ -52,6 +66,8 @@ export function RightDockTabStrip(props: RightDockTabStripProps) {
     closingSessionIds,
     draggingTabId,
     renderTabDragHandle,
+    getTabDragProps,
+    getTabDragStyle,
     consumeSuppressedTabClick,
     onActivateTab,
     onActivateTerminalSession,
@@ -60,59 +76,74 @@ export function RightDockTabStrip(props: RightDockTabStripProps) {
   } = props;
   const { t } = useLocale();
 
-  const renderToolTab = (options: ToolTabOptions) => {
-    const { tab, label, closeLabel, closeTitle, icon, onClose } = options;
-    return (
+  const renderDockTab = (tab: DockTabDescriptor) => (
+    <div
+      key={tab.id}
+      data-project-tools-tab-id={tab.id}
+      className={cn(
+        TAB_BASE_CLASS,
+        tab.isActive && "border-border bg-muted text-foreground shadow-sm",
+        tab.isPendingClose && "bg-destructive/10 text-destructive hover:bg-destructive/15",
+        draggingTabId === tab.id &&
+          "z-10 scale-[0.98] cursor-grabbing opacity-80 shadow-md ring-1 ring-ring",
+      )}
+      title={tab.label}
+      style={getTabDragStyle(tab.id)}
+      {...getTabDragProps(tab.id)}
+    >
+      <button
+        type="button"
+        aria-label={tab.label}
+        className="absolute inset-0 z-0 rounded-md bg-transparent p-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        onClick={() => {
+          if (consumeSuppressedTabClick(tab.id)) return;
+          tab.onActivate();
+        }}
+      />
+      {renderTabDragHandle(tab.id, tab.label)}
       <div
-        key={tab.id}
-        data-project-tools-tab-id={tab.id}
-        className={cn(
-          TAB_BASE_CLASS,
-          currentActiveTab === tab.kind && "border-border bg-muted text-foreground shadow-sm",
-          draggingTabId === tab.id && "z-10 scale-[0.98] opacity-80 shadow-md ring-1 ring-ring",
-        )}
-        title={label}
+        aria-hidden="true"
+        className="pointer-events-none relative z-10 flex h-full min-w-0 flex-1 items-center gap-1.5 text-left text-inherit"
       >
-        <button
-          type="button"
-          aria-label={label}
-          className="absolute inset-0 z-0 rounded-md bg-transparent p-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          onClick={() => {
-            if (consumeSuppressedTabClick(tab.id)) return;
-            onActivateTab(tab.id);
-          }}
-        />
-        {renderTabDragHandle(tab.id, label)}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none relative z-10 flex h-full min-w-0 flex-1 items-center gap-1.5 text-left text-inherit"
-        >
-          {icon}
-          <span className="min-w-0 truncate">{label}</span>
-        </div>
-        <button
-          type="button"
-          data-project-tools-tab-action="close"
-          aria-label={closeLabel}
-          title={closeTitle}
-          className={CLOSE_BUTTON_CLASS}
-          onPointerDown={(event) => {
-            event.stopPropagation();
-          }}
-          onMouseDown={(event) => {
-            event.stopPropagation();
-          }}
-          onClick={(event) => {
-            event.stopPropagation();
-            consumeSuppressedTabClick(tab.id);
-            onClose();
-          }}
-        >
-          <X className="h-3 w-3" />
-        </button>
+        {tab.icon}
+        <span className="min-w-0 truncate">{tab.label}</span>
+        {tab.running !== undefined ? (
+          <span
+            className={cn(
+              "h-1.5 w-1.5 shrink-0 rounded-full",
+              tab.running ? "bg-emerald-500" : "bg-muted-foreground/50",
+            )}
+          />
+        ) : null}
       </div>
-    );
-  };
+      <button
+        type="button"
+        data-project-tools-tab-action="close"
+        aria-label={tab.closeLabel}
+        title={tab.closeTitle}
+        disabled={tab.closeDisabled}
+        className={cn(
+          CLOSE_BUTTON_CLASS,
+          tab.isPendingClose
+            ? "bg-destructive/10 text-destructive hover:bg-destructive hover:text-destructive-foreground md:opacity-100"
+            : "md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100",
+        )}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+        }}
+        onMouseDown={(event) => {
+          event.stopPropagation();
+        }}
+        onClick={(event) => {
+          event.stopPropagation();
+          consumeSuppressedTabClick(tab.id);
+          tab.onClose();
+        }}
+      >
+        {tab.closeIcon ?? <X className="h-3 w-3" />}
+      </button>
+    </div>
+  );
 
   return (
     <>
@@ -122,154 +153,56 @@ export function RightDockTabStrip(props: RightDockTabStripProps) {
           // create menu brings it back).
           const label = t("projectTools.backgroundTasksTitle");
           const closeLabel = t("projectTools.bgTaskClosePanel");
-          return (
-            <div
-              key={tab.id}
-              data-project-tools-tab-id={tab.id}
-              className={cn(
-                TAB_BASE_CLASS,
-                currentActiveTab === "backgroundTasks" &&
-                  "border-border bg-muted text-foreground shadow-sm",
-                draggingTabId === tab.id &&
-                  "z-10 scale-[0.98] opacity-80 shadow-md ring-1 ring-ring",
-              )}
-              title={label}
-            >
-              <button
-                type="button"
-                aria-label={label}
-                className="absolute inset-0 z-0 rounded-md bg-transparent p-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                onClick={() => {
-                  if (consumeSuppressedTabClick(tab.id)) return;
-                  onActivateTab(tab.id);
-                }}
-              />
-              {renderTabDragHandle(tab.id, label)}
-              <div
-                aria-hidden="true"
-                className="pointer-events-none relative z-10 flex h-full min-w-0 flex-1 items-center gap-1.5 text-left text-inherit"
-              >
-                <Cpu className="h-3.5 w-3.5 shrink-0" />
-                <span className="min-w-0 truncate">{label}</span>
-                {backgroundTasksRunning > 0 ? (
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-                ) : (
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
-                )}
-              </div>
-              <button
-                type="button"
-                data-project-tools-tab-action="close"
-                aria-label={closeLabel}
-                title={closeLabel}
-                className={CLOSE_BUTTON_CLASS}
-                onPointerDown={(event) => {
-                  event.stopPropagation();
-                }}
-                onMouseDown={(event) => {
-                  event.stopPropagation();
-                }}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  consumeSuppressedTabClick(tab.id);
-                  onCloseBackgroundTasks();
-                }}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          );
+          return renderDockTab({
+            id: tab.id,
+            label,
+            icon: <Cpu className="h-3.5 w-3.5 shrink-0" />,
+            isActive: currentActiveTab === "backgroundTasks",
+            running: backgroundTasksRunning > 0,
+            closeLabel,
+            closeTitle: closeLabel,
+            onActivate: () => onActivateTab(tab.id),
+            onClose: onCloseBackgroundTasks,
+          });
         }
         if (tab.kind !== "terminal") {
           const definition = getRightDockToolDefinition(tab.kind);
           if (!definition) return null;
           const closeLabel = t(definition.closeKey);
-          return renderToolTab({
-            tab,
+          return renderDockTab({
+            id: tab.id,
             label: t(definition.titleKey),
+            icon: definition.icon("h-3.5 w-3.5 shrink-0"),
+            isActive: currentActiveTab === tab.kind,
             closeLabel,
             closeTitle: closeLabel,
-            icon: definition.icon("h-3.5 w-3.5 shrink-0"),
+            onActivate: () => onActivateTab(tab.id),
             onClose: () => onCloseToolTab(tab.kind),
           });
         }
 
         const session = tab.session;
         const isPendingClose = pendingCloseSessionId === session.id;
-        const isClosing = closingSessionIds.has(session.id);
         const sessionTitle = formatTerminalSessionTitle(
           session.title,
           t("projectTools.terminalTitle"),
         );
-        return (
-          <div
-            key={session.id}
-            data-project-tools-tab-id={session.id}
-            className={cn(
-              TAB_BASE_CLASS,
-              currentActiveTab === "terminal" &&
-                activeSession?.id === session.id &&
-                "border-border bg-muted text-foreground shadow-sm",
-              isPendingClose && "bg-destructive/10 text-destructive hover:bg-destructive/15",
-              draggingTabId === session.id &&
-                "z-10 scale-[0.98] opacity-80 shadow-md ring-1 ring-ring",
-            )}
-            title={sessionTitle}
-          >
-            <button
-              type="button"
-              aria-label={sessionTitle}
-              className="absolute inset-0 z-0 rounded-md bg-transparent p-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              onClick={() => {
-                if (consumeSuppressedTabClick(session.id)) return;
-                onActivateTerminalSession(session);
-              }}
-            />
-            {renderTabDragHandle(session.id, sessionTitle)}
-            <div
-              aria-hidden="true"
-              className="pointer-events-none relative z-10 flex h-full min-w-0 flex-1 items-center gap-1.5 text-left text-inherit"
-            >
-              <Terminal className="h-3.5 w-3.5 shrink-0" />
-              <span className="min-w-0 truncate">{sessionTitle}</span>
-              {!session.running ? (
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
-              ) : (
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-              )}
-            </div>
-            <button
-              type="button"
-              data-project-tools-tab-action="close"
-              aria-label={`${isPendingClose ? t("projectTools.confirmClose") : t("projectTools.close")} ${sessionTitle}`}
-              title={
-                isPendingClose
-                  ? t("projectTools.confirmCloseTerminal")
-                  : t("projectTools.closeTerminal")
-              }
-              disabled={isClosing}
-              className={cn(
-                "relative z-10 ml-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-background hover:text-foreground focus-visible:bg-background focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
-                isPendingClose
-                  ? "bg-destructive/10 text-destructive hover:bg-destructive hover:text-destructive-foreground md:opacity-100"
-                  : "md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100",
-              )}
-              onPointerDown={(event) => {
-                event.stopPropagation();
-              }}
-              onMouseDown={(event) => {
-                event.stopPropagation();
-              }}
-              onClick={(event) => {
-                event.stopPropagation();
-                consumeSuppressedTabClick(session.id);
-                onCloseTerminalRequest(session);
-              }}
-            >
-              {isPendingClose ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-            </button>
-          </div>
-        );
+        return renderDockTab({
+          id: session.id,
+          label: sessionTitle,
+          icon: <Terminal className="h-3.5 w-3.5 shrink-0" />,
+          isActive: currentActiveTab === "terminal" && activeSession?.id === session.id,
+          running: session.running,
+          isPendingClose,
+          closeLabel: `${isPendingClose ? t("projectTools.confirmClose") : t("projectTools.close")} ${sessionTitle}`,
+          closeTitle: isPendingClose
+            ? t("projectTools.confirmCloseTerminal")
+            : t("projectTools.closeTerminal"),
+          closeIcon: isPendingClose ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />,
+          closeDisabled: closingSessionIds.has(session.id),
+          onActivate: () => onActivateTerminalSession(session),
+          onClose: () => onCloseTerminalRequest(session),
+        });
       })}
     </>
   );

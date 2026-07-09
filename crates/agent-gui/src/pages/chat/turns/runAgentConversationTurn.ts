@@ -280,20 +280,13 @@ export type RunAgentConversationTurnParams = {
   updateLiveRounds: (
     updater: (prev: LiveRound[]) => LiveRound[],
     store: LiveTranscriptStore,
-    shouldAutoScroll?: boolean,
   ) => void;
   batchLiveRoundsUpdate: (
     updater: (prev: LiveRound[]) => LiveRound[],
     store: LiveTranscriptStore,
-    shouldAutoScroll?: boolean,
   ) => void;
-  updateToolStatus: (status: string | null, store: LiveTranscriptStore, visible: boolean) => void;
-  updateGatewayBridgeToolStatus: (
-    status: string | null,
-    visible: boolean,
-    isCompaction?: boolean,
-  ) => void;
-  isConversationVisible: () => boolean;
+  updateToolStatus: (status: string | null, store: LiveTranscriptStore) => void;
+  updateGatewayBridgeToolStatus: (status: string | null, isCompaction?: boolean) => void;
   commitVisibleAbortedConversation: () => boolean;
   updateConversationRuntimeEntry: (
     conversationId: string,
@@ -355,7 +348,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
     batchLiveRoundsUpdate,
     updateToolStatus,
     updateGatewayBridgeToolStatus,
-    isConversationVisible,
     commitVisibleAbortedConversation,
     updateConversationRuntimeEntry,
     persistConversationWithHistorySync,
@@ -457,7 +449,7 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
     onMcpLoadError: (message) => {
       const warning = `MCP 工具加载失败，已跳过并继续对话：${message || "未知错误"}`;
       console.warn(warning);
-      updateToolStatus(warning, transcriptStore, isConversationVisible());
+      updateToolStatus(warning, transcriptStore);
     },
     subagentRuntime: subagentStore
       ? {
@@ -543,7 +535,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
           },
         })),
       transcriptStore,
-      isConversationVisible(),
     );
   }
 
@@ -559,27 +550,23 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
       round,
       conversation_id: conversationId,
     });
-    batchLiveRoundsUpdate(
-      (prev) => {
-        const withRound = prev.some((item) => item.round === round)
-          ? prev
-          : [
-              ...prev,
-              {
-                key: `${Date.now()}-${round}`,
-                round,
-                blocks: [],
-                runningToolCallIds: [],
-                thinkingOpen: false,
-              },
-            ];
-        return updateLiveRound(withRound, round, (target) =>
-          upsertHostedSearchToRound(collapseThinking(target), hostedSearch),
-        );
-      },
-      transcriptStore,
-      isConversationVisible(),
-    );
+    batchLiveRoundsUpdate((prev) => {
+      const withRound = prev.some((item) => item.round === round)
+        ? prev
+        : [
+            ...prev,
+            {
+              key: `${Date.now()}-${round}`,
+              round,
+              blocks: [],
+              runningToolCallIds: [],
+              thinkingOpen: false,
+            },
+          ];
+      return updateLiveRound(withRound, round, (target) =>
+        upsertHostedSearchToRound(collapseThinking(target), hostedSearch),
+      );
+    }, transcriptStore);
   }
 
   const pendingToolCallDeltas = new Map<string, { round: number; toolCall: ToolCall }>();
@@ -608,20 +595,16 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
       });
     }
 
-    batchLiveRoundsUpdate(
-      (prev) => {
-        let next = prev;
-        for (const { round, toolCall } of deltas) {
-          next = updateLiveRound(next, round, (target) => {
-            const withToolCall = upsertToolCallToRound(collapseThinking(target), toolCall);
-            return markToolCallRunningInRound(withToolCall, toolCall);
-          });
-        }
-        return next;
-      },
-      transcriptStore,
-      isConversationVisible(),
-    );
+    batchLiveRoundsUpdate((prev) => {
+      let next = prev;
+      for (const { round, toolCall } of deltas) {
+        next = updateLiveRound(next, round, (target) => {
+          const withToolCall = upsertToolCallToRound(collapseThinking(target), toolCall);
+          return markToolCallRunningInRound(withToolCall, toolCall);
+        });
+      }
+      return next;
+    }, transcriptStore);
   }
 
   function schedulePendingToolCallDeltaFlush() {
@@ -690,7 +673,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
               },
             ],
             transcriptStore,
-            isConversationVisible(),
           );
         },
         onTextDelta: (delta, round) => {
@@ -703,7 +685,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
                 return appendTextDeltaToRound(nextTarget, delta);
               }),
             transcriptStore,
-            isConversationVisible(),
           );
 
           protectionCheckChars += delta.length;
@@ -741,11 +722,7 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
 
           midStreamCompactionRequested = true;
           midStreamCompactionStatusText = buildProtectionCompactionStatus(decision);
-          updateGatewayBridgeToolStatus(
-            midStreamCompactionStatusText,
-            isConversationVisible(),
-            true,
-          );
+          updateGatewayBridgeToolStatus(midStreamCompactionStatusText, true);
           getRequestController().abort();
         },
         onThinkingDelta: (delta, round) => {
@@ -762,7 +739,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
                 thinkingOpen: true,
               })),
             transcriptStore,
-            isConversationVisible(),
           );
         },
         onHostedSearch: (hostedSearch, round) => {
@@ -788,7 +764,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
                 return markToolCallRunningInRound(withToolCall, toolCall);
               }),
             transcriptStore,
-            isConversationVisible(),
           );
         },
         onToolCallDelta: (toolCall, round) => {
@@ -817,7 +792,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
                 return markToolCallRunningInRound(withToolCall, toolCall);
               }),
             transcriptStore,
-            isConversationVisible(),
           );
         },
         onToolResult: (toolCall, toolResult, round) => {
@@ -852,7 +826,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
                 };
               }),
             transcriptStore,
-            isConversationVisible(),
           );
         },
         onAssistantMessage: (assistant, round) => {
@@ -870,7 +843,7 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
         },
         onToolStatus: (s) => {
           gatewayBridgeEvents.queueToolStatus(s, false);
-          updateToolStatus(s, transcriptStore, isConversationVisible());
+          updateToolStatus(s, transcriptStore);
         },
         onBeforeNextTurn: async ({ emittedMessages }) => {
           latestAgentEmittedMessages = emittedMessages.slice();
@@ -1055,7 +1028,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
             },
           ],
           transcriptStore,
-          isConversationVisible(),
         );
       },
       onTextDelta: (delta, round) => {
@@ -1066,7 +1038,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
               appendTextDeltaToRound(collapseThinking(target), delta),
             ),
           transcriptStore,
-          isConversationVisible(),
         );
       },
       onThinkingDelta: (delta, round) => {
@@ -1083,7 +1054,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
               thinkingOpen: true,
             })),
           transcriptStore,
-          isConversationVisible(),
         );
       },
       onToolCall: (toolCall, round) => {
@@ -1103,7 +1073,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
               return markToolCallRunningInRound(withToolCall, toolCall);
             }),
           transcriptStore,
-          isConversationVisible(),
         );
       },
       onToolExecutionStart: (toolCall, round) => {
@@ -1123,7 +1092,6 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
               return markToolCallRunningInRound(withToolCall, toolCall);
             }),
           transcriptStore,
-          isConversationVisible(),
         );
       },
       onToolResult: (toolCall, toolResult, round) => {
@@ -1156,13 +1124,12 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
               };
             }),
           transcriptStore,
-          isConversationVisible(),
         );
       },
       onAssistantMessage: commitAssistantRoundMeta,
       onToolStatus: (s) => {
         gatewayBridgeEvents.queueToolStatus(s, false);
-        updateToolStatus(s, transcriptStore, isConversationVisible());
+        updateToolStatus(s, transcriptStore);
       },
     });
     if (extraction.emittedMessages.length > 0) {

@@ -1,7 +1,6 @@
 import { renderAsync } from "docx-preview";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { read, utils } from "xlsx";
-import { Markdown } from "@/components/Markdown";
 import { useLocale } from "@/i18n";
 import { cn } from "@/lib/shared/utils";
 import { invokeFs } from "@/lib/tools/fsBackend";
@@ -18,6 +17,7 @@ import {
   RotateCwSquare,
   X,
 } from "../icons";
+import { WorkspaceMarkdownPreview } from "./WorkspaceMarkdownPreview";
 import {
   getWorkspacePreviewKind,
   isWorkspaceEditablePreviewPath,
@@ -487,6 +487,7 @@ export function WorkspaceFilePreviewOverlay(props: WorkspaceFilePreviewOverlayPr
         {preview ? (
           <PreviewBody
             preview={preview}
+            workdir={activePreviewRequest?.workdir ?? ""}
             activePath={activePath}
             imagePaths={imagePaths}
             imageTransitionDirection={imageTransitionDirection}
@@ -523,6 +524,7 @@ export function WorkspaceFilePreviewOverlay(props: WorkspaceFilePreviewOverlayPr
 
 function PreviewBody(props: {
   preview: LoadedPreview;
+  workdir: string;
   activePath: string;
   imagePaths: string[];
   imageTransitionDirection: ImagePreviewTransitionDirection;
@@ -535,6 +537,7 @@ function PreviewBody(props: {
 }) {
   const {
     preview,
+    workdir,
     activePath,
     imagePaths,
     imageTransitionDirection,
@@ -610,7 +613,13 @@ function PreviewBody(props: {
   if (preview.kind === "markdown") {
     return (
       <div className="h-full overflow-auto bg-background px-6 py-5">
-        <Markdown content={preview.text ?? ""} className="text-sm leading-6" readOnly />
+        <WorkspaceMarkdownPreview
+          workdir={workdir}
+          markdownPath={preview.path || activePath}
+          content={preview.text ?? ""}
+          className="text-sm leading-6"
+          onOpenWorkspacePath={(path) => onOpenImagePath(path, 0)}
+        />
       </div>
     );
   }

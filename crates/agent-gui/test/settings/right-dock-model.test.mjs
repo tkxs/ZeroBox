@@ -329,6 +329,108 @@ test("closeRightDockToolTabState removes the tool and reassigns activeTabId only
   assert.equal(rightDockModel.closeRightDockToolTabState(closedActive, "gitReview", null), closedActive);
 });
 
+describe("tab drag engine", () => {
+  // a: [0,80) b: [84,244) (wide) c: [248,308)
+  const slots = [
+    { id: "a", left: 0, width: 80 },
+    { id: "b", left: 84, width: 160 },
+    { id: "c", left: 248, width: 60 },
+  ];
+
+  test("computeTabDragInsertIndex crosses a neighbour when the dragged edge passes its midpoint", () => {
+    const index = (draggedId, offset) =>
+      rightDockModel.computeTabDragInsertIndex(slots, draggedId, offset);
+    // Dragging "a" rightwards: its right edge (80 + offset) crosses b's
+    // midpoint (164) past offset 84, then c's midpoint (278) past offset 198.
+    assert.equal(index("a", 0), 0);
+    assert.equal(index("a", 84), 0);
+    assert.equal(index("a", 85), 1);
+    assert.equal(index("a", 198), 1);
+    assert.equal(index("a", 199), 2);
+    // Dragging "c" leftwards: its left edge (248 + offset) crosses b's
+    // midpoint at offset -85, then a's midpoint (40) at offset -209.
+    assert.equal(index("c", 0), 2);
+    assert.equal(index("c", -84), 2);
+    assert.equal(index("c", -85), 1);
+    assert.equal(index("c", -208), 1);
+    assert.equal(index("c", -209), 0);
+    // Because the snapshot never changes mid-drag, the same offset always
+    // yields the same index — the live-DOM variant oscillated here when the
+    // dragged tab was narrower than its neighbour.
+    assert.equal(index("c", -100), index("c", -100));
+    // Unknown dragged id degrades to index 0 (the caller guards on the slot).
+    assert.equal(index("ghost", 0), 0);
+  });
+
+  test("computeTabDragInsertIndex reaches both ends within the clamp range", () => {
+    const index = (draggedId, offset) =>
+      rightDockModel.computeTabDragInsertIndex(slots, draggedId, offset);
+    const clamp = (draggedId, offset) =>
+      rightDockModel.clampTabDragOffset(slots, draggedId, offset);
+    // "b" (width 160) is wider than both neighbours. Under the old
+    // center-vs-midpoint rule its center could never pass a's midpoint within
+    // the clamp, making the first slot unreachable.
+    assert.equal(index("b", clamp("b", -9999)), 0);
+    assert.equal(index("b", clamp("b", 9999)), 2);
+    // "a" (width 80) is wider than "c" (width 60): the last slot must still
+    // be reachable at the right clamp limit.
+    assert.equal(index("a", clamp("a", 9999)), 2);
+    assert.equal(index("c", clamp("c", -9999)), 0);
+  });
+
+  test("applyTabDragInsertIndex produces the final order and clamps the index", () => {
+    const apply = rightDockModel.applyTabDragInsertIndex;
+    assert.deepEqual(apply(["a", "b", "c"], "a", 2), ["b", "c", "a"]);
+    assert.deepEqual(apply(["a", "b", "c"], "c", 0), ["c", "a", "b"]);
+    assert.deepEqual(apply(["a", "b", "c"], "b", 1), ["a", "b", "c"]);
+    assert.deepEqual(apply(["a", "b", "c"], "a", 99), ["b", "c", "a"]);
+    assert.deepEqual(apply(["a", "b", "c"], "a", -1), ["a", "b", "c"]);
+    // Unknown dragged id: order unchanged.
+    assert.deepEqual(apply(["a", "b"], "ghost", 1), ["a", "b"]);
+  });
+
+  test("computeTabShiftOffsets opens the drop gap by one dragged width plus gap", () => {
+    const shift = (draggedId, insertIndex) =>
+      rightDockModel.computeTabShiftOffsets(slots, draggedId, insertIndex, 4);
+    // "a" (width 80) dragged past both: b and c slide left by 84.
+    assert.deepEqual(shift("a", 2), { b: -84, c: -84 });
+    assert.deepEqual(shift("a", 1), { b: -84 });
+    assert.deepEqual(shift("a", 0), {});
+    // "c" (width 60) dragged to the front: a and b slide right by 64.
+    assert.deepEqual(shift("c", 0), { a: 64, b: 64 });
+    assert.deepEqual(shift("c", 1), { b: 64 });
+    assert.deepEqual(shift("c", 2), {});
+    assert.deepEqual(rightDockModel.computeTabShiftOffsets(slots, "ghost", 0, 4), {});
+  });
+
+  test("clampTabDragOffset keeps the dragged tab inside the strip content bounds", () => {
+    const clamp = (draggedId, offset) =>
+      rightDockModel.clampTabDragOffset(slots, draggedId, offset);
+    // Content spans [0, 308]; "a" (left 0, width 80) may move within [0, 228].
+    assert.equal(clamp("a", -50), 0);
+    assert.equal(clamp("a", 120), 120);
+    assert.equal(clamp("a", 500), 228);
+    // "c" (left 248, width 60) may move within [-248, 0].
+    assert.equal(clamp("c", 50), 0);
+    assert.equal(clamp("c", -500), -248);
+    assert.equal(clamp("ghost", 30), 0);
+  });
+
+  test("computeTabAutoScrollVelocity ramps with pointer depth into either edge", () => {
+    const velocity = (clientX) => rightDockModel.computeTabAutoScrollVelocity(100, 500, clientX);
+    assert.equal(velocity(300), 0);
+    assert.equal(velocity(141), 0);
+    assert.equal(velocity(459), 0);
+    // Deeper into the edge zone scrolls faster; beyond the edge is clamped.
+    assert.ok(velocity(110) < velocity(130));
+    assert.ok(velocity(130) < 0);
+    assert.ok(velocity(470) > 0);
+    assert.ok(velocity(490) > velocity(470));
+    assert.equal(velocity(0), -rightDockModel.TAB_AUTO_SCROLL_MAX_STEP_PX);
+    assert.equal(velocity(999), rightDockModel.TAB_AUTO_SCROLL_MAX_STEP_PX);
+  });
+});
+
 test("rightDockNeighborTabId picks the right neighbour, then the left, then null", () => {
   const ids = ["a", "b", "c"];
   assert.equal(rightDockModel.rightDockNeighborTabId(ids, "b"), "c");

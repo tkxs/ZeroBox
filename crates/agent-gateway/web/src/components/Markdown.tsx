@@ -3,11 +3,12 @@ import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { type ComponentProps, memo, useLayoutEffect, useRef } from "react";
+import { type ComponentProps, memo, useLayoutEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import remarkBreaks from "remark-breaks";
 import {
   type Components,
+  defaultRehypePlugins,
   defaultRemarkPlugins,
   type ExtraProps,
   type LinkSafetyModalProps,
@@ -34,10 +35,41 @@ type MarkdownProps = {
   // re-render that mode="static" triggers).
   showCaret?: boolean;
   readOnly?: boolean;
+  // Extra component overrides merged over the built-in map. Used by the
+  // workspace file preview to render images and links against workspace
+  // files instead of the chat text fallbacks.
+  componentOverrides?: Components;
+  // Skip the harden rehype stage, which rewrites relative image/link URLs
+  // against the page origin before they reach custom components. Sanitize
+  // still runs, so scriptable protocols (javascript: etc.) never get through.
+  preserveRelativeUrls?: boolean;
 };
 
 const streamdownPlugins = { code, math, mermaid, cjk };
 const remarkPlugins = [...Object.values(defaultRemarkPlugins), remarkBreaks];
+
+type StreamdownRehypePlugins = NonNullable<ComponentProps<typeof Streamdown>["rehypePlugins"]>;
+
+// raw + sanitize from the default chain (raw → sanitize → harden), with data:
+// image sources additionally allowed so embedded data-URI images render.
+const relativeUrlRehypePlugins = (() => {
+  const sanitize = defaultRehypePlugins.sanitize;
+  if (!Array.isArray(sanitize)) {
+    return [defaultRehypePlugins.raw, sanitize] as StreamdownRehypePlugins;
+  }
+  const schema = (sanitize[1] ?? {}) as { protocols?: Record<string, unknown[]> };
+  const srcProtocols = schema.protocols?.src;
+  const protocols = {
+    ...schema.protocols,
+    src: Array.isArray(srcProtocols)
+      ? [...new Set([...srcProtocols, "data"])]
+      : ["http", "https", "data"],
+  };
+  return [
+    defaultRehypePlugins.raw,
+    [sanitize[0], { ...schema, protocols }],
+  ] as StreamdownRehypePlugins;
+})();
 
 type MarkdownImageFallbackProps = ComponentProps<"img"> & ExtraProps;
 type MarkdownAnchorFallbackProps = ComponentProps<"a"> & ExtraProps;
@@ -197,7 +229,7 @@ const streamdownTranslations = {
   viewFullscreen: "全屏查看",
 } satisfies Partial<StreamdownTranslations>;
 
-function ExternalLinkModal({ isOpen, onClose, onConfirm, url }: LinkSafetyModalProps) {
+export function ExternalLinkModal({ isOpen, onClose, onConfirm, url }: LinkSafetyModalProps) {
   if (!isOpen) {
     return null;
   }
@@ -293,10 +325,17 @@ export const Markdown = memo(function Markdown(props: MarkdownProps) {
     renderMode,
     showCaret = isAnimating,
     readOnly = false,
+    componentOverrides,
+    preserveRelativeUrls = false,
   } = props;
   const useStreamingMode = renderMode ? renderMode === "streaming" : isAnimating;
   const isActivelyStreaming = showCaret;
   const codeCopyRootRef = useEnabledCodeCopyButtons(!readOnly && isActivelyStreaming);
+  const baseComponents = readOnly ? markdownReadOnlyComponents : markdownComponents;
+  const components = useMemo(
+    () => (componentOverrides ? { ...baseComponents, ...componentOverrides } : baseComponents),
+    [baseComponents, componentOverrides],
+  );
   // Keep Streamdown's caret pseudo-element mounted while in streaming mode;
   // `showCaret` only toggles visibility so the final token does not reflow.
   const keepCaretSlot = useStreamingMode;
@@ -316,7 +355,8 @@ export const Markdown = memo(function Markdown(props: MarkdownProps) {
         )}
         plugins={streamdownPlugins}
         remarkPlugins={remarkPlugins}
-        components={readOnly ? markdownReadOnlyComponents : markdownComponents}
+        {...(preserveRelativeUrls ? { rehypePlugins: relativeUrlRehypePlugins } : {})}
+        components={components}
         mode={useStreamingMode ? "streaming" : "static"}
         dir="auto"
         parseIncompleteMarkdown

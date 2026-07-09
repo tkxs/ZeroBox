@@ -511,16 +511,22 @@ export const RightDockPanel = memo(function RightDockPanel(props: RightDockPanel
     );
   }, [managedProcessState.processes]);
 
-  const { consumeSuppressedTabClick, draggingTabId, renderTabDragHandle, tabsScrollRef } =
-    useRightDockTabReorder({
-      canReorderTabs,
-      onCommitTabOrder: commitTabOrder,
-      onDraftTabOrderChange: setDraftTabOrder,
-      orderedTabIds: orderedProjectTabIds,
-      projectPathKey,
-      reorderHint: t("projectTools.reorderTabHint"),
-      reorderLabel: t("projectTools.reorderTab"),
-    });
+  const {
+    consumeSuppressedTabClick,
+    draggingTabId,
+    getTabDragProps,
+    getTabDragStyle,
+    renderTabDragHandle,
+    tabsScrollRef,
+  } = useRightDockTabReorder({
+    canReorderTabs,
+    onCommitTabOrder: commitTabOrder,
+    onDraftTabOrderChange: setDraftTabOrder,
+    orderedTabIds: orderedProjectTabIds,
+    projectPathKey,
+    reorderHint: t("projectTools.reorderTabHint"),
+    reorderLabel: t("projectTools.reorderTab"),
+  });
 
   const showDisabledMessage = Boolean(
     disabledMessage && !tunnelAvailable && !tunnelInitialized && !sshTunnelInitialized,
@@ -739,6 +745,8 @@ export const RightDockPanel = memo(function RightDockPanel(props: RightDockPanel
                       closingSessionIds={closingSessionIds}
                       draggingTabId={draggingTabId}
                       renderTabDragHandle={renderTabDragHandle}
+                      getTabDragProps={getTabDragProps}
+                      getTabDragStyle={getTabDragStyle}
                       consumeSuppressedTabClick={consumeSuppressedTabClick}
                       onActivateTab={activateTab}
                       onActivateTerminalSession={activateTerminalSession}

@@ -1,10 +1,12 @@
 import {
   type MutableRefObject,
   memo,
+  type FocusEvent as ReactFocusEvent,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -66,6 +68,16 @@ function isReasoningLevel(value: unknown): value is ReasoningLevel {
   return typeof value === "string" && Object.hasOwn(REASONING_I18N_KEYS, value);
 }
 
+function isFocusVisibleTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  try {
+    return target.matches(":focus-visible");
+  } catch {
+    // Engines without :focus-visible keep the legacy show-on-any-focus behavior.
+    return true;
+  }
+}
+
 function RuntimeControlTooltip(props: { label: string; children: ReactNode }) {
   const triggerRef = useRef<HTMLSpanElement | null>(null);
   const tooltipRef = useRef<HTMLSpanElement | null>(null);
@@ -114,9 +126,29 @@ function RuntimeControlTooltip(props: { label: string; children: ReactNode }) {
     setIsVisible(false);
   }, [clearOpenTimer]);
 
+  const handlePointerEnter = useCallback(
+    (event: ReactPointerEvent<HTMLSpanElement>) => {
+      // Touch has no hover: a tap would open a tooltip nothing ever closes.
+      if (event.pointerType === "touch") return;
+      showTooltip();
+    },
+    [showTooltip],
+  );
+
+  const handleFocusCapture = useCallback(
+    (event: ReactFocusEvent<HTMLSpanElement>) => {
+      // Only keyboard focus opens the tooltip; click/window-refocus would
+      // otherwise pop it without hover (e.g. after the file picker closes).
+      if (!isFocusVisibleTarget(event.target)) return;
+      showTooltip();
+    },
+    [showTooltip],
+  );
+
   useEffect(() => clearOpenTimer, [clearOpenTimer]);
 
-  useEffect(() => {
+  // Layout effect so the measured-width reposition lands before paint.
+  useLayoutEffect(() => {
     if (!isVisible) return;
 
     updatePosition();
@@ -134,8 +166,9 @@ function RuntimeControlTooltip(props: { label: string; children: ReactNode }) {
       ref={triggerRef}
       className="inline-flex shrink-0"
       onBlurCapture={hideTooltip}
-      onFocusCapture={showTooltip}
-      onPointerEnter={showTooltip}
+      onFocusCapture={handleFocusCapture}
+      onPointerDownCapture={hideTooltip}
+      onPointerEnter={handlePointerEnter}
       onPointerLeave={hideTooltip}
     >
       {props.children}
@@ -269,7 +302,13 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
   const selectedReasoning = reasoningOptions.includes(chatRuntimeControls.reasoning)
     ? chatRuntimeControls.reasoning
     : DEFAULT_CHAT_RUNTIME_CONTROLS.reasoning;
-  const uploadTooltip = t("chat.upload.button");
+  const uploadTooltip = isUploadingFiles
+    ? t("chat.upload.uploading")
+    : !isAgentMode
+      ? t("chat.upload.onlyInTools")
+      : !workdir
+        ? t("chat.upload.requireWorkdir")
+        : t("chat.upload.button");
   const thinkingTooltip = !thinkingSupported
     ? t("chat.runtime.thinkingUnavailable")
     : t("chat.runtime.thinkingTooltip");
@@ -562,7 +601,6 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                                   type="button"
                                   disabled={queueCollapsed}
                                   onClick={() => onEditQueuedTurn(item.id)}
-                                  title={t("chat.queue.edit")}
                                   aria-label={t("chat.queue.edit")}
                                   className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground"
                                 >
@@ -574,7 +612,6 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                                   type="button"
                                   disabled={queueCollapsed}
                                   onClick={() => onRunQueuedTurnNow(item.id)}
-                                  title={t("chat.queue.runNow")}
                                   aria-label={t("chat.queue.runNow")}
                                   className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground"
                                 >
@@ -586,7 +623,6 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                                   type="button"
                                   disabled={queueCollapsed}
                                   onClick={() => onRemoveQueuedTurn(item.id)}
-                                  title={t("chat.queue.delete")}
                                   aria-label={t("chat.queue.delete")}
                                   className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
                                 >
@@ -772,7 +808,10 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                 >
                   <SelectTrigger
                     className={cn(
-                      "composer-reasoning-trigger group/reasoning h-8 w-auto shrink-0 gap-0.5 rounded-full border pl-2 pr-1.5 text-xs font-medium shadow-none outline-hidden transition-all duration-200 ease-out disabled:opacity-45 [&>svg:last-child]:h-3 [&>svg:last-child]:w-3 [&>svg:last-child]:opacity-50 [&>svg:last-child]:transition-transform [&>svg:last-child]:duration-200 [&[data-open]>svg:last-child]:rotate-180",
+                      // Base UI wraps the chevron in an Icon <span>, so the
+                      // svg is a descendant (not a direct child) of the
+                      // trigger; the open state lives on data-popup-open.
+                      "composer-reasoning-trigger group/reasoning h-8 w-auto shrink-0 gap-0.5 rounded-full border pl-2 pr-1.5 text-xs font-medium shadow-none outline-hidden transition-all duration-200 ease-out disabled:opacity-45 [&_svg:last-child]:h-3 [&_svg:last-child]:w-3 [&_svg:last-child]:opacity-50 [&_svg:last-child]:transition-transform [&_svg:last-child]:duration-200 [&[data-popup-open]_svg:last-child]:rotate-180",
                       chatRuntimeControls.thinkingEnabled
                         ? "border-violet-300/30 bg-violet-50/55 text-foreground hover:border-violet-300/45 hover:bg-violet-50/80 dark:border-violet-300/15 dark:bg-violet-400/[0.07] dark:text-foreground dark:hover:bg-violet-400/[0.13]"
                         : "border-transparent bg-foreground/4 text-muted-foreground hover:bg-foreground/[0.07] dark:bg-white/[0.04] dark:hover:bg-white/[0.08]",
@@ -804,7 +843,7 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                       <SelectItem
                         key={value}
                         value={value}
-                        className="composer-reasoning-item rounded-md transition-all duration-150 ease-out focus:translate-x-0.5 focus:bg-violet-50/70 focus:text-foreground data-[selected]:bg-violet-50/80 data-[selected]:font-medium dark:focus:bg-violet-400/[0.12] dark:data-[selected]:bg-violet-400/[0.14]"
+                        className="composer-reasoning-item rounded-md transition-all duration-150 ease-out data-[highlighted]:translate-x-0.5 data-[highlighted]:bg-violet-50/70 data-[highlighted]:text-foreground data-[selected]:bg-violet-50/80 data-[selected]:font-medium dark:data-[highlighted]:bg-violet-400/[0.12] dark:data-[selected]:bg-violet-400/[0.14]"
                         style={{ animationDelay: `${Math.min(index, 5) * 0.022}s` }}
                       >
                         {t(REASONING_I18N_KEYS[value])}

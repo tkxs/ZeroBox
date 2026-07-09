@@ -58,9 +58,19 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
   const isUploadingFilesRef = useRef(isUploadingFiles);
   const uploadDragDepthRef = useRef(0);
   const displayedConversationIdRef = useRef("");
+  // Render-assigned mirror: an in-flight import settling between a render and
+  // its effects must still see the latest mode when it decides whether its
+  // result is stale.
+  const executionModeRef = useRef(executionMode);
+  executionModeRef.current = executionMode;
 
   const displayedConversationId = (selectedHistoryId || conversationId).trim();
   displayedConversationIdRef.current = displayedConversationId;
+
+  const setUploadingFiles = useCallback((active: boolean) => {
+    isUploadingFilesRef.current = active;
+    setIsUploadingFiles(active);
+  }, []);
 
   const isDisplayedConversation = useCallback((targetConversationId: string) => {
     const conversationIdValue = targetConversationId.trim();
@@ -111,6 +121,23 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
     [getPendingUploadsForConversation, setPendingUploadsForConversation],
   );
 
+  // A draft conversation got its real id: re-key its stored uploads without
+  // touching the rendered state — the displayed id flips to `nextId` in the
+  // same commit, so the switch effect below re-reads the moved entry.
+  const moveConversationUploads = useCallback((previousId: string, nextId: string) => {
+    const previous = previousId.trim();
+    const next = nextId.trim();
+    if (!previous || !next || previous === next) {
+      return;
+    }
+    const files = pendingUploadsByConversationRef.current.get(previous);
+    if (files === undefined) {
+      return;
+    }
+    pendingUploadsByConversationRef.current.delete(previous);
+    pendingUploadsByConversationRef.current.set(next, files);
+  }, []);
+
   const clearPendingUploads = useCallback(() => {
     pendingUploadedFilesRef.current = [];
     pendingUploadsByConversationRef.current.clear();
@@ -122,20 +149,12 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
   }, []);
 
   useEffect(() => {
-    pendingUploadedFilesRef.current = pendingUploadedFiles;
-  }, [pendingUploadedFiles]);
-
-  useEffect(() => {
     const nextFiles = displayedConversationId
       ? (pendingUploadsByConversationRef.current.get(displayedConversationId) ?? [])
       : [];
     pendingUploadedFilesRef.current = nextFiles;
     setPendingUploadedFiles(nextFiles);
   }, [displayedConversationId]);
-
-  useEffect(() => {
-    isUploadingFilesRef.current = isUploadingFiles;
-  }, [isUploadingFiles]);
 
   const handleImportReadableFiles = useCallback(
     async (filesToImport: File[]) => {
@@ -177,10 +196,22 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
       const importBatch = filesToImport.slice(0, remainingFileSlots);
       const ignoredForLimit = filesToImport.length - importBatch.length;
       setChatError(null);
-      isUploadingFilesRef.current = true;
-      setIsUploadingFiles(true);
+      setUploadingFiles(true);
       try {
         const result = await importReadableFiles(token, workdir, importBatch);
+        // An import that settles after its upload context was invalidated
+        // must not resurrect cleared attachments: the files landed under the
+        // old workdir, so their relative paths are stale there.
+        if (
+          executionModeRef.current === "text" ||
+          (isDisplayedConversation(targetConversationId) &&
+            displayedConversationWorkdirRef.current.trim() !== workdir)
+        ) {
+          if (isDisplayedConversation(targetConversationId)) {
+            setChatError("上传目标已失效，已忽略本次导入的文件。");
+          }
+          return;
+        }
         registerLocalUploadedImagePreviews({
           workspaceRoot: workdir,
           uploadedFiles: result.files,
@@ -218,8 +249,7 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
           setChatError(asErrorMessage(error, "导入文件失败"));
         }
       } finally {
-        isUploadingFilesRef.current = false;
-        setIsUploadingFiles(false);
+        setUploadingFiles(false);
       }
     },
     [
@@ -231,6 +261,7 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
       locale,
       setChatError,
       setPendingUploadsForConversation,
+      setUploadingFiles,
       token,
       updatePendingUploadsForConversation,
     ],
@@ -343,16 +374,14 @@ export function usePendingUploads(params: UsePendingUploadsParams) {
 
   return {
     pendingUploadedFiles,
-    pendingUploadedFilesRef,
-    pendingUploadsByConversationRef,
     isUploadingFiles,
-    isUploadingFilesRef,
     isFileDropActive,
     fileInputRef,
-    setIsUploadingFiles,
+    setUploadingFiles,
     getPendingUploadsForConversation,
     setPendingUploadsForConversation,
     updatePendingUploadsForConversation,
+    moveConversationUploads,
     clearPendingUploads,
     handleImportReadableFiles,
     handleFileDragEnter,

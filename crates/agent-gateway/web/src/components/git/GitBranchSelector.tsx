@@ -38,6 +38,7 @@ function assertGitOperationResult(value: unknown, fallbackMessage: string) {
 }
 
 const GIT_BRANCH_SELECTOR_POLL_INTERVAL_MS = 3000;
+const REMOTE_BRANCH_DISPLAY_LIMIT = 40;
 
 type GitBranchRefreshOptions = {
   force?: boolean;
@@ -486,7 +487,7 @@ export function GitBranchSelector(props: {
           <span className="min-w-0 truncate">{label}</span>
         </DropdownMenuTrigger>
         <DropdownMenuContent
-          className="flex w-72 flex-col overflow-hidden p-0"
+          className="composer-branch-dropdown flex w-72 flex-col overflow-hidden p-0"
           side="top"
           align="start"
         >
@@ -533,9 +534,11 @@ export function GitBranchSelector(props: {
               </>
             ) : noRepo ? null : (
               <>
-                <DropdownMenuLabel className="px-2 py-1 text-[11px] uppercase tracking-wide text-muted-foreground">
-                  {t("git.branchSelector.localBranches")}
-                </DropdownMenuLabel>
+                {localBranches.length > 0 ? (
+                  <DropdownMenuLabel className="px-2 py-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                    {t("git.branchSelector.localBranches")}
+                  </DropdownMenuLabel>
+                ) : null}
                 {localBranches.map((branch) => (
                   <DropdownMenuItem
                     key={branch.fullName}
@@ -551,10 +554,12 @@ export function GitBranchSelector(props: {
                     <span className="min-w-0 flex-1 truncate">{branch.name}</span>
                   </DropdownMenuItem>
                 ))}
-                <DropdownMenuLabel className="px-2 py-1 text-[11px] uppercase tracking-wide text-muted-foreground">
-                  {t("git.branchSelector.remoteBranches")}
-                </DropdownMenuLabel>
-                {remoteBranches.slice(0, 40).map((branch) => {
+                {remoteBranches.length > 0 ? (
+                  <DropdownMenuLabel className="px-2 py-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                    {t("git.branchSelector.remoteBranches")}
+                  </DropdownMenuLabel>
+                ) : null}
+                {remoteBranches.slice(0, REMOTE_BRANCH_DISPLAY_LIMIT).map((branch) => {
                   const isCurrentUpstream =
                     branch.current ||
                     (currentUpstream !== "" && branch.fullName === currentUpstream);
@@ -574,6 +579,14 @@ export function GitBranchSelector(props: {
                     </DropdownMenuItem>
                   );
                 })}
+                {remoteBranches.length > REMOTE_BRANCH_DISPLAY_LIMIT ? (
+                  <div className="px-2 py-1 text-[11px] text-muted-foreground">
+                    {t("git.branchSelector.moreRemoteBranches").replace(
+                      "{count}",
+                      String(remoteBranches.length - REMOTE_BRANCH_DISPLAY_LIMIT),
+                    )}
+                  </div>
+                ) : null}
               </>
             )}
           </div>
@@ -585,8 +598,17 @@ export function GitBranchSelector(props: {
                     value={draftBranch}
                     onChange={(event) => setDraftBranch(event.target.value)}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter") createBranch();
-                      if (event.key === "Escape") resetCreateBranch();
+                      // Keep keystrokes out of the menu: typeahead would steal
+                      // focus while typing, and Escape should only discard the
+                      // draft instead of closing the whole menu.
+                      event.stopPropagation();
+                      if (event.nativeEvent.isComposing) return;
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        createBranch();
+                      } else if (event.key === "Escape") {
+                        resetCreateBranch();
+                      }
                     }}
                     placeholder={t("git.branchSelector.newBranchPlaceholder")}
                     className="h-8 text-xs"

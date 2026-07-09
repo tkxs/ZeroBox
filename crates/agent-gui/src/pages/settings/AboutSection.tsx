@@ -100,9 +100,11 @@ export function AboutSection(props: AboutSectionProps) {
               ? t("settings.aboutInstalled")
               : latestResult?.available
                 ? t("settings.aboutUpdateAvailable")
-                : latestResult?.configured
-                  ? t("settings.aboutUpToDate")
-                  : t("settings.aboutUpdaterNotConfigured");
+                : latestResult?.manualDownload
+                  ? t("settings.aboutManualUpdate")
+                  : latestResult?.configured
+                    ? t("settings.aboutUpToDate")
+                    : t("settings.aboutUpdaterNotConfigured");
   const statusDescription =
     checkState.status === "error"
       ? appUpdate.message || t("settings.aboutUpdateError")
@@ -116,9 +118,11 @@ export function AboutSection(props: AboutSectionProps) {
               ? t("settings.aboutInstalledDesc")
               : latestResult?.available
                 ? t("settings.aboutUpdateAvailableDesc")
-                : latestResult?.configured
-                  ? t("settings.aboutUpToDateDesc")
-                  : latestResult?.message || t("settings.aboutUpdaterNotConfiguredDesc");
+                : latestResult?.manualDownload
+                  ? t("settings.aboutManualUpdateDesc")
+                  : latestResult?.configured
+                    ? t("settings.aboutUpToDateDesc")
+                    : latestResult?.message || t("settings.aboutUpdaterNotConfiguredDesc");
 
   return (
     <div className="space-y-6">
@@ -188,7 +192,7 @@ export function AboutSection(props: AboutSectionProps) {
                   <AlertTriangle className="h-4 w-4 text-amber-500" />
                 ) : restarting ? (
                   <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                ) : latestResult?.available ? (
+                ) : latestResult?.available || latestResult?.manualDownload ? (
                   <Download className="h-4 w-4 text-primary" />
                 ) : checking ? (
                   <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />

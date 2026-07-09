@@ -1,3 +1,5 @@
+import type { KnownProvider } from "@earendil-works/pi-ai";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { DEFAULT_LOCALE, type Locale, normalizeLocale } from "../../i18n/config";
 import { mergeAlwaysEnabledSkillNames } from "../skills/builtin";
 import { SYSTEM_TOOL_OPTIONS, type SystemToolId } from "../tools/systemToolOptions";
@@ -933,9 +935,32 @@ export function normalizeRemoteSettings(input: unknown): RemoteSettings {
   };
 }
 
+function toKnownProvider(providerId: ProviderId): KnownProvider {
+  if (providerId === "codex") return "openai";
+  if (providerId === "gemini") return "google";
+  return "anthropic";
+}
+
+function getKnownModelLimits(
+  providerId: ProviderId,
+  modelId: string | undefined,
+): Pick<ProviderModelConfig, "contextWindow" | "maxOutputToken"> | undefined {
+  const trimmedId = modelId?.trim();
+  if (!trimmedId) return undefined;
+  const known = getBuiltinModels(toKnownProvider(providerId)).find(
+    (model) => model.id === trimmedId,
+  );
+  if (!known) return undefined;
+  return { contextWindow: known.contextWindow, maxOutputToken: known.maxTokens };
+}
+
 export function getProviderModelDefaults(
   providerId: ProviderId,
+  modelId?: string,
 ): Pick<ProviderModelConfig, "contextWindow" | "maxOutputToken"> {
+  const known = getKnownModelLimits(providerId, modelId);
+  if (known) return known;
+
   if (providerId === "codex") {
     return {
       contextWindow: DEFAULT_CODEX_CONTEXT_WINDOW,
@@ -961,7 +986,7 @@ export function createProviderModelConfig(
   modelId: string,
 ): ProviderModelConfig {
   const id = modelId.trim();
-  const defaults = getProviderModelDefaults(providerId);
+  const defaults = getProviderModelDefaults(providerId, id);
   return {
     id,
     contextWindow: defaults.contextWindow,
@@ -987,7 +1012,7 @@ export function normalizeProviderModelConfig(
         : "";
   if (!id) return null;
 
-  const defaults = getProviderModelDefaults(providerId);
+  const defaults = getProviderModelDefaults(providerId, id);
   return {
     id,
     contextWindow: normalizePositiveInteger(obj.contextWindow, defaults.contextWindow),
