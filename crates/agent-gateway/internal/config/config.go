@@ -21,6 +21,7 @@ type Config struct {
 	ChatRenderStartTimeout   time.Duration
 	HeartbeatPeriod          time.Duration
 	WebSocketHeartbeatPeriod time.Duration
+	WebSocketHeartbeatGrace  time.Duration
 	WebSocketWriteTimeout    time.Duration
 	WebSocketWriteQueueSize  int
 	GRPCMaxMessageBytes      int
@@ -41,6 +42,7 @@ func Load() *Config {
 	flag.DurationVar(&cfg.ChatRenderStartTimeout, "chat-render-start-timeout", getenvDuration("LIVEAGENT_GATEWAY_CHAT_RENDER_START_TIMEOUT", 45*time.Second), "timeout waiting for the desktop app to start an accepted remote chat request")
 	flag.DurationVar(&cfg.HeartbeatPeriod, "heartbeat-period", getenvDuration("LIVEAGENT_GATEWAY_HEARTBEAT_PERIOD", 30*time.Second), "ping interval for agent connection")
 	flag.DurationVar(&cfg.WebSocketHeartbeatPeriod, "websocket-heartbeat-period", getenvDuration("LIVEAGENT_GATEWAY_WS_HEARTBEAT_PERIOD", 15*time.Second), "ping interval for browser WebSocket connections")
+	flag.DurationVar(&cfg.WebSocketHeartbeatGrace, "websocket-heartbeat-grace", getenvDuration("LIVEAGENT_GATEWAY_WS_HEARTBEAT_GRACE", 5*time.Second), "extra slack added to the browser WebSocket idle timeout (idle = 3x period + grace)")
 	flag.DurationVar(&cfg.WebSocketWriteTimeout, "websocket-write-timeout", getenvDuration("LIVEAGENT_GATEWAY_WS_WRITE_TIMEOUT", 10*time.Second), "write timeout for browser WebSocket connections")
 	flag.IntVar(&cfg.WebSocketWriteQueueSize, "websocket-write-queue-size", getenvInt("LIVEAGENT_GATEWAY_WS_WRITE_QUEUE_SIZE", 512), "write queue buffer size for browser WebSocket connections")
 	flag.IntVar(&cfg.GRPCMaxMessageBytes, "grpc-max-message-bytes", getenvInt("LIVEAGENT_GATEWAY_GRPC_MAX_MESSAGE_BYTES", DefaultGRPCMaxMessageBytes), "maximum gRPC message size in bytes")
@@ -67,6 +69,9 @@ func Load() *Config {
 	}
 	if cfg.WebSocketHeartbeatPeriod <= 0 {
 		cfg.WebSocketHeartbeatPeriod = 15 * time.Second
+	}
+	if cfg.WebSocketHeartbeatGrace <= 0 {
+		cfg.WebSocketHeartbeatGrace = 5 * time.Second
 	}
 	if cfg.WebSocketWriteTimeout <= 0 {
 		cfg.WebSocketWriteTimeout = 10 * time.Second

@@ -1380,3 +1380,85 @@ test("a matching run_finished settles the run without firing onDivergence", () =
   );
   assert.equal(divergences, 0);
 });
+
+function installHiddenTab() {
+  const rafCalls = { count: 0 };
+  globalThis.document = { visibilityState: "hidden" };
+  globalThis.requestAnimationFrame = () => {
+    rafCalls.count += 1;
+    return 1;
+  };
+  globalThis.cancelAnimationFrame = () => {};
+  const uninstall = () => {
+    delete globalThis.document;
+    delete globalThis.requestAnimationFrame;
+    delete globalThis.cancelAnimationFrame;
+  };
+  return { rafCalls, uninstall };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+test("hidden tab: streamed deltas coalesce into one timer-driven commit instead of rAF", async () => {
+  const { rafCalls, uninstall } = installHiddenTab();
+  try {
+    const store = createTranscriptStore();
+    store.applyEvent(userMessage("run-h", 1, "hello"));
+    store.applyEvent(runStarted("run-h", 2));
+
+    let emits = 0;
+    store.subscribe(() => {
+      emits += 1;
+    });
+    const revisionBefore = store.getSnapshot().revision;
+
+    for (let i = 0; i < 5; i++) {
+      store.applyEvent(token("run-h", 3 + i, `chunk-${i} `));
+    }
+    assert.equal(rafCalls.count, 0, "hidden tab must not schedule via rAF");
+    assert.equal(emits, 0, "deltas coalesce; nothing commits synchronously");
+    assert.equal(store.getSnapshot().revision, revisionBefore);
+
+    await sleep(400);
+    assert.equal(emits, 1, "one timer-driven commit for the whole burst");
+    const text = allRows(store.getSnapshot())
+      .map((row) => rowText(row))
+      .join("\n");
+    for (let i = 0; i < 5; i++) {
+      assert.ok(text.includes(`chunk-${i}`), `chunk-${i} committed`);
+    }
+  } finally {
+    uninstall();
+  }
+});
+
+test("hidden tab: flush() commits immediately and cancels the pending timer", async () => {
+  const { uninstall } = installHiddenTab();
+  try {
+    const store = createTranscriptStore();
+    store.applyEvent(userMessage("run-f", 1, "hello"));
+    store.applyEvent(runStarted("run-f", 2));
+
+    let emits = 0;
+    store.subscribe(() => {
+      emits += 1;
+    });
+
+    store.applyEvent(token("run-f", 3, "tail text"));
+    assert.equal(emits, 0);
+
+    store.flush();
+    assert.equal(emits, 1, "flush commits synchronously");
+    const text = allRows(store.getSnapshot())
+      .map((row) => rowText(row))
+      .join("\n");
+    assert.ok(text.includes("tail text"));
+
+    await sleep(400);
+    assert.equal(emits, 1, "the canceled hidden timer must not double-commit");
+  } finally {
+    uninstall();
+  }
+});

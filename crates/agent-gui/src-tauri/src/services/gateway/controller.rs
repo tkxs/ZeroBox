@@ -58,6 +58,7 @@ impl GatewayController {
             settings_snapshot: Mutex::new(None),
             remote_chat_inbox: Mutex::new(HashMap::new()),
             chat_run_ledger: Mutex::new(ChatRunLedger::new()),
+            runtime_status_republish: Mutex::new(None),
             tunnel_store,
             tunnel_proxy: TunnelProxy::new(),
             workspace_watch,
@@ -66,6 +67,7 @@ impl GatewayController {
             terminal_stream_forwarder_once: Once::new(),
             sftp_forwarder_once: Once::new(),
             remote_chat_inbox_sweeper_once: Once::new(),
+            runtime_status_republisher_once: Once::new(),
             tunnel_store_once: Once::new(),
         }
     }
@@ -76,6 +78,7 @@ impl GatewayController {
         self.start_terminal_stream_forwarder();
         self.start_sftp_forwarder();
         self.start_remote_chat_inbox_sweeper();
+        self.start_runtime_status_republisher();
         self.start_tunnel_store();
         self.ensure_runner()
     }
@@ -148,6 +151,31 @@ impl GatewayController {
                     }
                     if let Err(error) = controller.flush_unsent_chat_run_terminals().await {
                         eprintln!("flush gateway chat run terminals failed: {error}");
+                    }
+                }
+            });
+        });
+    }
+
+    // Echoes the webview's last runtime status so the gateway's 15s
+    // chat-runtime TTL stays satisfied while the desktop window is hidden or
+    // occluded and the webview's own 2s heartbeat interval is throttled.
+    pub(crate) fn start_runtime_status_republisher(self: &Arc<Self>) {
+        let controller = Arc::clone(self);
+        self.runtime_status_republisher_once.call_once(move || {
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(GATEWAY_RUNTIME_STATUS_REPUBLISH_INTERVAL).await;
+                    let Some((worker_id, state, visible, active_run_count)) =
+                        controller.runtime_status_republish_snapshot()
+                    else {
+                        continue;
+                    };
+                    if let Err(error) = controller
+                        .send_chat_runtime_status_envelope(worker_id, state, visible, active_run_count)
+                        .await
+                    {
+                        eprintln!("republish gateway chat runtime status failed: {error}");
                     }
                 }
             });

@@ -63,6 +63,9 @@ func (m *Manager) SetSession(s *AgentSession) {
 			go m.pushWorkspaceWatchSet()
 		}
 	}
+	if sessionChanged {
+		m.broadcastStatus()
+	}
 }
 
 func (m *Manager) ClearSession(session *AgentSession) {

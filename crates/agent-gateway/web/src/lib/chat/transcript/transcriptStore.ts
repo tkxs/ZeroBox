@@ -79,6 +79,13 @@ const EMPTY_SNAPSHOT: TranscriptSnapshot = {
   revision: 0,
 };
 
+// Streaming-delta commit cadence while the tab is hidden and rAF is frozen.
+const HIDDEN_COMMIT_DELAY_MS = 250;
+
+function isDocumentHidden() {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
 function readEventClientRequestId(event: ConversationStreamEvent): string {
   const value = (event as { client_request_id?: unknown }).client_request_id;
   return typeof value === "string" ? value.trim() : "";
@@ -128,6 +135,7 @@ export function createTranscriptStore(options?: {
   let snapshot = EMPTY_SNAPSHOT;
   let dirty = false;
   let rafId: number | null = null;
+  let hiddenCommitTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<() => void>();
 
   // Row caches: history rows rebuild only when the history region changes;
@@ -279,6 +287,10 @@ export function createTranscriptStore(options?: {
   };
   const commit = () => {
     rafId = null;
+    if (hiddenCommitTimer !== null) {
+      clearTimeout(hiddenCommitTimer);
+      hiddenCommitTimer = null;
+    }
     if (!dirty) {
       return;
     }
@@ -301,6 +313,21 @@ export function createTranscriptStore(options?: {
         rafId = null;
       }
       commit();
+      return;
+    }
+    if (isDocumentHidden()) {
+      // rAF never fires in a hidden tab, so streamed deltas would pile up
+      // unrendered until refocus. A single coarse timer keeps commits
+      // flowing (browser throttling may stretch it — that only delays a
+      // snapshot nobody is looking at); the flush-on-visible listener
+      // paints the final state the instant the tab comes back.
+      if (rafId !== null && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      if (hiddenCommitTimer === null) {
+        hiddenCommitTimer = setTimeout(commit, HIDDEN_COMMIT_DELAY_MS);
+      }
       return;
     }
     if (rafId === null && typeof requestAnimationFrame === "function") {

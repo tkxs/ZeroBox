@@ -105,7 +105,22 @@ export class ChatCommandPipeline {
 
   // chat.command_update push from the gateway (issuing connection only).
   handleCommandUpdate(update: ChatCommandUpdate): void {
-    const pending = this.byRunId.get(update.runId);
+    let pending = this.byRunId.get(update.runId);
+    if (!pending && update.clientRequestId) {
+      // The update rides the gateway's priority control queue and can
+      // overtake the chat.command accept response on a congested link, so
+      // the run id may not be bound yet. Adopt it — but only onto a pending
+      // that is still unbound and proves ownership by its own client id
+      // (mirrors handleRunSignal's strict matching).
+      for (const candidate of this.pending.values()) {
+        if (candidate.runId === null && candidate.clientRequestId === update.clientRequestId) {
+          candidate.runId = update.runId;
+          this.byRunId.set(update.runId, candidate);
+          pending = candidate;
+          break;
+        }
+      }
+    }
     if (!pending) {
       return;
     }

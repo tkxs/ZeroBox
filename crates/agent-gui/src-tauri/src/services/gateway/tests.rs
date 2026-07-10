@@ -8,7 +8,7 @@ use super::{
     queue_terminal_stream_handshake_frame, required_terminal_project_path_key,
     set_disconnected_status, GatewayChatRequestEvent, GatewayChatRuntimeSnapshot,
     GatewayController, GatewayStatusSnapshot, RemoteChatInboxRecord, GATEWAY_CHAT_LEASE_MS,
-    GATEWAY_CHAT_RUNNING_LEASE_MS,
+    GATEWAY_CHAT_RUNNING_LEASE_MS, GATEWAY_RUNTIME_STATUS_REPUBLISH_MAX_AGE,
 };
 use crate::commands::settings::RemoteSettingsPayload;
 use serde_json::{json, Value};
@@ -795,5 +795,60 @@ fn runtime_status_envelope_carries_run_reports() {
     assert_eq!(
         status.finished_runs[0].message,
         "The desktop runtime stopped reporting this run."
+    );
+}
+
+#[test]
+fn runtime_status_republish_record_tracks_last_webview_report() {
+    let now = Instant::now();
+    let record = GatewayController::next_runtime_status_republish_record(
+        "worker-1", "busy", true, 2, now,
+    )
+    .expect("busy state must be recorded for republish");
+    assert_eq!(record.worker_id, "worker-1");
+    assert_eq!(record.state, "busy");
+    assert!(record.visible);
+    assert_eq!(record.active_run_count, 2);
+
+    // "suspended" is the webview's goodbye: stop echoing on its behalf.
+    assert!(GatewayController::next_runtime_status_republish_record(
+        "worker-1",
+        "suspended",
+        false,
+        0,
+        now,
+    )
+    .is_none());
+}
+
+#[test]
+fn runtime_status_republish_payload_expires_after_max_age() {
+    let now = Instant::now();
+    let record = GatewayController::next_runtime_status_republish_record(
+        "worker-1", "ready", true, 0, now,
+    )
+    .expect("record");
+
+    let fresh = GatewayController::runtime_status_republish_payload(
+        Some(&record),
+        now + GATEWAY_RUNTIME_STATUS_REPUBLISH_MAX_AGE - Duration::from_secs(1),
+    );
+    assert_eq!(
+        fresh,
+        Some(("worker-1".to_string(), "ready".to_string(), true, 0))
+    );
+
+    // A webview that has been silent past the max age (it refreshes the
+    // record at least once a minute even when throttled) is gone; the echo
+    // must stop instead of impersonating it.
+    let stale = GatewayController::runtime_status_republish_payload(
+        Some(&record),
+        now + GATEWAY_RUNTIME_STATUS_REPUBLISH_MAX_AGE + Duration::from_secs(1),
+    );
+    assert_eq!(stale, None);
+
+    assert_eq!(
+        GatewayController::runtime_status_republish_payload(None, now),
+        None
     );
 }

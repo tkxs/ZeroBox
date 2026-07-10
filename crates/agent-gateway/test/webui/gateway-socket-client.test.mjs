@@ -1282,3 +1282,188 @@ test("GatewayWebSocketClient fans chat.activity and chat.command_update out to l
   });
   resetGatewayWebSocketClient();
 });
+
+function createManualTimers() {
+  const timers = new Map();
+  let nextId = 1;
+  return {
+    setTimeout: (fn, ms = 0) => {
+      const id = nextId++;
+      timers.set(id, { fn, ms, kind: "timeout" });
+      return id;
+    },
+    clearTimeout: (id) => {
+      timers.delete(id);
+    },
+    setInterval: (fn, ms = 0) => {
+      const id = nextId++;
+      timers.set(id, { fn, ms, kind: "interval" });
+      return id;
+    },
+    clearInterval: (id) => {
+      timers.delete(id);
+    },
+    fire: (predicate) => {
+      for (const [id, timer] of [...timers]) {
+        if (!predicate(timer)) continue;
+        if (timer.kind === "timeout") timers.delete(id);
+        timer.fn();
+      }
+    },
+    delays: () => [...timers.values()].map((timer) => timer.ms),
+  };
+}
+
+test("GatewayWebSocketClient applies pushed status.event frames and polls slowly as fallback", async () => {
+  const timers = createManualTimers();
+  installBrowser({ ...timers });
+  const loader = createWebModuleLoader();
+  const { getGatewayWebSocketClient, resetGatewayWebSocketClient } =
+    loader.loadModule("src/lib/gatewaySocket.ts");
+  resetGatewayWebSocketClient();
+
+  const client = getGatewayWebSocketClient("token");
+  const statuses = [];
+  client.subscribeStatus((status, error) => {
+    statuses.push({ status, error });
+  });
+  assert.ok(
+    timers.delays().includes(30_000),
+    `status poll interval registered at 30s, got delays ${JSON.stringify(timers.delays())}`,
+  );
+
+  const socket = await connectAndAuth();
+  // The initial poll fired by subscribeStatus rides the fresh socket.
+  await waitFor(
+    () => socket.sent.some((envelope) => envelope.type === "status.get"),
+    "initial status.get",
+  );
+
+  socket.receive({
+    type: "status.event",
+    payload: { online: true, agent_id: "desktop-agent" },
+  });
+  assert.equal(statuses.at(-1)?.status?.online, true, "pushed status.event reaches listeners");
+  assert.equal(statuses.at(-1)?.error, null);
+
+  socket.receive({ type: "status.event", payload: { online: false } });
+  assert.equal(statuses.at(-1)?.status?.online, false, "offline push reaches listeners");
+  resetGatewayWebSocketClient();
+});
+
+test("GatewayWebSocketClient defers offline verdicts while hidden and reconciles on wake", async () => {
+  const timers = createManualTimers();
+  installBrowser({ ...timers });
+  const loader = createWebModuleLoader();
+  const { getGatewayWebSocketClient, resetGatewayWebSocketClient } =
+    loader.loadModule("src/lib/gatewaySocket.ts");
+  resetGatewayWebSocketClient();
+
+  const client = getGatewayWebSocketClient("token");
+  const statuses = [];
+  client.subscribeStatus((status, error) => {
+    statuses.push({ status, error });
+  });
+  const socket = await connectAndAuth();
+  socket.receive({ type: "status.event", payload: { online: true } });
+  assert.equal(statuses.at(-1)?.status?.online, true);
+
+  // Tab goes hidden, then the socket drops (e.g. the browser froze the page
+  // long enough for a proxy to cut the link).
+  globalThis.document.visibilityState = "hidden";
+  const offlineCountBefore = statuses.filter((s) => s.status?.online === false).length;
+  socket.close();
+
+  // The 15s reconnect notice fires while hidden: no offline paint.
+  timers.fire((timer) => timer.ms === 15_000);
+  assert.equal(
+    statuses.filter((s) => s.status?.online === false).length,
+    offlineCountBefore,
+    "hidden tab must not paint offline from throttled timers",
+  );
+
+  // Tab returns: wake handler reconnects; the offline verdict stays deferred
+  // until the post-wake reconnect + status refresh settles.
+  globalThis.document.visibilityState = "visible";
+  globalThis.document.dispatchEvent({ type: "visibilitychange" });
+  timers.fire((timer) => timer.ms === 0); // armed reconnect timer
+  const socket2 = await connectAndAuth(1);
+  await waitFor(
+    () => socket2.sent.some((envelope) => envelope.type === "status.get"),
+    "post-wake status refresh",
+  );
+  const statusReq = socket2.sent.find((envelope) => envelope.type === "status.get");
+  socket2.receive({ id: statusReq.id, type: "response", payload: { online: true } });
+  await waitFor(() => statuses.at(-1)?.status?.online === true, "post-wake online status");
+  assert.equal(
+    statuses.filter((s) => s.status?.online === false).length,
+    offlineCountBefore,
+    "successful wake reconcile never flashed offline",
+  );
+  resetGatewayWebSocketClient();
+});
+
+test("GatewayWebSocketClient paints offline when the post-wake reconnect notice expires visible", async () => {
+  const timers = createManualTimers();
+  installBrowser({ ...timers });
+  const loader = createWebModuleLoader();
+  const { getGatewayWebSocketClient, resetGatewayWebSocketClient } =
+    loader.loadModule("src/lib/gatewaySocket.ts");
+  resetGatewayWebSocketClient();
+
+  const client = getGatewayWebSocketClient("token");
+  const statuses = [];
+  client.subscribeStatus((status, error) => {
+    statuses.push({ status, error });
+  });
+  const socket = await connectAndAuth();
+  socket.receive({ type: "status.event", payload: { online: true } });
+
+  globalThis.document.visibilityState = "hidden";
+  socket.close();
+  timers.fire((timer) => timer.ms === 15_000);
+  assert.ok(!statuses.some((s) => s.status?.online === false), "no offline while hidden");
+
+  globalThis.document.visibilityState = "visible";
+  globalThis.document.dispatchEvent({ type: "visibilitychange" });
+  // Reconnect never succeeds; the re-armed notice expires while visible.
+  timers.fire((timer) => timer.ms === 15_000);
+  const last = statuses.at(-1);
+  assert.equal(last?.status?.online, false, "failed wake reconcile paints offline");
+  assert.equal(last?.error, "Gateway 正在重新连接...");
+  resetGatewayWebSocketClient();
+});
+
+test("GatewayWebSocketClient refreshes status immediately on wake with a healthy socket", async () => {
+  const timers = createManualTimers();
+  installBrowser({ ...timers });
+  const loader = createWebModuleLoader();
+  const { getGatewayWebSocketClient, resetGatewayWebSocketClient } =
+    loader.loadModule("src/lib/gatewaySocket.ts");
+  resetGatewayWebSocketClient();
+
+  const client = getGatewayWebSocketClient("token");
+  client.subscribeStatus(() => {});
+  const socket = await connectAndAuth();
+  await waitFor(
+    () => socket.sent.some((envelope) => envelope.type === "status.get"),
+    "initial status.get",
+  );
+  const initialStatusRequests = socket.sent.filter(
+    (envelope) => envelope.type === "status.get",
+  ).length;
+  const statusReq = socket.sent.find((envelope) => envelope.type === "status.get");
+  socket.receive({ id: statusReq.id, type: "response", payload: { online: true } });
+  // Let the in-flight refreshStatus settle (its finally runs in a microtask)
+  // so the wake-triggered refresh is not swallowed by the in-flight guard.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  globalThis.window.dispatchEvent({ type: "focus" });
+  await waitFor(
+    () =>
+      socket.sent.filter((envelope) => envelope.type === "status.get").length >
+      initialStatusRequests,
+    "wake-triggered status.get",
+  );
+  resetGatewayWebSocketClient();
+});

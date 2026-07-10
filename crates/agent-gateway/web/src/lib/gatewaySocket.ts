@@ -700,6 +700,13 @@ const RECONNECT_NOTICE_DELAY_MS = 15_000;
 const SOCKET_INBOUND_STALL_MS = 45_000;
 const FOREGROUND_SOCKET_RECYCLE_IDLE_MS = 20_000;
 const FOREGROUND_WAKEUP_RECENCY_MS = 15_000;
+// Fallback only: agent online/offline transitions arrive as pushed
+// status.event frames, so the poll exists to reconcile missed pushes and
+// TTL-derived fields (chat_runtime_ready), not to detect liveness. While the
+// pill shows offline the poll IS the recovery path against a gateway that
+// does not push (rollback), so it speeds up.
+const STATUS_POLL_INTERVAL_MS = 30_000;
+const STATUS_POLL_OFFLINE_INTERVAL_MS = 5_000;
 
 type RuntimeHost = {
   location?: {
@@ -739,6 +746,10 @@ function getRuntimeOrigin() {
     return new URL(href).origin;
   }
   return "";
+}
+
+function isDocumentHidden() {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
 
 function isForegroundWakeupEvent(event?: Event) {
@@ -1220,6 +1231,7 @@ export class GatewayWebSocketClient {
   });
   private terminalSessionSnapshot = new Map<string, TerminalSession>();
   private statusPollTimer: number | null = null;
+  private statusPollingActive = false;
   private statusRefreshInFlight = false;
   private lastStatus: AgentStatus | null = null;
   private lastStatusError: string | null = null;
@@ -1229,6 +1241,9 @@ export class GatewayWebSocketClient {
   private reconnectAttempt = 0;
   private reconnecting = false;
   private lastForegroundWakeupAt = 0;
+  // A hidden tab must not paint offline state the user cannot see from
+  // throttled timers; the verdict is deferred until a foreground recheck.
+  private offlineReassessmentPending = false;
   private prepareRuntimePromise: Promise<AgentStatus> | null = null;
   private readonly reconnectWakeup = (event?: Event) => {
     this.noteForegroundWakeup(event);
@@ -1245,13 +1260,32 @@ export class GatewayWebSocketClient {
     }
     const now = Date.now();
     this.lastForegroundWakeupAt = now;
+    const reassess = this.offlineReassessmentPending;
+    this.offlineReassessmentPending = false;
     if (
       this.socket?.readyState === WebSocket.OPEN &&
       this.authenticated &&
       this.shouldRecycleAuthenticatedSocket(now)
     ) {
       this.handleDisconnect(this.buildTransportStallError("after page restore"));
+      this.scheduleReconnectNotice();
       return;
+    }
+    if (this.socket?.readyState === WebSocket.OPEN && this.authenticated) {
+      // Healthy socket: reconcile the status truth immediately so a verdict
+      // deferred while hidden resolves to fresh state, not a stale banner.
+      if (this.statusListeners.size > 0) {
+        void this.refreshStatus();
+      }
+      return;
+    }
+    if (reassess || this.reconnectNoticeTimer !== null) {
+      // The existing notice delay doubles as the post-wake grace: nothing
+      // paints offline until a reconnect attempt has had its 15s to settle.
+      // A notice armed before (or while) hidden restarts from wake — it must
+      // not fire seconds after refocus with most of its window pre-spent.
+      this.clearReconnectNoticeTimer();
+      this.scheduleReconnectNotice();
     }
     this.scheduleReconnect(0);
   }
@@ -2275,19 +2309,33 @@ export class GatewayWebSocketClient {
 
   private startStatusPolling() {
     this.stopStatusPolling();
+    this.statusPollingActive = true;
     void this.refreshStatus();
-    const host = getRuntimeHost();
-    this.statusPollTimer = host.setInterval(() => {
-      void this.refreshStatus();
-    }, 5_000);
+    this.scheduleNextStatusPoll();
   }
 
   private stopStatusPolling() {
+    this.statusPollingActive = false;
     if (this.statusPollTimer !== null) {
       const host = getRuntimeHost();
-      host.clearInterval(this.statusPollTimer);
+      host.clearTimeout(this.statusPollTimer);
       this.statusPollTimer = null;
     }
+  }
+
+  private scheduleNextStatusPoll() {
+    if (this.disposed || !this.statusPollingActive || this.statusPollTimer !== null) {
+      return;
+    }
+    const host = getRuntimeHost();
+    const delay =
+      this.lastStatus !== null && this.lastStatus.online === false
+        ? STATUS_POLL_OFFLINE_INTERVAL_MS
+        : STATUS_POLL_INTERVAL_MS;
+    this.statusPollTimer = host.setTimeout(() => {
+      this.statusPollTimer = null;
+      void this.refreshStatus().finally(() => this.scheduleNextStatusPoll());
+    }, delay);
   }
 
   private installReconnectWakeups() {
@@ -2346,6 +2394,12 @@ export class GatewayWebSocketClient {
         this.statusListeners.size === 0 ||
         (this.socket?.readyState === WebSocket.OPEN && this.authenticated)
       ) {
+        return;
+      }
+      if (isDocumentHidden()) {
+        // Deferred: the wakeup handler re-arms this notice and only a failed
+        // post-wake reconnect gets to paint the offline banner.
+        this.offlineReassessmentPending = true;
         return;
       }
       this.emitStatus(
@@ -2468,6 +2522,12 @@ export class GatewayWebSocketClient {
         // Keep the last known status; the next poll retries.
         return;
       }
+      if (isDocumentHidden()) {
+        // Keep the last visible status; the foreground wakeup rechecks
+        // before any offline verdict is painted.
+        this.offlineReassessmentPending = true;
+        return;
+      }
       const message = asErrorMessage(error, "status request failed");
       const offlineStatus =
         this.lastStatus !== null
@@ -2485,10 +2545,20 @@ export class GatewayWebSocketClient {
   }
 
   private emitStatus(status: AgentStatus | null, error: string | null) {
+    // Whatever gets painted is the verdict; any deferred reassessment is moot.
+    this.offlineReassessmentPending = false;
     this.lastStatus = status;
     this.lastStatusError = error;
     if (status?.online === false) {
       this.terminalSessionSnapshot.clear();
+      // Switch a pending slow poll to the offline fast cadence right away
+      // rather than after its remaining (up to 30s) delay.
+      if (this.statusPollTimer !== null) {
+        const host = getRuntimeHost();
+        host.clearTimeout(this.statusPollTimer);
+        this.statusPollTimer = null;
+        this.scheduleNextStatusPoll();
+      }
     }
     for (const listener of this.statusListeners) {
       listener(status, error);
@@ -2785,6 +2855,18 @@ export class GatewayWebSocketClient {
       return;
     }
 
+    if (envelope.type === "status.event") {
+      const payload =
+        envelope.payload && typeof envelope.payload === "object"
+          ? (envelope.payload as AgentStatus)
+          : null;
+      if (payload && typeof payload.online === "boolean") {
+        this.clearReconnectNoticeTimer();
+        this.emitStatus(payload, null);
+      }
+      return;
+    }
+
     if (envelope.type === "workspace.activity") {
       const payload =
         envelope.payload && typeof envelope.payload === "object"
@@ -2885,6 +2967,8 @@ export class GatewayWebSocketClient {
     if (!this.disposed && this.statusListeners.size > 0) {
       if (isRecoverableGatewayTransportError(error) && this.shouldMaintainConnection()) {
         this.scheduleReconnectNotice();
+      } else if (isDocumentHidden()) {
+        this.offlineReassessmentPending = true;
       } else {
         this.emitStatus(
           this.lastStatus

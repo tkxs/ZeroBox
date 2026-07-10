@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"time"
 )
 
 func TestLoadNormalizesTokenAndTLSPaths(t *testing.T) {
@@ -21,6 +22,29 @@ func TestLoadNormalizesTokenAndTLSPaths(t *testing.T) {
 	}
 	if cfg.TLSKey != "key.pem" {
 		t.Fatalf("TLSKey = %q, want %q", cfg.TLSKey, "key.pem")
+	}
+}
+
+func TestLoadWebSocketHeartbeatGrace(t *testing.T) {
+	t.Setenv("LIVEAGENT_GATEWAY_TOKEN", "dev-token")
+	resetFlagsForTest(t)
+	cfg := Load()
+	if cfg.WebSocketHeartbeatGrace != 5*time.Second {
+		t.Fatalf("WebSocketHeartbeatGrace default = %s, want 5s", cfg.WebSocketHeartbeatGrace)
+	}
+
+	t.Setenv("LIVEAGENT_GATEWAY_WS_HEARTBEAT_GRACE", "45s")
+	resetFlagsForTest(t)
+	cfg = Load()
+	if cfg.WebSocketHeartbeatGrace != 45*time.Second {
+		t.Fatalf("WebSocketHeartbeatGrace = %s, want 45s", cfg.WebSocketHeartbeatGrace)
+	}
+
+	t.Setenv("LIVEAGENT_GATEWAY_WS_HEARTBEAT_GRACE", "-3s")
+	resetFlagsForTest(t)
+	cfg = Load()
+	if cfg.WebSocketHeartbeatGrace != 5*time.Second {
+		t.Fatalf("WebSocketHeartbeatGrace with negative env = %s, want 5s fallback", cfg.WebSocketHeartbeatGrace)
 	}
 }
 

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -54,6 +55,10 @@ func (c *websocketConnection) handleChatSubscribe(req websocketRequest) {
 	// Register (replacing any previous subscription for this conversation)
 	// before responding so no live event published after the replay boundary
 	// is dropped.
+	entry := &chatStreamSubscription{
+		conversationID: conversationID,
+		cancel:         sub.Cleanup,
+	}
 	c.chatStreamsMu.Lock()
 	if c.chatStreams == nil {
 		c.chatStreams = make(map[string]*chatStreamSubscription)
@@ -61,14 +66,22 @@ func (c *websocketConnection) handleChatSubscribe(req websocketRequest) {
 	if previous := c.chatStreams[conversationID]; previous != nil {
 		previous.cancel()
 	}
-	c.chatStreams[conversationID] = &chatStreamSubscription{
-		conversationID: conversationID,
-		cancel:         sub.Cleanup,
-	}
+	c.chatStreams[conversationID] = entry
 	c.chatStreamsMu.Unlock()
 
 	if err := c.writeResponse(req.ID, resp); err != nil {
 		sub.Cleanup()
+		c.chatStreamsMu.Lock()
+		if c.chatStreams[conversationID] == entry {
+			delete(c.chatStreams, conversationID)
+		}
+		c.chatStreamsMu.Unlock()
+		// A shed subscribe response would otherwise dead-end the stream: the
+		// client's request just times out and nothing ever resubscribes. The
+		// control-queue reset re-arms its recovery loop.
+		if errors.Is(err, errWriteQueueFull) {
+			c.writeSubscriptionResetOrClose(conversationID)
+		}
 		return
 	}
 
@@ -76,8 +89,10 @@ func (c *websocketConnection) handleChatSubscribe(req websocketRequest) {
 }
 
 // forwardConversationEvents pushes live stream events to the client. When the
-// subscriber channel closes because it overflowed, the client is told to
-// re-subscribe (resume by after_seq replays the missed tail from the buffer).
+// subscriber channel closes because it overflowed — or the connection's own
+// write queue stays full — the client is told to re-subscribe (resume by
+// after_seq replays the missed tail from the buffer). Congestion sheds this
+// subscription, never the connection.
 func (c *websocketConnection) forwardConversationEvents(
 	conversationID string,
 	sub *session.ConversationSubscription,
@@ -90,16 +105,32 @@ func (c *websocketConnection) forwardConversationEvents(
 		case event, ok := <-sub.EventCh:
 			if !ok {
 				if sub.Overflowed() {
-					_ = c.writeEvent("chat.subscription_reset", map[string]any{
-						"conversation_id": conversationID,
-					})
+					c.writeSubscriptionResetOrClose(conversationID)
 				}
 				return
 			}
 			if err := c.writeEvent("chat.event", event.Payload); err != nil {
+				if errors.Is(err, errWriteQueueFull) {
+					// The reset rides the control queue, so it overtakes the
+					// congested data backlog; stale queued chat.events are
+					// deduped client-side by seq after the resync.
+					c.writeSubscriptionResetOrClose(conversationID)
+				}
 				return
 			}
 		}
+	}
+}
+
+// writeSubscriptionResetOrClose delivers the one signal that lets a client
+// recover a shed conversation stream. If even the control queue cannot take
+// it, the link is beyond load-shedding: closing forces a reconnect whose
+// resubscribe (after_seq) is the only remaining path that cannot be lost.
+func (c *websocketConnection) writeSubscriptionResetOrClose(conversationID string) {
+	if err := c.writeEvent("chat.subscription_reset", map[string]any{
+		"conversation_id": conversationID,
+	}); err != nil {
+		c.close()
 	}
 }
 

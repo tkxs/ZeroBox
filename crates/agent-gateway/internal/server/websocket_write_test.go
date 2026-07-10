@@ -9,6 +9,7 @@ import (
 func newEnqueueTestConnection(outboxSize int, writeTimeout time.Duration) *websocketConnection {
 	return &websocketConnection{
 		outbox:       make(chan websocketEnvelope, outboxSize),
+		ctrlOutbox:   make(chan websocketEnvelope, websocketControlQueueSize),
 		writeTimeout: writeTimeout,
 		done:         make(chan struct{}),
 	}
@@ -60,5 +61,75 @@ func TestEnqueueEnvelopeReturnsWhenConnectionCloses(t *testing.T) {
 	err := c.enqueueEnvelope(websocketEnvelope{Type: "chat.event"})
 	if err == nil || err.Error() != "connection closed" {
 		t.Fatalf("enqueueEnvelope on closed connection = %v, want connection closed", err)
+	}
+}
+
+func TestWriteEnvelopeRoutesControlTypesToControlQueue(t *testing.T) {
+	t.Parallel()
+
+	c := newEnqueueTestConnection(1, 50*time.Millisecond)
+
+	for _, envelopeType := range []string{"ping", "error", "chat.subscription_reset", "chat.command_update"} {
+		if err := c.writeEnvelope(websocketEnvelope{Type: envelopeType}); err != nil {
+			t.Fatalf("writeEnvelope(%q) = %v, want nil", envelopeType, err)
+		}
+	}
+	if got := len(c.ctrlOutbox); got != 4 {
+		t.Fatalf("control queue depth = %d, want 4", got)
+	}
+	if got := len(c.outbox); got != 0 {
+		t.Fatalf("data queue depth = %d, want 0", got)
+	}
+
+	if err := c.writeEnvelope(websocketEnvelope{Type: "chat.event"}); err != nil {
+		t.Fatalf("writeEnvelope(chat.event) = %v, want nil", err)
+	}
+	if got := len(c.outbox); got != 1 {
+		t.Fatalf("data queue depth after chat.event = %d, want 1", got)
+	}
+}
+
+func TestWriteEnvelopeQueueFullDoesNotCloseConnection(t *testing.T) {
+	t.Parallel()
+
+	c := newEnqueueTestConnection(1, 20*time.Millisecond)
+	c.outbox <- websocketEnvelope{Type: "chat.event"}
+
+	err := c.writeEnvelope(websocketEnvelope{Type: "chat.event"})
+	if !errors.Is(err, errWriteQueueFull) {
+		t.Fatalf("writeEnvelope with stuck outbox = %v, want errWriteQueueFull", err)
+	}
+	select {
+	case <-c.done:
+		t.Fatal("writeEnvelope closed the connection on a full data queue")
+	default:
+	}
+	if got := c.droppedFrames.Load(); got != 1 {
+		t.Fatalf("droppedFrames = %d, want 1", got)
+	}
+}
+
+func TestEnqueueControlEnvelopeDropsPingWhenFull(t *testing.T) {
+	t.Parallel()
+
+	c := newEnqueueTestConnection(1, time.Second)
+	for range websocketControlQueueSize {
+		c.ctrlOutbox <- websocketEnvelope{Type: "error"}
+	}
+
+	started := time.Now()
+	if err := c.writeEnvelope(websocketEnvelope{Type: "ping"}); err != nil {
+		t.Fatalf("writeEnvelope(ping) with full control queue = %v, want nil (dropped)", err)
+	}
+	if waited := time.Since(started); waited > 100*time.Millisecond {
+		t.Fatalf("ping enqueue blocked for %s, want immediate drop", waited)
+	}
+	if got := c.droppedFrames.Load(); got != 1 {
+		t.Fatalf("droppedFrames = %d, want 1", got)
+	}
+	select {
+	case <-c.done:
+		t.Fatal("dropped ping closed the connection")
+	default:
 	}
 }

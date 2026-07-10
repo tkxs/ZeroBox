@@ -76,6 +76,15 @@ pub(crate) const GATEWAY_TERMINAL_STREAM_KEEPALIVE_INTERVAL: Duration = Duration
 pub(crate) const GATEWAY_CHAT_LEASE_MS: u64 = 15_000;
 pub(crate) const GATEWAY_CHAT_RUNNING_LEASE_MS: u64 = 30 * 60_000;
 pub(crate) const GATEWAY_CHAT_LEASE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+// The gateway marks the chat runtime not-ready 15s after the last runtime
+// status heartbeat. The webview timer that drives those heartbeats is
+// throttled whenever the desktop window is hidden or occluded, so Rust
+// re-publishes the last reported state on a steady cadence and only stops
+// once the webview has been silent for the max age (a webview alive enough
+// to matter refreshes the record at least once a minute even when heavily
+// throttled) or has said "suspended".
+pub(crate) const GATEWAY_RUNTIME_STATUS_REPUBLISH_INTERVAL: Duration = Duration::from_secs(5);
+pub(crate) const GATEWAY_RUNTIME_STATUS_REPUBLISH_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 
 pub struct GatewayController {
     app_handle: tauri::AppHandle,
@@ -92,6 +101,7 @@ pub struct GatewayController {
     settings_snapshot: Mutex<Option<Value>>,
     remote_chat_inbox: Mutex<HashMap<String, RemoteChatInboxRecord>>,
     chat_run_ledger: Mutex<ChatRunLedger>,
+    runtime_status_republish: Mutex<Option<RuntimeStatusRepublishRecord>>,
     pub(crate) tunnel_store: TunnelStore,
     pub(crate) tunnel_proxy: TunnelProxy,
     pub(crate) workspace_watch: Arc<WorkspaceWatchService>,
@@ -100,5 +110,6 @@ pub struct GatewayController {
     terminal_stream_forwarder_once: Once,
     sftp_forwarder_once: Once,
     remote_chat_inbox_sweeper_once: Once,
+    runtime_status_republisher_once: Once,
     pub(crate) tunnel_store_once: Once,
 }
