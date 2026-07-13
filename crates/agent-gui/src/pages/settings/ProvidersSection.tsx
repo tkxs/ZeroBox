@@ -2,11 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  CheckCircle2,
+  ChevronDown,
   ClaudeIcon,
   Download,
   Eye,
   EyeOff,
   GeminiIcon,
+  Key,
+  Loader2,
   OpenaiChatgptIcon,
   Pencil,
   Plus,
@@ -18,6 +22,14 @@ import {
 } from "../../components/icons";
 
 import { Button } from "../../components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import {
@@ -39,6 +51,7 @@ import {
   updateCustomProviders,
   updateCustomSettings,
 } from "../../lib/settings";
+import { cn } from "../../lib/shared/utils";
 import {
   createDraftModelConfig,
   fetchModelsFromApi,
@@ -766,8 +779,297 @@ function ccsProviderIsTransferable(item: CcsProviderImportItem) {
   return ccsProviderCanSyncModels(item) || (item.models?.length ?? 0) > 0;
 }
 
+// sourceId alone can collide across ccswitch app_type buckets that map to the
+// same provider tab (e.g. "claude" and "claude-code"), so key rows on both.
+function ccsItemKey(item: CcsProviderImportItem) {
+  return `${item.appType}:${item.sourceId}`;
+}
+
+function CcsSourceLogo({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "flex shrink-0 select-none items-center justify-center rounded-lg bg-gradient-to-br from-sky-500 to-indigo-500 font-bold text-white shadow-sm",
+        className,
+      )}
+    >
+      CC
+    </span>
+  );
+}
+
+function CcsImportModal(props: {
+  initialType: ProviderId;
+  items: CcsProviderImportItem[];
+  existingProviders: CustomProvider[];
+  importing: boolean;
+  onImport: (items: CcsProviderImportItem[]) => Promise<string>;
+  onClose: () => void;
+}) {
+  const { initialType, items, existingProviders, importing, onImport, onClose } = props;
+  const { t } = useLocale();
+
+  const existingIdentity = useMemo(
+    () => new Set(existingProviders.map(ccsImportIdentity)),
+    [existingProviders],
+  );
+  const rows = useMemo(
+    () =>
+      items.map((item) => {
+        const exists = existingIdentity.has(
+          ccsImportIdentity({ type: item.providerType, name: item.name, baseUrl: item.baseUrl }),
+        );
+        const transferable = ccsProviderIsTransferable(item);
+        return {
+          item,
+          key: ccsItemKey(item),
+          exists,
+          transferable,
+          selectable: transferable && !exists,
+        };
+      }),
+    [items, existingIdentity],
+  );
+  // All provider types in one modal, the tab the user came from leading.
+  const groups = useMemo(() => {
+    const order = [initialType, ...PROVIDER_TABS.filter((tab) => tab !== initialType)];
+    return order
+      .map((type) => ({ type, rows: rows.filter((row) => row.item.providerType === type) }))
+      .filter((group) => group.rows.length > 0);
+  }, [rows, initialType]);
+
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [result, setResult] = useState<string | null>(null);
+  const [activeType, setActiveType] = useState<ProviderId>(initialType);
+
+  const selectableKeys = rows.filter((row) => row.selectable).map((row) => row.key);
+  const selectedCount = selectableKeys.filter((key) => selected.has(key)).length;
+
+  // The initial tab may have no discovered configs — fall back to the first
+  // group that does.
+  const activeGroup = groups.find((group) => group.type === activeType) ?? groups[0];
+  const activeRows = activeGroup?.rows ?? [];
+  const activeSelectableKeys = activeRows.filter((row) => row.selectable).map((row) => row.key);
+  const activeSelectedCount = activeSelectableKeys.filter((key) => selected.has(key)).length;
+  const activeAllSelected =
+    activeSelectableKeys.length > 0 && activeSelectedCount === activeSelectableKeys.length;
+
+  function toggleRow(key: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleAllActive() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const key of activeSelectableKeys) {
+        if (activeAllSelected) next.delete(key);
+        else next.add(key);
+      }
+      return next;
+    });
+  }
+
+  async function handleImport() {
+    const chosen = rows
+      .filter((row) => row.selectable && selected.has(row.key))
+      .map((row) => row.item);
+    if (!chosen.length || importing) return;
+    setResult(null);
+    try {
+      const summary = await onImport(chosen);
+      setResult(summary);
+      setSelected(new Set());
+    } catch (err) {
+      setResult(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={importing ? undefined : onClose}
+      />
+
+      <div className="relative z-10 flex h-[min(35rem,85vh)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border bg-background shadow-2xl">
+        <div className="flex items-center gap-3 border-b px-6 py-4">
+          <CcsSourceLogo className="h-9 w-9 text-[12px]" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold">从 CC Switch 导入</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              左侧选择供应商类型，右侧勾选要导入的配置，导入后自动获取并激活模型
+            </div>
+          </div>
+          <button
+            type="button"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+            onClick={onClose}
+            disabled={importing}
+            title={t("settings.cancel")}
+            aria-label={t("settings.cancel")}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        <div className="flex min-h-0 flex-1">
+          {groups.length === 0 ? (
+            <div className="flex flex-1 items-center justify-center px-6 py-10 text-sm text-muted-foreground">
+              未发现可导入的供应商
+            </div>
+          ) : (
+            <>
+              <div className="flex w-44 shrink-0 flex-col gap-1 overflow-y-auto border-r bg-muted/30 p-2">
+                {groups.map((group) => {
+                  const groupSelectable = group.rows.filter((row) => row.selectable);
+                  const groupSelected = groupSelectable.filter((row) =>
+                    selected.has(row.key),
+                  ).length;
+                  const active = group.type === activeGroup?.type;
+                  return (
+                    <button
+                      key={group.type}
+                      type="button"
+                      onClick={() => setActiveType(group.type)}
+                      className={cn(
+                        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors",
+                        active
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                      )}
+                    >
+                      <span className="flex w-5 shrink-0 items-center justify-center text-base">
+                        <ProviderBrandIcon type={group.type} />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">
+                          {getProviderLabel(group.type)}
+                        </span>
+                        <span className="block text-[11px] text-muted-foreground">
+                          {group.rows.length} 项配置
+                        </span>
+                      </span>
+                      {groupSelected > 0 ? (
+                        <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                          {groupSelected}
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="flex min-w-0 flex-1 flex-col">
+                <div className="flex items-center justify-between gap-2 border-b bg-muted/20 px-5 py-2">
+                  <div className="text-xs text-muted-foreground">
+                    已选 {activeSelectedCount} / {activeSelectableKeys.length} 个可导入
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={toggleAllActive}
+                    disabled={!activeSelectableKeys.length || importing}
+                  >
+                    {activeAllSelected ? t("settings.deselectAll") : t("settings.selectAll")}
+                  </Button>
+                </div>
+
+                <div className="min-h-0 flex-1 divide-y overflow-y-auto">
+                  {activeRows.map(({ item, key, exists, transferable, selectable }) => {
+                    return (
+                      <label
+                        key={key}
+                        className={cn(
+                          "flex items-center gap-3 px-5 py-3 transition-colors",
+                          selectable ? "cursor-pointer hover:bg-accent/40" : "opacity-55",
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 shrink-0 accent-primary"
+                          checked={selectable && selected.has(key)}
+                          disabled={!selectable || importing}
+                          onChange={() => toggleRow(key)}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-medium">{item.name}</span>
+                            {exists ? (
+                              <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                已导入
+                              </span>
+                            ) : !transferable ? (
+                              <span className="shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                                无 API 配置
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                            {item.baseUrl || "未配置 Base URL"}
+                          </div>
+                        </div>
+                        {item.apiKey.trim() ? (
+                          <span className="shrink-0 text-muted-foreground" title="已包含 API Key">
+                            <Key className="h-3 w-3" />
+                          </span>
+                        ) : null}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {result ? (
+          <div className="border-t px-6 py-3">
+            <div className="flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">
+              <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{result}</span>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex items-center justify-between gap-2 border-t px-6 py-4">
+          <div className="text-xs text-muted-foreground">
+            共已选 {selectedCount} / {selectableKeys.length} 个可导入
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={onClose} disabled={importing}>
+              {result ? "关闭" : t("settings.cancel")}
+            </Button>
+            <Button
+              className="gap-1.5"
+              onClick={() => void handleImport()}
+              disabled={importing || selectedCount === 0}
+            >
+              {importing ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  正在导入…
+                </>
+              ) : (
+                `导入 ${selectedCount} 个供应商`
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function ProviderList(props: {
   type: ProviderId;
+  isActive: boolean;
   providers: CustomProvider[];
   onAdd: () => void;
   onEdit: (provider: CustomProvider) => void;
@@ -776,14 +1078,14 @@ function ProviderList(props: {
   ccsLoading: boolean;
   ccsImporting: boolean;
   ccsMessage: string | null;
-  thirdPartyImportOpen: boolean;
-  onToggleThirdPartyImport: () => void;
-  onImportCcsProviders: () => void;
+  onEnsureCcsScan: () => void;
   onRefreshCcsProviders: () => void;
+  onOpenCcsImport: () => void;
 }) {
   const { t } = useLocale();
   const {
     type,
+    isActive,
     providers,
     onAdd,
     onEdit,
@@ -792,14 +1094,41 @@ function ProviderList(props: {
     ccsLoading,
     ccsImporting,
     ccsMessage,
-    thirdPartyImportOpen,
-    onToggleThirdPartyImport,
-    onImportCcsProviders,
+    onEnsureCcsScan,
     onRefreshCcsProviders,
+    onOpenCcsImport,
   } = props;
+  const [syncMenuOpen, setSyncMenuOpen] = useState(false);
   const filtered = providers.filter((provider) => provider.type === type);
-  const ccsProvidersForType =
-    ccsProviders?.providers.filter((provider) => provider.providerType === type) ?? [];
+  const ccsAll = ccsProviders?.providers ?? [];
+  const ccsBreakdown = PROVIDER_TABS.map((tab) => ({
+    type: tab,
+    count: ccsAll.filter((provider) => provider.providerType === tab).length,
+  })).filter((entry) => entry.count > 0);
+
+  // The menu popup is portaled, so it would outlive its trigger when the tab
+  // pane is slid away and marked inert — close it as the pane deactivates.
+  useEffect(() => {
+    if (!isActive) setSyncMenuOpen(false);
+  }, [isActive]);
+
+  function handleSyncMenuOpenChange(open: boolean) {
+    setSyncMenuOpen(open);
+    if (open) onEnsureCcsScan();
+  }
+
+  const scanned = ccsProviders !== null;
+  const ccsSubtitle = ccsImporting
+    ? "正在导入供应商、获取并激活模型…"
+    : ccsLoading
+      ? "正在扫描本地配置…"
+      : ccsAll.length
+        ? `发现 ${ccsBreakdown
+            .map((entry) => `${getProviderLabel(entry.type)} ${entry.count}`)
+            .join(" · ")}`
+        : scanned
+          ? ccsMessage || "未发现可导入的供应商"
+          : "点击扫描本地配置";
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
@@ -809,55 +1138,80 @@ function ProviderList(props: {
             ? t("settings.noProviders")
             : `${filtered.length} ${t("settings.navProviders")}`}
         </div>
-        <div className="relative flex items-center gap-2">
+        <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" className="gap-1.5" onClick={onAdd}>
             <Plus className="h-3.5 w-3.5" />
             {t("settings.addProvider")}
           </Button>
-          <div className="relative">
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              onClick={onToggleThirdPartyImport}
-              disabled={ccsImporting}
+          <DropdownMenu open={syncMenuOpen} onOpenChange={handleSyncMenuOpenChange}>
+            <DropdownMenuTrigger
+              render={<Button variant="outline" size="sm" className="gap-1.5" />}
             >
-              <Download className="h-3.5 w-3.5" />
+              {ccsImporting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
               从第三方同步
-            </Button>
-            {thirdPartyImportOpen ? (
-              <div className="absolute right-0 top-[calc(100%+0.5rem)] z-20 w-72 overflow-hidden rounded-xl border bg-popover p-2 text-popover-foreground shadow-xl">
-                <button
-                  type="button"
-                  className="flex w-full flex-col items-start rounded-lg px-3 py-2 text-left hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={ccsLoading || ccsImporting || !ccsProvidersForType.length}
-                  onClick={onImportCcsProviders}
-                >
-                  <strong className="text-sm">ccswitch</strong>
-                  <span className="mt-0.5 text-xs text-muted-foreground">
-                    {ccsImporting
-                      ? "正在导入供应商、获取并激活全部模型…"
-                      : ccsLoading
-                        ? "正在扫描…"
-                        : ccsProvidersForType.length
-                          ? `发现 ${ccsProvidersForType.length} 个 ${getProviderLabel(type)} 供应商`
-                          : ccsMessage || `未发现 ${getProviderLabel(type)} 供应商`}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-accent"
-                  onClick={onRefreshCcsProviders}
+              <ChevronDown
+                className={cn(
+                  "h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 ease-out",
+                  syncMenuOpen && "rotate-180",
+                )}
+              />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              sideOffset={8}
+              collisionPadding={8}
+              className="model-selector-dropdown w-80 overflow-hidden rounded-xl border-border/40 bg-popover/70 p-0 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.25)] ring-1 ring-white/10 backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-popover/55"
+            >
+              <div className="flex items-center justify-between gap-2 px-3 py-1.5">
+                <DropdownMenuLabel className="p-0 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/80">
+                  导入来源
+                </DropdownMenuLabel>
+                <DropdownMenuItem
+                  closeOnClick={false}
+                  className="h-7 w-7 cursor-pointer justify-center rounded-md p-0 text-muted-foreground"
                   disabled={ccsLoading || ccsImporting}
+                  onSelect={onRefreshCcsProviders}
+                  aria-label="重新扫描本地配置"
+                  title="重新扫描本地配置"
                 >
-                  <RefreshCw
-                    className={`h-4 w-4 ${ccsLoading || ccsImporting ? "animate-spin" : ""}`}
-                  />
-                  刷新列表
-                </button>
+                  <RefreshCw className={cn("h-3.5 w-3.5", ccsLoading && "animate-spin")} />
+                </DropdownMenuItem>
               </div>
-            ) : null}
-          </div>
+              <DropdownMenuSeparator className="my-0 bg-border/40" />
+              <div className="p-1.5">
+                <DropdownMenuItem
+                  className="model-selector-item cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2.5"
+                  disabled={ccsLoading || ccsImporting || !ccsAll.length}
+                  onSelect={onOpenCcsImport}
+                >
+                  <CcsSourceLogo className="h-9 w-9 text-[11px]" />
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="flex items-center gap-1.5 text-sm font-medium">
+                      CC Switch
+                      {ccsAll.length > 0 ? (
+                        <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                          {ccsAll.length}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span
+                      className="line-clamp-2 text-xs text-muted-foreground"
+                      title={ccsSubtitle}
+                    >
+                      {ccsSubtitle}
+                    </span>
+                  </span>
+                  {ccsLoading || ccsImporting ? (
+                    <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+                  ) : null}
+                </DropdownMenuItem>
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -931,10 +1285,10 @@ export function ProvidersSection(props: SettingsSectionProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [customSettingsOpen, setCustomSettingsOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<CustomProvider | null>(null);
-  const [thirdPartyImportTab, setThirdPartyImportTab] = useState<ProviderId | null>(null);
+  const [ccsImportType, setCcsImportType] = useState<ProviderId | null>(null);
   const [ccsProviders, setCcsProviders] = useState<CcsProvidersResponse | null>(null);
   const [ccsLoading, setCcsLoading] = useState(false);
-  const [ccsImportingType, setCcsImportingType] = useState<ProviderId | null>(null);
+  const [ccsImporting, setCcsImporting] = useState(false);
   const [ccsMessage, setCcsMessage] = useState<string | null>(null);
 
   async function refreshCcsProviders() {
@@ -951,27 +1305,20 @@ export function ProvidersSection(props: SettingsSectionProps) {
     }
   }
 
-  function toggleThirdPartyImport(type: ProviderId) {
-    setThirdPartyImportTab((openTab) => {
-      const next = openTab === type ? null : type;
-      if (next && !ccsProviders && !ccsLoading) void refreshCcsProviders();
-      return next;
-    });
+  function ensureCcsScan() {
+    if (!ccsProviders && !ccsLoading) void refreshCcsProviders();
   }
 
   function buildCcsImportedProviders(
     existingProviders: CustomProvider[],
-    providerType: ProviderId,
+    items: CcsProviderImportItem[],
   ) {
-    const imports =
-      ccsProviders?.providers.filter(
-        (provider) => provider.providerType === providerType && ccsProviderIsTransferable(provider),
-      ) ?? [];
     const existingIds = new Set(existingProviders.map((provider) => provider.id));
     const existingIdentity = new Set(existingProviders.map(ccsImportIdentity));
     const imported: CustomProvider[] = [];
 
-    for (const item of imports) {
+    for (const item of items) {
+      if (!ccsProviderIsTransferable(item)) continue;
       const identity = ccsImportIdentity({
         type: item.providerType,
         name: item.name,
@@ -985,24 +1332,20 @@ export function ProvidersSection(props: SettingsSectionProps) {
     return imported;
   }
 
-  async function importCcsProviders(providerType: ProviderId) {
-    const imports =
-      ccsProviders?.providers.filter((provider) => provider.providerType === providerType) ?? [];
-    if (!imports.length) return;
-
-    const transferable = imports.filter(ccsProviderIsTransferable);
-    const skippedCount = imports.length - transferable.length;
+  async function importCcsProviders(items: CcsProviderImportItem[]): Promise<string> {
+    const transferable = items.filter(ccsProviderIsTransferable);
     if (!transferable.length) {
-      setCcsMessage(`ccswitch 中的 ${getProviderLabel(providerType)} 供应商没有可导入的 API 配置`);
-      return;
+      const message = "所选供应商没有可导入的 API 配置";
+      setCcsMessage(message);
+      return message;
     }
 
-    setCcsImportingType(providerType);
+    setCcsImporting(true);
     setCcsMessage("正在导入供应商、获取并激活全部模型…");
 
     try {
       setSettings((prev) => {
-        const nextImported = buildCcsImportedProviders(prev.customProviders, providerType);
+        const nextImported = buildCcsImportedProviders(prev.customProviders, transferable);
         if (!nextImported.length) return prev;
         return updateCustomProviders(prev, [...prev.customProviders, ...nextImported]);
       });
@@ -1054,16 +1397,22 @@ export function ProvidersSection(props: SettingsSectionProps) {
       const fetchedCount = modelResults.filter((result) => result.fetched).length;
       const failedCount = modelResults.filter((result) => result.failed).length;
       const totalModels = modelResults.reduce((total, result) => total + result.models.length, 0);
+      const importedByType = PROVIDER_TABS.map((tab) => ({
+        type: tab,
+        count: transferable.filter((item) => item.providerType === tab).length,
+      })).filter((entry) => entry.count > 0);
       const details = [
-        `已同步 ${transferable.length} 个 ${getProviderLabel(providerType)} 供应商`,
+        `已导入 ${importedByType
+          .map((entry) => `${entry.count} 个 ${getProviderLabel(entry.type)}`)
+          .join("、")} 供应商`,
         fetchedCount > 0 ? `获取并激活 ${totalModels} 个模型` : "已激活供应商内的全部模型",
         failedCount > 0 ? `${failedCount} 个供应商模型获取失败` : "",
-        skippedCount > 0 ? `${skippedCount} 个无 API 配置已跳过` : "",
       ].filter(Boolean);
-      setCcsMessage(details.join("，"));
-      setThirdPartyImportTab(null);
+      const summary = details.join("，");
+      setCcsMessage(summary);
+      return summary;
     } finally {
-      setCcsImportingType(null);
+      setCcsImporting(false);
     }
   }
 
@@ -1119,10 +1468,7 @@ export function ProvidersSection(props: SettingsSectionProps) {
             <button
               key={tab}
               type="button"
-              onClick={() => {
-                setActiveTab(tab);
-                setThirdPartyImportTab(null);
-              }}
+              onClick={() => setActiveTab(tab)}
               className={`inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium transition-all ${
                 activeTab === tab
                   ? "bg-background text-foreground shadow"
@@ -1161,18 +1507,18 @@ export function ProvidersSection(props: SettingsSectionProps) {
             >
               <ProviderList
                 type={tab}
+                isActive={activeTab === tab}
                 providers={settings.customProviders}
                 onAdd={openAdd}
                 onEdit={openEdit}
                 onDelete={handleDelete}
                 ccsProviders={ccsProviders}
                 ccsLoading={ccsLoading}
-                ccsImporting={ccsImportingType === tab}
+                ccsImporting={ccsImporting}
                 ccsMessage={ccsMessage}
-                thirdPartyImportOpen={thirdPartyImportTab === tab}
-                onToggleThirdPartyImport={() => toggleThirdPartyImport(tab)}
-                onImportCcsProviders={() => void importCcsProviders(tab)}
+                onEnsureCcsScan={ensureCcsScan}
                 onRefreshCcsProviders={() => void refreshCcsProviders()}
+                onOpenCcsImport={() => setCcsImportType(tab)}
               />
             </div>
           ))}
@@ -1185,6 +1531,16 @@ export function ProvidersSection(props: SettingsSectionProps) {
           initialData={editingProvider ?? undefined}
           onSave={handleSave}
           onClose={closeModal}
+        />
+      ) : null}
+      {ccsImportType ? (
+        <CcsImportModal
+          initialType={ccsImportType}
+          items={ccsProviders?.providers ?? []}
+          existingProviders={settings.customProviders}
+          importing={ccsImporting}
+          onImport={importCcsProviders}
+          onClose={() => setCcsImportType(null)}
         />
       ) : null}
       {customSettingsOpen ? (
