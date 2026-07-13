@@ -201,8 +201,7 @@ export function mergeMessagesIntoLedger(
 
 function isEmptyLedger(ledger: FileLedger | undefined): boolean {
   return (
-    !ledger ||
-    ((ledger.readFiles?.length ?? 0) === 0 && (ledger.modifiedFiles?.length ?? 0) === 0)
+    !ledger || ((ledger.readFiles?.length ?? 0) === 0 && (ledger.modifiedFiles?.length ?? 0) === 0)
   );
 }
 
