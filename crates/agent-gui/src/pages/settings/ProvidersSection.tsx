@@ -838,9 +838,7 @@ function CcsImportModal(props: {
       .filter((group) => group.rows.length > 0);
   }, [rows, initialType]);
 
-  const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(rows.filter((row) => row.selectable).map((row) => row.key)),
-  );
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [result, setResult] = useState<string | null>(null);
   const [activeType, setActiveType] = useState<ProviderId>(initialType);
 
@@ -984,7 +982,6 @@ function CcsImportModal(props: {
 
                 <div className="min-h-0 flex-1 divide-y overflow-y-auto">
                   {activeRows.map(({ item, key, exists, transferable, selectable }) => {
-                    const modelCount = item.models?.length ?? 0;
                     return (
                       <label
                         key={key}
@@ -1017,14 +1014,11 @@ function CcsImportModal(props: {
                             {item.baseUrl || "未配置 Base URL"}
                           </div>
                         </div>
-                        <div className="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
-                          {item.apiKey.trim() ? (
-                            <span title="已包含 API Key">
-                              <Key className="h-3 w-3" />
-                            </span>
-                          ) : null}
-                          {modelCount > 0 ? <span>{modelCount} 模型</span> : null}
-                        </div>
+                        {item.apiKey.trim() ? (
+                          <span className="shrink-0 text-muted-foreground" title="已包含 API Key">
+                            <Key className="h-3 w-3" />
+                          </span>
+                        ) : null}
                       </label>
                     );
                   })}
