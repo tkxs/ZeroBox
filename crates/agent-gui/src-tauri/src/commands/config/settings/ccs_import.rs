@@ -22,10 +22,19 @@ pub struct CcsProvidersResponse {
 #[tauri::command]
 pub async fn settings_list_ccswitch_providers() -> Result<CcsProvidersResponse, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let path = default_ccswitch_db_path();
-        let providers = list_ccswitch_liveagent_providers_from_db(&path)?;
+        let candidates = ccswitch_db_candidates();
+        let path = candidates.iter().find(|path| path.exists());
+        let providers = match path {
+            Some(path) => list_ccswitch_liveagent_providers_from_db(path)?,
+            None => Vec::new(),
+        };
         let message = if providers.is_empty() {
-            format!("未发现 ccswitch LiveAgent 供应商：{}", path.display())
+            let checked = candidates
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join("；");
+            format!("未发现 ccswitch LiveAgent 供应商，已检查：{checked}")
         } else {
             format!("发现 {} 个 ccswitch LiveAgent 供应商", providers.len())
         };
@@ -39,11 +48,46 @@ pub async fn settings_list_ccswitch_providers() -> Result<CcsProvidersResponse, 
     .map_err(|e| format!("settings_list_ccswitch_providers join 失败：{e}"))?
 }
 
-fn default_ccswitch_db_path() -> PathBuf {
+/// ccswitch (Tauri 应用 id `com.ccswitch.desktop`) 允许用户把数据目录整体迁移到
+/// 自定义路径（例如同步到 OneDrive），迁移后真正使用的数据库不再位于默认的
+/// `~/.cc-switch/` 下，而是记录在其自身配置目录的 `app_paths.json` 里
+/// （`app_config_dir_override` 字段）。这里优先用该 override 目录，找不到再回退默认目录。
+fn ccswitch_db_candidates() -> Vec<PathBuf> {
+    let filename = format!("{}-{}.db", "cc", "switch");
+    let mut candidates = Vec::new();
+    if let Some(override_dir) = ccswitch_override_config_dir() {
+        candidates.push(override_dir.join(&filename));
+    }
+    candidates.push(ccswitch_legacy_config_dir().join(&filename));
+    candidates
+}
+
+fn ccswitch_legacy_config_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(format!(".{}-{}", "cc", "switch"))
-        .join(format!("{}-{}.db", "cc", "switch"))
+}
+
+fn ccswitch_override_config_dir() -> Option<PathBuf> {
+    let app_paths_file = dirs::config_dir()?
+        .join("com.ccswitch.desktop")
+        .join("app_paths.json");
+    let content = fs::read_to_string(app_paths_file).ok()?;
+    let value: Value = serde_json::from_str(&content).ok()?;
+    let override_dir = value.get("app_config_dir_override")?.as_str()?.trim();
+    if override_dir.is_empty() {
+        return None;
+    }
+    Some(expand_home_prefix(override_dir))
+}
+
+fn expand_home_prefix(path: &str) -> PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(path)
 }
 
 fn list_ccswitch_liveagent_providers_from_db(
