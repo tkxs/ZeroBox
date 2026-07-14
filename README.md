@@ -330,13 +330,29 @@ LiveAgent/
 
 ---
 
-## 设计原则
+## 贡献
 
-- **桌面端是真相源** — 工具执行、持久化、秘钥全部留在本地
-- **Gateway 不越权** — 不访问文件系统、不存 API Key,只做中继
-- **长对话可恢复** — 桌面 Segment + Summary 持久化,Gateway 有界 seq window 补齐短时断线
-- **功能域清晰** — Chat / Tools / Memory / Skills / MCP / Cron 各自独立
-- **渐进式复杂度** — Skills 按需加载,MCP 按需桥接,SubAgent 按需委派
+欢迎提交 Issue 与 Pull Request!开发环境搭建请参考 [开发指南](docs/operations/development.md)。
+
+提交 PR 前,请确保以下检查全部通过(与 CI 门禁一致):
+
+**桌面客户端 · `crates/agent-gui`**
+
+1. 类型检查与构建通过:`pnpm build`
+2. 代码规范检查通过:`pnpm lint`
+3. 前端单元测试通过:`pnpm test:frontend`(改动发布脚本时另跑 `pnpm test:release`)
+4. Rust 后端检查通过:`cargo check --manifest-path crates/agent-gui/src-tauri/Cargo.toml --tests`(仓库根目录执行)
+
+**Gateway · `crates/agent-gateway`(如有改动)**
+
+1. Go 单元测试通过:`go test ./...`
+2. WebUI 构建 / Lint / 测试通过:`pnpm build && pnpm lint && pnpm test`(在 `web/` 目录执行)
+3. Proto 变更后重新生成并提交产物:`make proto`
+
+**跨端一致性**
+
+- GUI 与 WebUI 的镜像文件必须逐字节一致:`node scripts/check-mirror.mjs`
+- 保持 diff 干净 (无行尾空白):`git diff --check`
 
 ---
 
