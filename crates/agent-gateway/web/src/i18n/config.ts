@@ -205,6 +205,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.tool.return": "返回",
     "chat.tool.error": "(错误)",
     "chat.tool.viewReturn": "查看返回内容",
+    "chat.tool.todoTitle": "任务清单",
+    "chat.tool.todoEmpty": "暂无任务",
     "chat.tool.expandActivity": "展开工具活动",
     "chat.tool.collapseActivity": "收起工具活动",
     "chat.hookWarningTitle": "Hooks 告警",
@@ -1089,6 +1091,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.builtinTool.send_message.desc": "与子代理之间收发消息",
     "settings.builtinTool.send_message.detail":
       "在主对话与子代理之间传递消息，用于协调多代理协作。需要子代理运行时；仅在对话场景注册。",
+    "settings.builtinTool.todo_write.name": "任务清单",
+    "settings.builtinTool.todo_write.desc": "创建与更新当前会话的任务清单",
+    "settings.builtinTool.todo_write.detail":
+      "让模型在处理多步骤任务时列出任务清单并逐项推进状态，进度以清单卡片实时展示在对话中。清单仅保存在当前对话内，不跨对话保留；仅在对话场景注册。",
     "settings.builtinTool.cron_task_manager.name": "定时任务",
     "settings.builtinTool.cron_task_manager.desc": "创建与管理定时自动任务",
     "settings.builtinTool.cron_task_manager.detail":
@@ -1900,6 +1906,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.tool.return": "Return",
     "chat.tool.error": "(Error)",
     "chat.tool.viewReturn": "View Return",
+    "chat.tool.todoTitle": "Task list",
+    "chat.tool.todoEmpty": "No tasks yet",
     "chat.tool.expandActivity": "Expand tool activity",
     "chat.tool.collapseActivity": "Collapse tool activity",
     "chat.hookWarningTitle": "Hooks Warning",
@@ -2818,6 +2826,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.builtinTool.send_message.desc": "Exchange messages with subagents",
     "settings.builtinTool.send_message.detail":
       "Relays messages between the main conversation and subagents to coordinate multi-agent work. Requires the subagent runtime; chat sessions only.",
+    "settings.builtinTool.todo_write.name": "Task List",
+    "settings.builtinTool.todo_write.desc": "Create and update a task list for the current session",
+    "settings.builtinTool.todo_write.detail":
+      "Lets the model plan multi-step work as a task list and advance each item's status as it goes, shown as a live checklist card in the conversation. The list lives only in the current conversation and is not carried across conversations; chat sessions only.",
     "settings.builtinTool.cron_task_manager.name": "Scheduled Tasks",
     "settings.builtinTool.cron_task_manager.desc": "Create and manage scheduled automations",
     "settings.builtinTool.cron_task_manager.detail":

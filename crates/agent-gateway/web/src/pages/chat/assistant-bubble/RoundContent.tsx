@@ -5,6 +5,7 @@ import { useLocale } from "../../../i18n";
 import { normalizeLiveToolStatus, VIBING_STATUS } from "../../../lib/chat/chatPageHelpers";
 import type { UiRound } from "../../../lib/chat/uiMessages";
 import { useScrollFollow } from "../../../lib/chat-scroll/useScrollFollow";
+import { TodoListBlock } from "../TodoListView";
 import { groupRoundBlocks, isBuiltinShareToolName } from "./assistantBubbleUtils";
 import { HostedSearchGroupView } from "./HostedSearchGroupView";
 import { CompactingText, VibingText } from "./StatusText";
@@ -184,6 +185,16 @@ export const RoundContent = memo(function RoundContent(props: {
             !block.item.toolResult?.isError
           ) {
             return null;
+          }
+
+          // TodoWrite renders as a bare checklist in the reply flow; only
+          // failed calls fall through to the tool card so the error is visible.
+          if (
+            !isRedactedToolContent &&
+            block.item.toolCall.name === "TodoWrite" &&
+            !block.item.toolResult?.isError
+          ) {
+            return <TodoListBlock key={block.key} item={block.item} />;
           }
 
           return (

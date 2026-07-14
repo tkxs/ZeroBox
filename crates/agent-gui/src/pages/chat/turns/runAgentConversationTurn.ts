@@ -65,6 +65,7 @@ import type { BuiltinToolExecutionContext } from "../../../lib/tools/builtinType
 import { createFileToolState } from "../../../lib/tools/fileToolState";
 import type { SkillAccessPolicy } from "../../../lib/tools/skillAccessPolicy";
 import type { SshManagerSessionChange } from "../../../lib/tools/sshManagerTools";
+import { getOrCreateTodoToolState } from "../../../lib/tools/todoTools";
 import type { TunnelManagerChange } from "../../../lib/tools/tunnelManagerTools";
 import {
   appendSystemPrompt,
@@ -385,6 +386,7 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
       : context;
   };
   const fileState = createFileToolState();
+  const todoState = getOrCreateTodoToolState(conversationId);
   const subagentScheduler = createSubagentScheduler();
   const runtimePlatform = await resolveRuntimePlatform();
   const buildRegistryStartedAt = perfNowMs();
@@ -393,6 +395,7 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
     providerId,
     runtimePlatform,
     fileState,
+    todoState,
     skillsEnabled: effectiveSkillsEnabled,
     skillsRootDir,
     skillAccessPolicy,

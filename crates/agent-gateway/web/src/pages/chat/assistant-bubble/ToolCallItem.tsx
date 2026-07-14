@@ -44,7 +44,9 @@ function ToolCallItem({
   const isRedactedToolContent = redactToolContent && isBuiltinShareToolName(item.toolCall.name);
   const shouldAutoOpen =
     !isRedactedToolContent &&
-    (item.toolCall.name === "Image" || builtinResultKind === "display_image");
+    (item.toolCall.name === "Image" ||
+      item.toolCall.name === "TodoWrite" ||
+      builtinResultKind === "display_image");
   const [open, setOpen] = useState(readOnly || isRedactedToolContent ? false : shouldAutoOpen);
   const isSubagentCard = isSubagentCardToolCall(item.toolCall);
   const hasArgs = Object.keys(item.toolCall.arguments || {}).length > 0;

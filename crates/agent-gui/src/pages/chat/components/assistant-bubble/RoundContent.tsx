@@ -9,6 +9,7 @@ import { useScrollFollow } from "../../../../lib/chat-scroll/useScrollFollow";
 import { groupRoundBlocks } from "./assistantBubbleUtils";
 import { HostedSearchGroupView } from "./HostedSearchGroupView";
 import { CompactingText, VibingText } from "./StatusText";
+import { TodoListBlock } from "./TodoListView";
 import { MemoToolCallItem } from "./ToolCallItem";
 import { getNativeDisplayImagePayload, NativeDisplayImageBlock } from "./ToolImages";
 import { ToolTraceGroup } from "./ToolTraceGroup";
@@ -160,6 +161,12 @@ export const RoundContent = memo(function RoundContent(props: {
 
           if (block.item.toolCall.name === "Image" && !block.item.toolResult?.isError) {
             return null;
+          }
+
+          // TodoWrite renders as a bare checklist in the reply flow; only
+          // failed calls fall through to the tool card so the error is visible.
+          if (block.item.toolCall.name === "TodoWrite" && !block.item.toolResult?.isError) {
+            return <TodoListBlock key={block.key} item={block.item} />;
           }
 
           return (

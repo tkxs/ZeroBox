@@ -360,6 +360,17 @@ export type GrepResultDetails = {
   files: GrepResultFileSummary[];
 };
 
+export type TodoItem = {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+  activeForm: string;
+};
+
+export type TodoWriteResultDetails = {
+  kind: "todo_write";
+  todos: TodoItem[];
+};
+
 export type BuiltinToolResultDetails =
   | ReadTextResultDetails
   | ReadImageResultDetails
@@ -378,4 +389,5 @@ export type BuiltinToolResultDetails =
   | ListResultDetails
   | GlobResultDetails
   | GrepResultDetails
+  | TodoWriteResultDetails
   | Record<string, unknown>;

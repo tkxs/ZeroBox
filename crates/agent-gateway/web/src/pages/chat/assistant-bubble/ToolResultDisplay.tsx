@@ -31,6 +31,7 @@ import type {
 } from "../../../lib/tools/builtinTypes";
 import { EditDiffView } from "../EditDiffView";
 import { FileToolArgsDisplay } from "../FileToolArgs";
+import { sanitizeTodoItems, TodoListView } from "../TodoListView";
 import {
   type MetaTag,
   MetaTags,
@@ -224,6 +225,12 @@ export function ToolArgsDisplay({ item }: { item: ToolTraceItem }) {
   const filePreview = deriveFileToolPreview(toolCall);
   if (filePreview) {
     return <FileToolArgsDisplay preview={filePreview} />;
+  }
+
+  // TodoWrite args ARE the checklist — render them with the same view as the
+  // result instead of dumping raw JSON (shown only until the result lands).
+  if (toolCall.name === "TodoWrite") {
+    return <TodoListView todos={sanitizeTodoItems(toolCall.arguments?.todos)} />;
   }
 
   const display = getToolDisplay(toolCall);

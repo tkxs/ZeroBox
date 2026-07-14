@@ -21,6 +21,7 @@ import {
   type IconComponent,
   ImageIcon,
   List,
+  ListChecks,
   McpLogo,
   MessageSquare,
   Pencil,
@@ -73,6 +74,7 @@ const TOOL_ICONS: Record<ToolCatalogIconId, IconComponent> = {
   server: Server,
   plug: Plug,
   wrench: Wrench,
+  checklist: ListChecks,
 };
 
 type CategoryAccent = {

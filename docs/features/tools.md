@@ -23,6 +23,7 @@
 | Dynamic MCP tools | `mcpTools.ts` | 将已启用 MCP server 的 tool 暴露为 `mcp_<server>_<tool>`。 |
 | Custom system tools | `customSystemTools.ts` | HTTP test 等系统工具，由 Settings 中 selectedSystemTools 控制。 |
 | MemoryManager | `memoryTools.ts` | list/read/search/write/update/delete/accept，支持 global/project/daily 语义。 |
+| TodoWrite | `todoTools.ts` | 会话内任务清单全量替换写入，仅 `runtimeScope=chat` 可用；状态存于内存（按 conversationId），不落盘、不进子代理注册表。 |
 | Subagent | `src/lib/subagents/*`（适配层 `agentTool.ts`、`sendMessageTool.ts`） | `Agent`/`SendMessage` 内置工具：委托持久化子代理、隔离 worktree、Message Bus。 |
 
 ## 执行边界

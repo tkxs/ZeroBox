@@ -32,6 +32,7 @@ import { createSkillTools } from "./skillTools";
 import { createSSHManagerTools, type SshManagerSessionChange } from "./sshManagerTools";
 import type { SystemToolId, SystemToolRuntimeScope } from "./systemToolOptions";
 import { createTerminalTools } from "./terminalTools";
+import { createTodoTools, type TodoToolState } from "./todoTools";
 import { createTunnelManagerTools, type TunnelManagerChange } from "./tunnelManagerTools";
 
 export type BuiltinToolRegistry = {
@@ -251,13 +252,18 @@ async function buildBaseBuiltinToolBundles(params: BuildBuiltinBaseToolRegistryP
 export async function buildBuiltinToolRegistry(
   params: BuildBuiltinBaseToolRegistryParams & {
     subagentRuntime?: SubagentRuntimeConfig;
+    todoState?: TodoToolState;
   },
 ) {
   const baseBundles = await buildBaseBuiltinToolBundles(params);
+  const todoBundles =
+    params.runtimeScope === "chat" && params.todoState
+      ? [createTodoTools({ state: params.todoState })]
+      : [];
 
   const subagentRuntime = params.subagentRuntime;
   if (!subagentRuntime) {
-    return createBuiltinToolRegistry(baseBundles);
+    return createBuiltinToolRegistry([...baseBundles, ...todoBundles]);
   }
 
   const baseRegistry = createBuiltinToolRegistry(baseBundles);
@@ -279,6 +285,7 @@ export async function buildBuiltinToolRegistry(
   const parentBundles = parentMessageBundle ? [...baseBundles, parentMessageBundle] : baseBundles;
   return createBuiltinToolRegistry([
     ...parentBundles,
+    ...todoBundles,
     createSubagentTools({
       providerId: subagentRuntime.providerId,
       model: subagentRuntime.model,

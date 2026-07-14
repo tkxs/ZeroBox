@@ -157,6 +157,7 @@ export function buildToolsSuffix(
   if (has("SendMessage")) toolGroups.push("subagent message bus (SendMessage)");
   if (has("Bash")) toolGroups.push("the command tool (Bash)");
   if (has("ManagedProcess")) toolGroups.push("managed local processes (ManagedProcess)");
+  if (has("TodoWrite")) toolGroups.push("task planning checklist (TodoWrite)");
   if (hasDynamicMcp) toolGroups.push("MCP business tools whose names are prefixed with mcp_");
 
   const sections: string[] = [];
@@ -355,6 +356,19 @@ export function buildToolsSuffix(
         "- Do not append `&` to ManagedProcess.command. It starts the process in the background, redirects stdout/stderr to a log file, and returns process_id/pid/log_path.",
         '- Use ManagedProcess(action="status") to inspect running processes, action="read_log" to inspect recent output, and action="stop" to terminate the process tree.',
         managedProcessPreference,
+      ].join("\n"),
+    );
+  }
+
+  if (has("TodoWrite")) {
+    sections.push(
+      [
+        "## Task Planning (TodoWrite)",
+        "- Proactively use TodoWrite for multi-step tasks (3+ distinct steps) or when the user gives multiple tasks; skip it for a single trivial action.",
+        "- Every call replaces the entire list — pass the complete, current set of todos each time, not a delta.",
+        "- Exactly one item may have status=in_progress at a time; mark it in_progress before starting, and immediately (not batched) mark it completed as soon as it is done, before starting the next.",
+        '- content is the imperative/declarative form ("Run tests"); activeForm is the present-continuous form shown only while in_progress ("Running tests").',
+        "- Keep each item specific and actionable; break vague or large items into smaller ones.",
       ].join("\n"),
     );
   }

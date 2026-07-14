@@ -172,6 +172,7 @@ import { tauriTerminalClient } from "../lib/terminal/tauriTerminalClient";
 import type { TerminalSession } from "../lib/terminal/types";
 import { invokeFs } from "../lib/tools/fsBackend";
 import type { SkillAccessPolicy } from "../lib/tools/skillAccessPolicy";
+import { disposeTodoToolState } from "../lib/tools/todoTools";
 import type {
   LocalTunnelClient,
   TunnelCreateInput,
@@ -1995,6 +1996,7 @@ export function ChatPage(props: ChatPageProps) {
         onPruneConversation: (conversationId) => {
           deleteConversationLocalCaches(conversationId);
           subagentStoresRef.current.dispose(conversationId);
+          disposeTodoToolState(conversationId);
         },
       });
     },

@@ -9,6 +9,7 @@ import {
   FolderTree,
   ImageIcon,
   Link2,
+  ListChecks,
   Plug,
   Search,
   Server,
@@ -68,6 +69,8 @@ export function getToolMeta(name: string): {
       return { Icon: Search, accent: "var(--tool-search-accent)", category: "search" };
     case "List":
       return { Icon: FolderTree, accent: "var(--tool-list-accent)", category: "list" };
+    case "TodoWrite":
+      return { Icon: ListChecks, accent: "var(--tool-list-accent)", category: "system" };
     default:
       return { Icon: Wrench, accent: "var(--tool-file-accent)", category: "other" };
   }
@@ -275,7 +278,11 @@ export function groupRoundBlocks(blocks: UiRound["blocks"]): GroupedRoundBlock[]
         return;
       }
       flushPendingSearches();
-      if (block.item.toolCall.name === "Image" || isAgentToolName(block.item.toolCall.name)) {
+      if (
+        block.item.toolCall.name === "Image" ||
+        block.item.toolCall.name === "TodoWrite" ||
+        isAgentToolName(block.item.toolCall.name)
+      ) {
         flushPendingTools();
         groupedBlocks.push({
           kind: "tool",

@@ -15,6 +15,7 @@ import {
   waitForTitleLookahead,
 } from "../../../lib/chat/page/chatPageHelpers";
 import type { SidebarStore } from "../../../lib/sidebar/store";
+import { disposeTodoToolState } from "../../../lib/tools/todoTools";
 import {
   type ConversationRuntimeEntry,
   createConversationRuntimeEntry,
@@ -156,6 +157,7 @@ export function useConversationHistoryActions(params: UseConversationHistoryActi
       onPruneConversation: (conversationId) => {
         deleteConversationArtifacts(conversationId);
         disposeSubagentsForConversation?.(conversationId);
+        disposeTodoToolState(conversationId);
       },
     });
   }

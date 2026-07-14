@@ -29,6 +29,7 @@ import {
   type MetaTag,
 } from "./assistantBubbleUtils";
 import { FileToolArgsDisplay } from "./FileToolArgs";
+import { sanitizeTodoItems, TodoListView } from "./TodoListView";
 import {
   MetaTags,
   PathDisplay,
@@ -165,6 +166,12 @@ function ToolArgsDisplay({ item }: { item: ToolTraceItem }) {
     return <FileToolArgsDisplay preview={filePreview} />;
   }
 
+  // TodoWrite args ARE the checklist — render them with the same view as the
+  // result instead of dumping raw JSON (shown only until the result lands).
+  if (toolCall.name === "TodoWrite") {
+    return <TodoListView todos={sanitizeTodoItems(toolCall.arguments?.todos)} />;
+  }
+
   const display = getToolDisplay(toolCall);
 
   if (isSubagentCardToolCall(toolCall)) {
@@ -297,7 +304,10 @@ function ToolCallItem({
   const { t } = useLocale();
   const result = item.toolResult;
   const builtinResultKind = getBuiltinResultKind(result);
-  const shouldAutoOpen = item.toolCall.name === "Image" || builtinResultKind === "display_image";
+  const shouldAutoOpen =
+    item.toolCall.name === "Image" ||
+    item.toolCall.name === "TodoWrite" ||
+    builtinResultKind === "display_image";
   const [open, setOpen] = useState(shouldAutoOpen);
   const isSubagentCard = isSubagentCardToolCall(item.toolCall);
   const hasArgs = Object.keys(item.toolCall.arguments || {}).length > 0;

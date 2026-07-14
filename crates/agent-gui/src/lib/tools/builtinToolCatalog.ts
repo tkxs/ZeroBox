@@ -37,7 +37,8 @@ export type ToolCatalogIconId =
   | "globe"
   | "server"
   | "plug"
-  | "wrench";
+  | "wrench"
+  | "checklist";
 
 export type BuiltinToolCatalogEntry = {
   /** Catalog id (snake_case). Used for React keys and i18n key derivation. */
@@ -193,6 +194,15 @@ export const BUILTIN_TOOL_CATALOG: readonly BuiltinToolCatalogEntry[] = [
     id: "send_message",
     toolName: "SendMessage",
     icon: "messageSquare",
+    categoryId: "intelligence",
+    isReadOnly: false,
+    runtimeScopes: CHAT_ONLY,
+    conditional: true,
+  },
+  {
+    id: "todo_write",
+    toolName: "TodoWrite",
+    icon: "checklist",
     categoryId: "intelligence",
     isReadOnly: false,
     runtimeScopes: CHAT_ONLY,
