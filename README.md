@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="crates/agent-gui/src-tauri/icons/icon.png" width="128" height="128" alt="LiveAgent" />
+  <img src="docs/images/banner.png" alt="LiveAgent" />
 </p>
 
 <h1 align="center">LiveAgent</h1>
@@ -32,8 +32,6 @@
 
 LiveAgent 是一个 **本地优先** 的 AI Agent 桌面客户端。它将大语言模型的推理能力与本地系统工具深度整合,让 AI 能够真正操作你的文件系统、执行命令、管理定时任务,同时通过 Gateway 实现远程访问与协作。
 
-> **桌面端是真相源** — 所有工具执行、持久化和秘钥都留在本地,Gateway 只做中继。
-
 - **真正动手的 Agent** — 不止于对话:读写文件、精确编辑、执行 Bash、托管长驻进程
 - **生态完全开放** — MCP 协议桥接任意外部工具,Skills 技能包按需加载
 - **本地与远程兼得** — 桌面端独立可用,部署 Gateway 后浏览器随处操控
@@ -41,6 +39,8 @@ LiveAgent 是一个 **本地优先** 的 AI Agent 桌面客户端。它将大语
 ---
 
 ## 核心能力
+
+![](docs/images/product.png)
 
 ### 🧠 多模型与对话
 
@@ -71,46 +71,6 @@ LiveAgent 是一个 **本地优先** 的 AI Agent 桌面客户端。它将大语
 - **浏览器随处访问** — Go + gRPC 网关,WebUI 远程操控本地 Agent
 - **断线可恢复** — 有界 seq window 补齐短时断线,桌面端持久化兜底
 - **一键部署** — Docker multi-stage 镜像(约 30MB),支持 Railway CI/CD
-
----
-
-## 快速开始
-
-### 环境要求
-
-| 工具 | 版本 | 用途 |
-|---|---|---|
-| Node.js | >= 22 | 前端构建 |
-| pnpm | >= 10 | 包管理 |
-| Rust | stable | Tauri 桌面后端 |
-| Go | >= 1.25 | Gateway(可选) |
-| protoc | latest | gRPC 代码生成(可选) |
-
-### 桌面客户端
-
-```bash
-# 安装依赖
-pnpm --dir crates/agent-gui install
-
-# 开发模式(热重载)
-make dev
-
-# 构建发行版
-make build
-```
-
-### Gateway 服务(可选)
-
-```bash
-# 启动 Gateway 开发服务
-make dev-gateway
-
-# 启动 WebUI 开发服务
-make dev-webui
-
-# 构建 Docker 镜像并健康检查
-make gateway-docker-smoke
-```
 
 ---
 
@@ -163,15 +123,74 @@ make gateway-docker-smoke
 # Docker 构建(multi-stage,最终镜像 ~30MB)
 docker build -t liveagent-gateway .
 
-# 运行
-docker run -p 8080:8080 -p 50051:50051 \
+# 运行(gRPC → 宿主机 50051,HTTP/WebSocket → 宿主机 50052)
+docker run -p 50051:50051 -p 50052:8080 \
   -e LIVEAGENT_GATEWAY_TOKEN=your-token \
   liveagent-gateway
 ```
 
-### 开发者从源码构建
+<details>
+<summary><b>Nginx 反向代理配置</b> — 自建域名 / TLS 时参考</summary>
+Gateway 对外有两类流量:桌面端的 **gRPC 双向流** (默认 50051) 与浏览器端的 **HTTP / WebSocket ** (默认 50052)。
+
+经 Nginx 暴露时需要分别代理,注意 gRPC 与 WebSocket 均为长连接,超时需调大:
+
+```nginx
+# GUI Remote: gRPC Authenticate + AgentConnect
+location /liveagent.gateway.v1.AgentGateway/ {
+    grpc_pass grpc://127.0.0.1:50051;
+
+    grpc_set_header Host $host;
+    grpc_set_header Authorization $http_authorization;
+    grpc_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    grpc_set_header X-Forwarded-Proto $scheme;
+
+    grpc_socket_keepalive on;
+    grpc_read_timeout 24h;
+    grpc_send_timeout 24h;
+}
+
+# WebUI WebSocket
+location = /ws {
+    proxy_pass http://127.0.0.1:50052;
+
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+
+    proxy_set_header Host $host;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_read_timeout 24h;
+    proxy_send_timeout 24h;
+    proxy_buffering off;
+}
+
+# WebUI SPA/static/API
+location / {
+    proxy_pass http://127.0.0.1:50052;
+
+    proxy_set_header Host $host;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_read_timeout 10m;
+    proxy_send_timeout 10m;
+}
+```
+
+> 上游端口与上方 `docker run` 的宿主机映射一一对应:gRPC 50051、HTTP/WebSocket 50052(容器内 HTTP 实际监听 `PORT=8080`)。gRPC 代理要求 Nginx 以 HTTP/2 接收桌面端连接(`listen 443 ssl; http2 on;`)。
+
+</details>
+
+### 从源码构建
 
 参考上方 [快速开始](#快速开始),或展开下方「开发指南」查看完整 Make 命令。
+
+![](docs/images/architecture.png)
 
 <details>
 <summary><b>架构总览</b> — 架构图与技术栈</summary>
