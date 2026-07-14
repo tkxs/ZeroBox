@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.png" alt="LiveAgent" />
+  <img src="docs/images/banner.webp" alt="LiveAgent" />
 </p>
 
 <h1 align="center">LiveAgent</h1>
@@ -40,7 +40,7 @@ LiveAgent 是一个 **本地优先** 的 AI Agent 桌面客户端。它将大语
 
 ## 核心能力
 
-![](docs/images/product.png)
+![](docs/images/product.webp)
 
 ### 🧠 多模型与对话
 
@@ -202,7 +202,7 @@ location / {
 
 参考上方 [快速开始](#快速开始),或展开下方「开发指南」查看完整 Make 命令。
 
-![](docs/images/architecture.png)
+![](docs/images/architecture.webp)
 
 <details>
 <summary><b>架构总览</b> — 架构图与技术栈</summary>
