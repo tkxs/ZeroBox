@@ -26,7 +26,6 @@ import {
   FolderOpen,
   FolderTree,
   Loader2,
-  MessageSquareText,
   MoreHorizontal,
   PanelLeftClose,
   Pin,
@@ -861,7 +860,6 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     busyConversationIds,
     listStatus,
     scopeKey = "",
-    totalItems,
     hasMore,
     isLoadingMore,
     errorMessage,
@@ -1564,22 +1562,13 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
               />
             </button>
             <div className="flex items-center gap-1.5">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled
-                className="h-6 min-w-6 rounded-md !bg-muted px-2 py-0 text-[calc(11px*var(--zone-font-scale,1))] font-medium text-muted-foreground disabled:opacity-100"
-              >
-                {Math.max(totalItems, items.length)}
-              </Button>
               {canShareConversations ? (
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
                   onClick={handleOpenSharedConversations}
-                  className="h-7 w-7 rounded-full border border-border/50 bg-background/70 text-muted-foreground shadow-xs shadow-black/5 transition-colors hover:border-sky-500/25 hover:bg-sky-500/10 hover:text-sky-600 dark:hover:text-sky-400"
+                  className={PROJECT_ICON_BUTTON_CLASS}
                   title={t("chat.manageSharedConversations").replace(
                     "{count}",
                     String(sharedConversationCount),
@@ -1641,16 +1630,9 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                   ) : null}
                   {items.length === 0 ? (
                     listStatus === "ready" && !errorMessage ? (
-                      <div className="flex flex-col items-center px-4 pt-8 pb-6 text-center">
-                        <MessageSquareText
-                          className="h-[22px] w-[22px] text-foreground/35"
-                          strokeWidth={1.5}
-                        />
-                        <p className="mt-3 text-[calc(12.5px*var(--zone-font-scale,1))] font-medium tracking-tight text-foreground/70">
+                      <div className="flex items-center justify-center px-4 py-8 text-center">
+                        <p className="text-xs font-medium text-muted-foreground/60">
                           {t("chat.emptyChatHistory")}
-                        </p>
-                        <p className="mt-1 text-[calc(11.5px*var(--zone-font-scale,1))] leading-[1.55] text-muted-foreground/70">
-                          {t("chat.clickNewConversation")}
                         </p>
                       </div>
                     ) : null

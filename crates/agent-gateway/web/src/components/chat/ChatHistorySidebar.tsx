@@ -31,7 +31,6 @@ import {
   FolderOpen,
   FolderTree,
   Loader2,
-  MessageSquareText,
   MoreHorizontal,
   PanelLeftClose,
   Pin,
@@ -1161,7 +1160,6 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     runningConversationIds,
     listStatus,
     scopeKey = "",
-    totalItems,
     hasMore,
     isLoadingMore,
     errorMessage,
@@ -1482,7 +1480,6 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     if (!isOpen) {
       setOpenMenuId(null);
       setOpenProjectMenuId(null);
-      setWorkspaceMenuOpen(false);
     }
   }, [isOpen]);
 
@@ -1493,7 +1490,6 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
 
     setOpenMenuId(null);
     setOpenProjectMenuId(null);
-    setWorkspaceMenuOpen(false);
     setPendingDeleteId(null);
     setPendingProjectRemoveId(null);
     handleCancelRename();
@@ -2055,26 +2051,18 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                   {t("chat.history.syncing")}
                 </span>
               ) : null}
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled
-                role={errorMessage ? "status" : undefined}
-                title={errorMessage ? `${t("chat.historyReadFailed")}: ${errorMessage}` : undefined}
-                className={cn(
-                  "h-6 min-w-6 gap-1 rounded-md !bg-muted px-2 py-0 text-[calc(11px*var(--zone-font-scale,1))] font-medium text-muted-foreground disabled:opacity-100",
-                  errorMessage && "text-destructive",
-                )}
-              >
-                {errorMessage ? (
+              {errorMessage ? (
+                <span
+                  role="status"
+                  title={`${t("chat.historyReadFailed")}: ${errorMessage}`}
+                  className="flex h-7 w-7 items-center justify-center text-destructive"
+                >
                   <AlertCircle
-                    className="h-3 w-3 shrink-0"
+                    className="h-3.5 w-3.5 shrink-0"
                     aria-label={t("chat.historyReadFailed")}
                   />
-                ) : null}
-                {Math.max(totalItems, items.length)}
-              </Button>
+                </span>
+              ) : null}
               {canShareConversations ? (
                 <Button
                   type="button"
@@ -2082,7 +2070,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                   size="icon"
                   onClick={handleOpenSharedConversations}
                   disabled={sectionsDisabled}
-                  className="h-7 w-7 rounded-full border border-border/50 bg-background/70 text-muted-foreground shadow-xs shadow-black/5 transition-colors hover:border-sky-500/25 hover:bg-sky-500/10 hover:text-sky-600 dark:hover:text-sky-400"
+                  className={PROJECT_ICON_BUTTON_CLASS}
                   title={t("chat.manageSharedConversations").replace(
                     "{count}",
                     String(sharedConversationCount),
@@ -2154,15 +2142,9 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
               ) : listStatus === "loading" || listStatus === "initial" ? (
                 <HistoryListLoadingSkeleton />
               ) : listStatus === "ready" && !errorMessage ? (
-                <div className="chat-history-scope-enter flex flex-col items-center px-2 pt-6 pb-4 text-center">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500/10 to-blue-500/10 ring-1 ring-violet-500/15">
-                    <MessageSquareText className="h-5 w-5 text-violet-500/70" />
-                  </div>
-                  <p className="mt-3.5 text-[calc(13px*var(--zone-font-scale,1))] font-medium text-foreground/70">
+                <div className="chat-history-scope-enter flex items-center justify-center px-4 py-8 text-center">
+                  <p className="text-xs font-medium text-muted-foreground/60">
                     {t("chat.emptyChatHistory")}
-                  </p>
-                  <p className="mt-1 text-[calc(11px*var(--zone-font-scale,1))] leading-4 text-muted-foreground/80">
-                    {t("chat.clickNewConversation")}
                   </p>
                 </div>
               ) : null}
