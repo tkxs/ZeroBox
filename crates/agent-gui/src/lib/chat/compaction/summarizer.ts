@@ -71,8 +71,9 @@ function isTransientError(error: unknown) {
 }
 
 function buildSummarizerRuntime(providerId: ProviderId, runtime: ProviderRuntimeConfig) {
-  // Codex 用最低推理档做摘要，避免长思考挤占摘要预算。
-  return providerId === "codex" ? { ...runtime, reasoning: "minimal" as const } : runtime;
+  // Codex 用 medium 档做摘要，避免长思考挤占摘要预算；不能用 minimal——
+  // GPT-5.6 世代已砍掉该档且 pi-ai 目录未标 null，clamp 不会兜底，API 会直接 400。
+  return providerId === "codex" ? { ...runtime, reasoning: "medium" as const } : runtime;
 }
 
 type SummarizerRequest = {
