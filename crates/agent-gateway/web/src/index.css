@@ -2299,6 +2299,35 @@ body > div:not(#root) [data-streamdown="mermaid"] svg {
   transform-origin: top left;
 }
 
+@keyframes sftpPathPopoverIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.sftp-path-popover-enter {
+  animation: sftpPathPopoverIn 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top center;
+}
+
+.sftp-path-scroll {
+  scrollbar-width: none;
+}
+.sftp-path-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sftp-path-popover-enter {
+    animation: none;
+  }
+}
+
 .sidebar-project-name-fade {
   -webkit-mask-image: linear-gradient(
     to right,
