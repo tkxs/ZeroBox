@@ -9,6 +9,7 @@ import {
   attachOpenAIResponsesNativeAttachments,
 } from "../nativeResponsesAttachments";
 import { attachAnthropicAutomaticCaching } from "./anthropicCache";
+import { attachAnthropicLongContextBeta } from "./anthropicLongContext";
 import { attachCodexResponsesStorage } from "./codexStorage";
 import { attachGeminiThoughtSignatureGuard } from "./geminiToolPayload";
 import { attachProviderNativeWebSearch } from "./nativeSearchPayload";
@@ -81,6 +82,13 @@ export function attachPayloadDebugLogging(
 
 const finalizePayloadMiddlewares = composePayloadMiddlewares([
   (options, params) => attachAnthropicAutomaticCaching(params.providerId, params.baseUrl, options),
+  (options, params) =>
+    attachAnthropicLongContextBeta(options, {
+      providerId: params.providerId,
+      baseUrl: params.baseUrl,
+      model: params.model,
+      context: params.context,
+    }),
   (options, params) => attachCodexResponsesStorage(params.providerId, options),
   (options, params) =>
     attachProviderNativeWebSearch(params.providerId, options, params.nativeWebSearch, {
