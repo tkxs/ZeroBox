@@ -136,6 +136,9 @@ export type SystemSettings = {
   activeWorkspaceProjectId?: string;
   hiddenWorkspaceProjectPaths: string[];
   missingWorkspaceProjectPaths: string[];
+  // Archived workspaces (path-keyed, like hidden/missing). Archived rows stay
+  // in the merged list but render disabled and can never be active.
+  archivedWorkspaceProjectPaths: string[];
 };
 
 export type WorkspaceProjectKind = "managed" | "folder" | "history";
@@ -578,6 +581,18 @@ export function normalizeMissingWorkspaceProjectPaths(input: unknown): string[] 
   return out;
 }
 
+export function normalizeArchivedWorkspaceProjectPaths(input: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const path of normalizeStringArray(input)) {
+    const key = workspaceProjectPathKey(path);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(path);
+  }
+  return out;
+}
+
 export function resolveWorkspaceProjects(
   system: SystemSettings,
   defaultWorkdir: string,
@@ -646,11 +661,35 @@ export function resolveWorkspaceProjects(
   const missingWorkspaceProjectPaths = normalizeMissingWorkspaceProjectPaths(
     system.missingWorkspaceProjectPaths,
   ).filter((path) => !hiddenWorkspaceProjectPathKeys.has(workspaceProjectPathKey(path)));
-  const activeProjectId = projects.some((project) => project.id === system.activeWorkspaceProjectId)
+  // Hidden means removed — a removed workspace has nothing left to archive.
+  const normalizedArchivedWorkspaceProjectPaths = normalizeArchivedWorkspaceProjectPaths(
+    system.archivedWorkspaceProjectPaths,
+  ).filter((path) => !hiddenWorkspaceProjectPathKeys.has(workspaceProjectPathKey(path)));
+  const normalizedArchivedWorkspaceProjectPathKeys = new Set(
+    normalizedArchivedWorkspaceProjectPaths.map(workspaceProjectPathKey),
+  );
+  const archivedWorkspaceProjectPaths = projects.every((project) =>
+    normalizedArchivedWorkspaceProjectPathKeys.has(workspaceProjectPathKey(project.path)),
+  )
+    ? normalizedArchivedWorkspaceProjectPaths.filter(
+        (path) => workspaceProjectPathKey(path) !== defaultKey,
+      )
+    : normalizedArchivedWorkspaceProjectPaths;
+  const archivedWorkspaceProjectPathKeys = new Set(
+    archivedWorkspaceProjectPaths.map(workspaceProjectPathKey),
+  );
+  const selectableProjects = projects.filter(
+    (project) => !archivedWorkspaceProjectPathKeys.has(workspaceProjectPathKey(project.path)),
+  );
+  const activeProjectId = selectableProjects.some(
+    (project) => project.id === system.activeWorkspaceProjectId,
+  )
     ? system.activeWorkspaceProjectId
-    : DEFAULT_WORKSPACE_PROJECT_ID;
+    : (selectableProjects.find((project) => project.id === DEFAULT_WORKSPACE_PROJECT_ID)?.id ??
+      selectableProjects[0]?.id ??
+      DEFAULT_WORKSPACE_PROJECT_ID);
   const activeProject =
-    projects.find((project) => project.id === activeProjectId) ?? defaultProject;
+    selectableProjects.find((project) => project.id === activeProjectId) ?? defaultProject;
   const workdir = normalizeWorkdir(system.workdir) || defaultPath;
 
   return {
@@ -660,6 +699,7 @@ export function resolveWorkspaceProjects(
     activeWorkspaceProjectId: activeProject.id,
     hiddenWorkspaceProjectPaths,
     missingWorkspaceProjectPaths,
+    archivedWorkspaceProjectPaths,
   };
 }
 
@@ -1356,6 +1396,9 @@ export function normalizeSystemSettings(input: unknown): SystemSettings {
     missingWorkspaceProjectPaths: normalizeMissingWorkspaceProjectPaths(
       obj.missingWorkspaceProjectPaths,
     ),
+    archivedWorkspaceProjectPaths: normalizeArchivedWorkspaceProjectPaths(
+      obj.archivedWorkspaceProjectPaths,
+    ),
   };
 }
 
@@ -1871,6 +1914,7 @@ export function getDefaultSettings(): AppSettings {
       activeWorkspaceProjectId: undefined,
       hiddenWorkspaceProjectPaths: [],
       missingWorkspaceProjectPaths: [],
+      archivedWorkspaceProjectPaths: [],
     },
     customProviders,
     mcp: {

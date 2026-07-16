@@ -442,9 +442,21 @@ export default function GatewayApp() {
     () => mergeWorkspaceProjectsWithHistory(settings.system, sidebarWorkdirs),
     [settings.system, sidebarWorkdirs],
   );
+  const archivedWorkspaceProjectPathKeys = useMemo(
+    () => new Set(settings.system.archivedWorkspaceProjectPaths.map(workspaceProjectPathKey)),
+    [settings.system.archivedWorkspaceProjectPaths],
+  );
+  // Archived workspaces can never be active. Falling back to the full list
+  // only guards a transient synced state where everything is archived.
+  const selectableWorkspaceProjects = useMemo(() => {
+    const active = workspaceProjects.filter(
+      (project) => !archivedWorkspaceProjectPathKeys.has(workspaceProjectPathKey(project.path)),
+    );
+    return active.length > 0 ? active : workspaceProjects;
+  }, [archivedWorkspaceProjectPathKeys, workspaceProjects]);
   const activeWorkspaceProject = useMemo(
-    () => findWorkspaceProject(workspaceProjects, activeWorkspaceProjectId),
-    [activeWorkspaceProjectId, workspaceProjects],
+    () => findWorkspaceProject(selectableWorkspaceProjects, activeWorkspaceProjectId),
+    [activeWorkspaceProjectId, selectableWorkspaceProjects],
   );
   useEffect(() => {
     if (activeWorkspaceProject?.id && activeWorkspaceProject.id !== activeWorkspaceProjectId) {
@@ -964,6 +976,10 @@ export default function GatewayApp() {
               (path) => workspaceProjectPathKey(path) !== normalizedPathKey,
             ),
             missingWorkspaceProjectPaths: prev.system.missingWorkspaceProjectPaths.filter(
+              (path) => workspaceProjectPathKey(path) !== normalizedPathKey,
+            ),
+            // Activating a workspace always brings it back from the archive.
+            archivedWorkspaceProjectPaths: prev.system.archivedWorkspaceProjectPaths.filter(
               (path) => workspaceProjectPathKey(path) !== normalizedPathKey,
             ),
           },
@@ -2247,6 +2263,15 @@ export default function GatewayApp() {
       if (project.id === DEFAULT_WORKSPACE_PROJECT_ID) return;
       const path = project.path.trim();
       const pathKey = workspaceProjectPathKey(path);
+      // Removing the last non-archived workspace would leave nothing usable;
+      // the default project is unarchived alongside in that case. The merged
+      // list (settings + history workdirs) is the authority on what remains.
+      const hasOtherActiveProjects = workspaceProjects.some(
+        (item) =>
+          item.id !== project.id &&
+          workspaceProjectPathKey(item.path) !== pathKey &&
+          !archivedWorkspaceProjectPathKeys.has(workspaceProjectPathKey(item.path)),
+      );
       setActiveWorkspaceProjectId((current) => {
         const currentProject = workspaceProjects.find((item) => item.id === current);
         if (
@@ -2279,6 +2304,16 @@ export default function GatewayApp() {
               missingWorkspaceProjectPaths: prev.system.missingWorkspaceProjectPaths.filter(
                 (item) => workspaceProjectPathKey(item) !== pathKey,
               ),
+              archivedWorkspaceProjectPaths: prev.system.archivedWorkspaceProjectPaths.filter(
+                (item) => {
+                  const itemKey = workspaceProjectPathKey(item);
+                  if (itemKey === pathKey) return false;
+                  return (
+                    hasOtherActiveProjects ||
+                    itemKey !== workspaceProjectPathKey(getDefaultWorkspaceProjectPath(prev.system))
+                  );
+                },
+              ),
             },
             getDefaultWorkspaceProjectPath(prev.system),
           ),
@@ -2288,7 +2323,7 @@ export default function GatewayApp() {
       setProjectRenamingId((current) => (current === project.id ? null : current));
       setProjectRenameDraft("");
     },
-    [setSettings, workspaceProjects],
+    [archivedWorkspaceProjectPathKeys, setSettings, workspaceProjects],
   );
 
   const handleRemoveWorkspaceProject = useCallback(
@@ -2506,6 +2541,74 @@ export default function GatewayApp() {
       startNewConversation,
       terminalClient,
     ],
+  );
+
+  const handleArchiveWorkspaceProject = useCallback(
+    (project: WorkspaceProject) => {
+      const pathKey = workspaceProjectPathKey(project.path);
+      if (!pathKey || archivedWorkspaceProjectPathKeys.has(pathKey)) return;
+      const fallbackProject = workspaceProjects.find(
+        (item) =>
+          item.id !== project.id &&
+          workspaceProjectPathKey(item.path) !== pathKey &&
+          !archivedWorkspaceProjectPathKeys.has(workspaceProjectPathKey(item.path)),
+      );
+      // Archiving is only offered while another active workspace remains.
+      if (!fallbackProject) return;
+      if (
+        activeWorkspaceProject &&
+        (activeWorkspaceProject.id === project.id ||
+          workspaceProjectPathKey(activeWorkspaceProject.path) === pathKey)
+      ) {
+        activateWorkspaceProject(fallbackProject);
+      }
+      setSettings((prev) =>
+        prev.system.archivedWorkspaceProjectPaths.some(
+          (path) => workspaceProjectPathKey(path) === pathKey,
+        )
+          ? prev
+          : {
+              ...prev,
+              system: {
+                ...prev.system,
+                archivedWorkspaceProjectPaths: [
+                  ...prev.system.archivedWorkspaceProjectPaths,
+                  project.path.trim(),
+                ],
+              },
+            },
+      );
+    },
+    [
+      activateWorkspaceProject,
+      activeWorkspaceProject,
+      archivedWorkspaceProjectPathKeys,
+      setSettings,
+      workspaceProjects,
+    ],
+  );
+
+  const handleUnarchiveWorkspaceProject = useCallback(
+    (project: WorkspaceProject) => {
+      const pathKey = workspaceProjectPathKey(project.path);
+      if (!pathKey) return;
+      setSettings((prev) => {
+        const next = prev.system.archivedWorkspaceProjectPaths.filter(
+          (path) => workspaceProjectPathKey(path) !== pathKey,
+        );
+        if (next.length === prev.system.archivedWorkspaceProjectPaths.length) {
+          return prev;
+        }
+        return {
+          ...prev,
+          system: {
+            ...prev.system,
+            archivedWorkspaceProjectPaths: next,
+          },
+        };
+      });
+    },
+    [setSettings],
   );
 
   function handleSidebarNewConversation() {
@@ -3802,6 +3905,9 @@ export default function GatewayApp() {
               onCancelProjectRename={handleCancelWorkspaceProjectRename}
               onSetProjectPinned={handleSetWorkspaceProjectPinned}
               onRemoveProject={handleRemoveWorkspaceProject}
+              onArchiveProject={handleArchiveWorkspaceProject}
+              onUnarchiveProject={handleUnarchiveWorkspaceProject}
+              archivedProjectPathKeys={archivedWorkspaceProjectPathKeys}
               onNewConversation={handleSidebarNewConversation}
               onSelectConversation={handleSidebarSelectConversation}
               onShareConversation={handleOpenShareModal}
