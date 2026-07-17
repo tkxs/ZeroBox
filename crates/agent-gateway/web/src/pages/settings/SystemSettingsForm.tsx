@@ -1,6 +1,8 @@
+import { useState } from "react";
 import {
   CheckCircle2,
   Cpu,
+  Globe,
   MessageSquare,
   MonitorSmartphone,
   Moon,
@@ -9,16 +11,21 @@ import {
   Terminal,
   Wrench,
 } from "../../components/icons";
-
+import { Input } from "../../components/ui/input";
+import { Label } from "../../components/ui/label";
 import { SUPPORTED_LOCALES, useLocale } from "../../i18n";
 import {
   type ExecutionMode,
   type FontScaleSettings,
+  isValidSystemProxyHost,
+  type SystemProxyConfig,
+  type SystemProxyType,
   THEME_OPTIONS,
   type Theme,
   updateCustomSettings,
   updateSystem,
 } from "../../lib/settings";
+import { AgentActivationSwitch } from "./shared";
 import type { SettingsSectionProps } from "./types";
 
 const FONT_SCALE_OPTIONS = [0.9, 1, 1.1, 1.2] as const;
@@ -71,6 +78,32 @@ export function SystemSettingsForm(props: SettingsSectionProps) {
         fontScale: { ...prev.customSettings.fontScale, [zone]: value },
       }),
     );
+  }
+
+  const systemProxy = settings.system.systemProxy;
+  const systemProxyInvalid =
+    systemProxy.enabled &&
+    (!isValidSystemProxyHost(systemProxy.host) ||
+      !Number.isInteger(systemProxy.port) ||
+      systemProxy.port < 1 ||
+      systemProxy.port > 65535);
+  // 密码走"本地草稿 + blur 提交"：WebUI 的设置 state 持久前会被脱敏（密码置空），
+  // 直接绑定 state 会导致输入即被清空；草稿只在提交时进入 settings。
+  const [proxyPasswordDraft, setProxyPasswordDraft] = useState<string | null>(null);
+
+  function patchSystemProxy(patch: Partial<SystemProxyConfig>) {
+    setSettings((prev) =>
+      updateSystem(prev, {
+        systemProxy: { ...prev.system.systemProxy, ...patch },
+      }),
+    );
+  }
+
+  function commitProxyPasswordDraft() {
+    if (proxyPasswordDraft !== null) {
+      patchSystemProxy({ password: proxyPasswordDraft });
+      setProxyPasswordDraft(null);
+    }
   }
 
   return (
@@ -283,6 +316,127 @@ export function SystemSettingsForm(props: SettingsSectionProps) {
           </div>
         </section>
       </div>
+
+      <section className="space-y-3 rounded-2xl border border-border/60 bg-card p-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Globe className="h-4 w-4 text-muted-foreground" />
+            {t("settings.systemProxy")}
+          </div>
+          <AgentActivationSwitch
+            checked={systemProxy.enabled}
+            title={t("settings.systemProxyEnable")}
+            onToggle={() => patchSystemProxy({ enabled: !systemProxy.enabled })}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">{t("settings.systemProxyDesc")}</p>
+        {systemProxyInvalid ? (
+          <p className="text-xs text-destructive">{t("settings.systemProxyInvalid")}</p>
+        ) : null}
+        {systemProxy.enabled ? (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label className="text-xs font-medium text-muted-foreground">
+                {t("settings.systemProxyType")}
+              </Label>
+              <div className="grid grid-cols-2 gap-2 rounded-xl border border-border/60 bg-background p-1">
+                {(["socks5", "http"] as SystemProxyType[]).map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    className={`rounded-lg px-3 py-2 text-xs font-medium transition-colors ${
+                      systemProxy.type === type
+                        ? "bg-muted text-foreground shadow-sm"
+                        : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    }`}
+                    onClick={() => patchSystemProxy({ type })}
+                  >
+                    {type === "socks5" ? "SOCKS5" : "HTTP"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label
+                htmlFor="system-proxy-host"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                {t("settings.systemProxyHost")}
+              </Label>
+              <Input
+                id="system-proxy-host"
+                value={systemProxy.host}
+                placeholder="127.0.0.1"
+                onChange={(event) => patchSystemProxy({ host: event.currentTarget.value })}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label
+                htmlFor="system-proxy-port"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                {t("settings.systemProxyPort")}
+              </Label>
+              <Input
+                id="system-proxy-port"
+                type="number"
+                min={1}
+                max={65535}
+                value={systemProxy.port > 0 ? systemProxy.port : ""}
+                placeholder={systemProxy.type === "socks5" ? "1080" : "7890"}
+                onChange={(event) => {
+                  const parsed = Number.parseInt(event.currentTarget.value, 10);
+                  patchSystemProxy({ port: Number.isNaN(parsed) ? 0 : parsed });
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label
+                htmlFor="system-proxy-username"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                {t("settings.systemProxyUsername")}
+              </Label>
+              <Input
+                id="system-proxy-username"
+                value={systemProxy.username}
+                onChange={(event) => patchSystemProxy({ username: event.currentTarget.value })}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label
+                htmlFor="system-proxy-password"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                {t("settings.systemProxyPassword")}
+              </Label>
+              <Input
+                id="system-proxy-password"
+                type="password"
+                value={proxyPasswordDraft ?? systemProxy.password}
+                onChange={(event) => setProxyPasswordDraft(event.currentTarget.value)}
+                onBlur={commitProxyPasswordDraft}
+              />
+              {systemProxy.passwordConfigured &&
+              !(proxyPasswordDraft ?? systemProxy.password).trim() ? (
+                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <span>{t("settings.systemProxyPasswordConfigured")}</span>
+                  <button
+                    type="button"
+                    className="underline-offset-2 hover:text-foreground hover:underline"
+                    onClick={() => {
+                      setProxyPasswordDraft(null);
+                      patchSystemProxy({ password: "", passwordConfigured: false });
+                    }}
+                  >
+                    {t("settings.systemProxyPasswordClear")}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </section>
 
       <section className="space-y-3 rounded-2xl border border-border/60 bg-card p-4">
         <div className="flex items-start justify-between gap-3">

@@ -52,6 +52,39 @@ func (c *websocketConnection) handleProviderModels(req websocketRequest) {
 		_ = c.writeError(req.ID, "invalid provider.models payload")
 		return
 	}
+	if body.UseSystemProxy {
+		response, err := c.awaitAgentResponse(req.ID, &gatewayv1.GatewayEnvelope{
+			RequestId: req.ID,
+			Timestamp: time.Now().Unix(),
+			Payload: &gatewayv1.GatewayEnvelope_ProviderModels{
+				ProviderModels: &gatewayv1.ProviderModelsRequest{
+					ProviderType: strings.TrimSpace(body.Type),
+					BaseUrl:      strings.TrimSpace(body.BaseURL),
+					ApiKey:       strings.TrimSpace(body.APIKey),
+				},
+			},
+		})
+		if err != nil {
+			_ = c.writeError(req.ID, websocketErrorMessage(err))
+			return
+		}
+		if errResp := response.GetError(); errResp != nil {
+			_ = c.writeError(req.ID, errResp.GetMessage())
+			return
+		}
+		providerModelsResp := response.GetProviderModelsResp()
+		if providerModelsResp == nil {
+			_ = c.writeError(req.ID, "unexpected agent response")
+			return
+		}
+		var payload any
+		if err := json.Unmarshal([]byte(providerModelsResp.GetModelsJson()), &payload); err != nil {
+			_ = c.writeError(req.ID, "provider model response is not valid JSON")
+			return
+		}
+		_ = c.writeResponse(req.ID, payload)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), c.cfg.RequestTimeout)
 	defer cancel()
