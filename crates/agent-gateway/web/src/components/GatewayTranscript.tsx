@@ -37,6 +37,7 @@ import type { GitClient } from "@/lib/git/types";
 import { cn } from "@/lib/shared/utils";
 import { extractLiveRange } from "@/lib/transcript-virtual/liveRangeExtractor";
 import { createLiveRowScrollAdjustPolicy } from "@/lib/transcript-virtual/liveScrollAdjustPolicy";
+import { createTranscriptMeasurementsLru } from "@/lib/transcript-virtual/measurementsLru";
 import {
   CHECKPOINT_ROW_ESTIMATE_PX,
   estimateAssistantRowHeight,
@@ -126,6 +127,11 @@ function rowRenderMode(row: Extract<TranscriptRow, { kind: "assistant" }>) {
 const TRANSCRIPT_ROW_ESTIMATED_HEIGHT = 260;
 const TRANSCRIPT_ROW_GAP = 18;
 const TRANSCRIPT_ROW_OVERSCAN_COUNT = 5;
+
+// Measured row heights survive conversation switches: saved on unmount,
+// restored (width-gated) on the next open so the switch lays out with exact
+// heights instead of estimates.
+const transcriptMeasurementsLru = createTranscriptMeasurementsLru();
 
 type GatewayTranscriptVirtualItem =
   | { key: string; kind: "loadRemoteHistory" }
@@ -1276,6 +1282,16 @@ const GatewayTranscriptListRegion = memo(function GatewayTranscriptListRegion(pr
     (index: number) => virtualItems[index]?.key ?? `virtual-${index}`,
     [virtualItems],
   );
+
+  // Restored once per mount: at conversation-switch remounts the viewport is
+  // already live, so a same-width snapshot skips straight to exact layout.
+  const [initialMeasurementsCache] = useState(
+    () =>
+      (conversationId && scrollViewport
+        ? transcriptMeasurementsLru.restore(conversationId, scrollViewport.clientWidth)
+        : null) ?? [],
+  );
+
   const transcriptVirtualizer = useVirtualizer({
     count: virtualItems.length,
     getScrollElement: () => scrollViewport,
@@ -1298,6 +1314,7 @@ const GatewayTranscriptListRegion = memo(function GatewayTranscriptListRegion(pr
     // already pinned by the reducer.
     anchorTo: "end",
     scrollEndThreshold: 8,
+    initialMeasurementsCache,
     rangeExtractor: (range) => extractLiveRange(range, forceMountStartRef.current),
   });
 
@@ -1310,6 +1327,36 @@ const GatewayTranscriptListRegion = memo(function GatewayTranscriptListRegion(pr
       getLiveStartIndex: () => forceMountStartRef.current,
       isFollowing: () => isViewportFollowing?.() ?? false,
     });
+
+  // First paint of a conversation lands at the bottom before the user sees
+  // anything: scrollToEnd re-targets as dynamic measurements land. The region
+  // remounts per conversation (keyed by the parent), so this runs once per
+  // open; read-only shared views keep their own initial position.
+  const scrollToEndOnceRef = useRef(false);
+  useLayoutEffect(() => {
+    if (
+      scrollToEndOnceRef.current ||
+      readOnly ||
+      scrollViewport === null ||
+      virtualItems.length === 0
+    ) {
+      return;
+    }
+    scrollToEndOnceRef.current = true;
+    transcriptVirtualizer.scrollToEnd();
+  }, [readOnly, scrollViewport, virtualItems.length, transcriptVirtualizer]);
+
+  // Snapshot measured heights for the next open of this conversation.
+  const saveMeasurementsRef = useRef(() => {});
+  saveMeasurementsRef.current = () => {
+    if (!conversationId || !scrollViewport) return;
+    transcriptMeasurementsLru.save(
+      conversationId,
+      scrollViewport.clientWidth,
+      transcriptVirtualizer.takeSnapshot(),
+    );
+  };
+  useEffect(() => () => saveMeasurementsRef.current(), []);
 
   const virtualRows = transcriptVirtualizer.getVirtualItems();
 
@@ -1579,7 +1626,11 @@ export function GatewayTranscript({
         ref={transcriptListRef}
         className="gateway-chat-column gateway-transcript-list select-text"
       >
+        {/* Keyed remount per conversation: per-conversation state (measured
+            heights, scroll-to-end latch) initializes fresh, and row keys can
+            never collide across conversations in the itemSizeCache. */}
         <GatewayTranscriptListRegion
+          key={conversationId ?? "shared"}
           conversationId={conversationId}
           rows={rows}
           liveStartIndex={liveStartIndex}

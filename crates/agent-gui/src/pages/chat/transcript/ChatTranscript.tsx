@@ -199,7 +199,12 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
 
           <div className="select-text">
             <RowInteractionProvider value={rowInteractionStore}>
+              {/* Keyed remount per conversation: per-conversation state
+                  (row model, entrance registry, virtualizer measurements)
+                  initializes fresh, and row keys can never collide across
+                  conversations in the virtualizer's itemSizeCache. */}
               <TranscriptList
+                key={conversationId}
                 conversationId={conversationId}
                 historyItems={historyItems}
                 liveTranscriptStore={liveTranscriptStore}
