@@ -13,6 +13,34 @@ export const VIBING_STATUS = "Vibing...";
 // Must match BRANCH_DEFAULT_TITLE in src-tauri/src/commands/history/chat_history/branch.rs.
 export const BRANCH_CONVERSATION_DEFAULT_TITLE = "新分支";
 
+export type ModelOptionGroup = {
+  id: string;
+  name: string;
+  providerType: ModelOption["providerType"];
+  opts: ModelOption[];
+};
+
+export function groupModelOptionsByProvider(modelOptions: readonly ModelOption[]) {
+  const groups: ModelOptionGroup[] = [];
+  const groupMap = new Map<string, ModelOptionGroup>();
+  for (const option of modelOptions) {
+    const existing = groupMap.get(option.providerId);
+    if (existing) {
+      existing.opts.push(option);
+      continue;
+    }
+    const group: ModelOptionGroup = {
+      id: option.providerId,
+      name: option.providerName,
+      providerType: option.providerType,
+      opts: [option],
+    };
+    groupMap.set(option.providerId, group);
+    groups.push(group);
+  }
+  return groups;
+}
+
 export function buildModelOptions(
   settings: AppSettings,
   opts?: { floatSelectedFirst?: boolean },
@@ -22,6 +50,7 @@ export function buildModelOptions(
     for (const model of provider.activeModels) {
       options.push({
         providerType: provider.type,
+        providerId: provider.id,
         providerName: provider.name,
         model,
         value: toModelValue(provider.id, model),
