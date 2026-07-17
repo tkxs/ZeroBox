@@ -143,6 +143,7 @@ macro_rules! app_invoke_handler {
             commands::cron::automation_hooks_apply,
             commands::cron::automation_list_runs,
             commands::cron::automation_clear_runs,
+            commands::cron::automation_run_cron_now,
             commands::cron::automation_claim_prompt_runs,
             commands::cron::automation_release_prompt_run,
             commands::cron::automation_complete_prompt_run,

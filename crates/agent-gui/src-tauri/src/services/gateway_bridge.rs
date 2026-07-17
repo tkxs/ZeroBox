@@ -97,6 +97,15 @@ pub async fn handle_cron_manage(
                     .map_err(|e| format!("gateway clear_runs join failed: {e}"))??;
             serialize_cron_manage_result(&json!({ "clearedCount": cleared }))?
         }
+        "run_now" => {
+            let task_id = parse_required_cron_task_id(&request, "run_now")?;
+            let store = Arc::clone(&store);
+            let response =
+                tauri::async_runtime::spawn_blocking(move || store.run_cron_task_now(&task_id))
+                .await
+                .map_err(|e| format!("gateway run_now join failed: {e}"))??;
+            serialize_cron_manage_result(&response)?
+        }
         "validate" => {
             let expression = parse_validate_expression(&request.task_json)?;
             tauri::async_runtime::spawn_blocking(move || validate_cron_expression(&expression))

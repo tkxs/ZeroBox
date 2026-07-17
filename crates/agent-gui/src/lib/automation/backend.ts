@@ -11,6 +11,7 @@ import type {
   AutomationSnapshot,
   CompletePromptRunInput,
   CronApplyResponse,
+  CronRunNowResponse,
   CronRunRecord,
   CronSnapshot,
   HooksApplyResponse,
@@ -49,6 +50,10 @@ export const backend = {
 
   clearRuns(taskId: string): Promise<number> {
     return invoke<number>("automation_clear_runs", { task_id: taskId });
+  },
+
+  runNow(taskId: string): Promise<CronRunNowResponse> {
+    return invoke<CronRunNowResponse>("automation_run_cron_now", { task_id: taskId });
   },
 
   claimPromptRuns(): Promise<PromptRunRequest[]> {
