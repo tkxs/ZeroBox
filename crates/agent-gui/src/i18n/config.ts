@@ -24,6 +24,12 @@ export const translations: Record<Locale, Record<string, string>> = {
     "window.restore": "还原",
     "window.close": "关闭",
 
+    /* ── Input context menu ── */
+    "inputContextMenu.cut": "剪切",
+    "inputContextMenu.copy": "复制",
+    "inputContextMenu.paste": "粘贴",
+    "inputContextMenu.selectAll": "全选",
+
     /* ── Tooltip ── */
     "tooltip.settings": "设置",
     "tooltip.switchToLight": "切换到浅色模式",
@@ -1307,11 +1313,18 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.agentsNamePlaceholder": "例如：代码审查助手",
     "settings.agentsDescription": "描述",
     "settings.agentsDescriptionPlaceholder": "简要说明这个全局提示词模板的用途",
+    "settings.agentsTemplateDetails": "模板信息",
+    "settings.agentsTemplateDetailsHint": "使用清晰的名称与描述，方便快速识别和复用。",
     "settings.agentsPrompt": "Prompt",
     "settings.agentsPromptPlaceholder": "输入完整的全局提示词内容...",
+    "settings.agentsPromptHint": "编写希望 Agent 始终遵循的上下文、角色与行为规则。",
+    "settings.agentsCharacters": "字符",
     "settings.agentsCount": "个模板",
     "settings.agentsActive": "已激活",
     "settings.agentsActiveLabel": "激活中",
+    "settings.agentsInactiveLabel": "未激活",
+    "settings.agentsStatus": "状态",
+    "settings.agentsNoDescription": "暂无模板描述。",
     "settings.agentsNoTemplates": "还没有配置任何全局提示词模板",
     "settings.agentsNoTemplatesHint": "创建全局提示词模板，在对话中快速复用常见的 Agent 指令",
     "settings.agentsShowPrompt": "查看 Prompt",
@@ -1829,6 +1842,12 @@ export const translations: Record<Locale, Record<string, string>> = {
     "window.maximize": "Maximize",
     "window.restore": "Restore",
     "window.close": "Close",
+
+    /* ── Input context menu ── */
+    "inputContextMenu.cut": "Cut",
+    "inputContextMenu.copy": "Copy",
+    "inputContextMenu.paste": "Paste",
+    "inputContextMenu.selectAll": "Select All",
 
     /* ── Tooltip ── */
     "tooltip.settings": "Settings",
@@ -3172,11 +3191,20 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.agentsDescription": "Description",
     "settings.agentsDescriptionPlaceholder":
       "Briefly describe what this global prompt template is for",
+    "settings.agentsTemplateDetails": "Template details",
+    "settings.agentsTemplateDetailsHint":
+      "Use a clear name and description so this template is easy to identify and reuse.",
     "settings.agentsPrompt": "Prompt",
     "settings.agentsPromptPlaceholder": "Enter the full global prompt content...",
+    "settings.agentsPromptHint":
+      "Define the context, role, and behavior rules the Agent should always follow.",
+    "settings.agentsCharacters": "characters",
     "settings.agentsCount": "templates",
     "settings.agentsActive": "active",
     "settings.agentsActiveLabel": "Active",
+    "settings.agentsInactiveLabel": "Inactive",
+    "settings.agentsStatus": "Status",
+    "settings.agentsNoDescription": "No template description yet.",
     "settings.agentsNoTemplates": "No global prompt templates yet",
     "settings.agentsNoTemplatesHint":
       "Create reusable prompt templates to quickly apply common Agent instructions in your chats",
