@@ -3231,6 +3231,9 @@ export default function GatewayApp() {
   const handleComposerBusyChange = useCallback((_isBusy: boolean) => {}, []);
 
   function openSettings(section: SectionId = "system") {
+    if (isMobileSidebarLayout()) {
+      setSidebarOpen(false);
+    }
     setSettingsSection(section);
     setSettingsOpen(true);
     setOverlay("entering");
