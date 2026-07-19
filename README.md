@@ -174,28 +174,28 @@ The desktop app requires the local USA-Zero backend on port `8080`. Deploy the G
 
 ```bash
 # Pull the image (built by GitHub Actions, multi-arch: amd64 / arm64)
-docker pull ghcr.io/stack-cairn/liveagent-gateway:latest
+docker pull ghcr.io/tkxs/zerobox-gateway:latest
 
 # Run in the background (HTTP/WebSocket → host 3000)
 docker run -d \
-  --name liveagent-gateway \
+  --name zerobox-gateway \
   --restart unless-stopped \
   -p 3000:8080 \
   -e LIVEAGENT_GATEWAY_TOKEN=your-token \
-  ghcr.io/stack-cairn/liveagent-gateway:latest
+  ghcr.io/tkxs/zerobox-gateway:latest
 ```
 
 **One-command upgrade to the latest version** — pull the new image → remove the old container → recreate it with the same arguments (if you changed the port mappings or token, adjust the arguments below accordingly):
 
 ```bash
-docker pull ghcr.io/stack-cairn/liveagent-gateway:latest \
-  && docker rm -f liveagent-gateway \
+docker pull ghcr.io/tkxs/zerobox-gateway:latest \
+  && docker rm -f zerobox-gateway \
   && docker run -d \
-    --name liveagent-gateway \
+    --name zerobox-gateway \
     --restart unless-stopped \
     -p 3000:8080 \
     -e LIVEAGENT_GATEWAY_TOKEN=your-token \
-    ghcr.io/stack-cairn/liveagent-gateway:latest \
+    ghcr.io/tkxs/zerobox-gateway:latest \
   && docker image prune -f
 ```
 

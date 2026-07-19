@@ -292,13 +292,14 @@ export async function createRelayApiKeys(name: string, groupIds: number[], group
     groups.some((group) => group.id === id && group.status === "active"),
   );
   if (validIds.length === 0) throw new RelayApiError("请选择至少一个可用分组", 400);
-  return Promise.all(
-    validIds.map((groupId) => {
-      const group = groups.find((item) => item.id === groupId);
-      const keyName = validIds.length === 1 ? name : `${name} / ${group?.name ?? groupId}`;
-      return createRelayApiKey(keyName, groupId);
-    }),
-  );
+
+  const created: RelayApiKey[] = [];
+  for (const groupId of validIds) {
+    const group = groups.find((item) => item.id === groupId);
+    const keyName = validIds.length === 1 ? name : `${name} / ${group?.name ?? groupId}`;
+    created.push(await createRelayApiKey(keyName, groupId));
+  }
+  return created;
 }
 
 export async function logoutRelay() {
