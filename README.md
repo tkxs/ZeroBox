@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="docs/images/banner.webp" alt="LiveAgent" />
+  <img src="docs/images/zerobox-logo.png" alt="ZeroBox" width="180" />
 </p>
 
-<h1 align="center">LiveAgent</h1>
+<h1 align="center">ZeroBox</h1>
 
 <p align="center">
-  <strong>Your Local-First AI Agent Desktop</strong><br/>
-  Multi-model access · Local tool execution · MCP & Skills ecosystem · Remote Gateway
+  <strong>The local AI agent terminal for USA-Zero</strong><br/>
+  Account login · Managed keys · Local tools · Desktop and WebUI
 </p>
 
 <p align="center">
@@ -65,20 +65,24 @@
 ## 🤝 Come Build With Us!
 
 <p align="center">
-  <img src="docs/images/QQ.png" alt="LiveAgent QQ Group" width="300" />
+  <img src="docs/images/QQ.png" alt="ZeroBox QQ Group" width="300" />
 </p>
 
 <p align="center">
-  Scan the QR code to join our QQ group and help drive LiveAgent development!<br/>
+  Scan the QR code to join our QQ group and help drive ZeroBox development!<br/>
   (Why a QQ group? It just packs a few more features than a WeChat group~)
 </p>
 
 
 ---
 
-## Why LiveAgent?
+## Why ZeroBox?
 
-LiveAgent is a **local-first** AI agent desktop client. It deeply integrates large language model reasoning with local system tools, so the AI can genuinely operate your file system, run commands, and manage scheduled tasks — while the Gateway enables remote access and collaboration.
+ZeroBox is a local-first AI agent client dedicated to the local **USA-Zero** service. Accounts, groups, and API keys are managed by USA-Zero; arbitrary third-party provider URLs are intentionally rejected.
+
+- Fixed USA-Zero backend: `http://127.0.0.1:8080`
+- Groups and models sync after login; users without a key are guided through multi-group creation
+- Keys stay masked and require password verification before copying
 
 - **An agent that actually gets things done** — beyond chat: read and write files, make precise edits, run Bash, and supervise long-running processes
 - **A fully open ecosystem** — bridge any external tool via the MCP protocol, and load Skills packages on demand
@@ -92,7 +96,7 @@ LiveAgent is a **local-first** AI agent desktop client. It deeply integrates lar
 
 ### 🧠 Multi-Model & Chat
 
-- **Multi-model routing** — Claude (Anthropic), Codex (OpenAI), and Gemini protocols, with custom Base URL support for third-party compatible services
+- **Multi-model routing** — Claude, Codex, and Gemini protocols through USA-Zero groups with fixed service endpoints
 - **Rich rendering** — streaming Markdown with built-in KaTeX math, Mermaid diagrams, and Monaco code preview
 - **History compaction** — dual-layer Segment + Summary Checkpoint persistence keeps long conversations from losing context
 - **Internationalization** — built-in i18n multi-language framework
@@ -123,7 +127,7 @@ LiveAgent is a **local-first** AI agent desktop client. It deeply integrates lar
 
 ## Download & Deployment
 
-Installers are automatically built, signed, and published by GitHub Actions — grab the latest version from [**GitHub Releases**](https://github.com/Stack-Cairn/LiveAgent/releases/latest).
+Installers are automatically built and published by GitHub Actions — grab the latest version from [**GitHub Releases**](https://github.com/tkxs/ZeroBox/releases/latest).
 
 ### System Requirements
 
@@ -135,36 +139,36 @@ Installers are automatically built, signed, and published by GitHub Actions — 
 
 ### macOS
 
-Download the DMG matching your chip from [Releases](https://github.com/Stack-Cairn/LiveAgent/releases/latest), open it, and drag LiveAgent into Applications:
+Download the DMG matching your chip from [Releases](https://github.com/tkxs/ZeroBox/releases/latest), open it, and drag ZeroBox into Applications:
 
-- Apple Silicon (M-series): `LiveAgent-<version>-macOS-aarch64.dmg`
-- Intel: `LiveAgent-<version>-macOS-x64.dmg`
+- Apple Silicon (M-series): `ZeroBox-<version>-macOS-aarch64.dmg`
+- Intel: `ZeroBox-<version>-macOS-x64.dmg`
 
 > The installer is signed and notarized by Apple — no manual security override is needed on first launch.
 
 ### Windows
 
-Pick an installation method from [Releases](https://github.com/Stack-Cairn/LiveAgent/releases/latest):
+Pick an installation method from [Releases](https://github.com/tkxs/ZeroBox/releases/latest):
 
 | Method | File | Best for |
 |---|---|---|
-| Setup wizard | `LiveAgent-<version>-Windows-x64-Setup.exe` | Most users |
-| MSI package | `LiveAgent-<version>-Windows-x64.msi` | Enterprise distribution / silent install |
-| Portable | `LiveAgent-<version>-Windows-x64-portable.zip` | No install — unzip and run |
+| Setup wizard | `ZeroBox-<version>-Windows-x64-Setup.exe` | Most users |
+| MSI package | `ZeroBox-<version>-Windows-x64.msi` | Enterprise distribution / silent install |
+| Portable | `ZeroBox-<version>-Windows-x64-portable.zip` | No install — unzip and run |
 
 ### Linux
 
-Choose by distribution from [Releases](https://github.com/Stack-Cairn/LiveAgent/releases/latest):
+Choose by distribution from [Releases](https://github.com/tkxs/ZeroBox/releases/latest):
 
 | Format | Distributions | Install |
 |---|---|---|
 | AppImage | Any distribution | `chmod +x`, then run directly |
-| DEB | Debian / Ubuntu family | `sudo dpkg -i LiveAgent-<version>-Linux-x86_64.deb` |
-| RPM | Fedora / openSUSE family | `sudo rpm -i LiveAgent-<version>-Linux-x86_64.rpm` |
+| DEB | Debian / Ubuntu family | `sudo dpkg -i ZeroBox-<version>-Linux-x86_64.deb` |
+| RPM | Fedora / openSUSE family | `sudo rpm -i ZeroBox-<version>-Linux-x86_64.rpm` |
 
 ### Need Remote Access? Deploy the Gateway
 
-The desktop app works out of the box and depends on no server. Deploy the Gateway only if you want to **control your local agent from a browser**.
+The desktop app requires the local USA-Zero backend on port `8080`. Deploy the Gateway in addition only if you want to **control your local agent from a browser**.
 
 **Note: when deployed behind an Nginx reverse proxy, set the Gateway address on the Settings → Remote page to the HTTPS URL and use port 443.**
 
@@ -237,6 +241,16 @@ location / {
 
 ### Build from Source
 
+Prerequisites: Node.js 22, pnpm 10, Rust stable, Go 1.25, and `protoc`. Start the local USA-Zero frontend at `http://127.0.0.1:3000` and backend at `http://127.0.0.1:8080` first.
+
+```powershell
+cd crates/agent-gui
+pnpm install
+pnpm tauri dev
+```
+
+Tauri loads the desktop development page from `http://localhost:2120`. Because the USA-Zero frontend already uses port `3000`, run Gateway with `PORT=3001` and open ZeroBox WebUI at `http://127.0.0.1:3001`. Browser USA-Zero API calls go through Gateway's fixed local proxy to port `8080`.
+
 Expand the Development Guide below for the full set of Make commands.
 
 ![](docs/images/architecture.webp)
@@ -307,7 +321,7 @@ Expand the Development Guide below for the full set of Make commands.
 <summary><b>Project Structure</b> — directory tree</summary>
 
 ```
-LiveAgent/
+ZeroBox/
 ├── crates/
 │   ├── agent-gui/                # Desktop client
 │   │   ├── src/                  # React frontend
@@ -345,21 +359,21 @@ LiveAgent/
 <details>
 <summary><b>Does my API key ever leave my machine?</b></summary>
 
-No. Keys are stored locally on the desktop side only. The Gateway is a pure protocol relay — it never accesses the file system and never stores any credentials.
+Provider keys are synced back to the desktop through the existing settings channel, while browser persistence is redacted. Gateway exposes only an authenticated, fixed proxy to the local USA-Zero backend.
 
 </details>
 
 <details>
 <summary><b>Do I have to deploy the Gateway?</b></summary>
 
-No. The desktop client works standalone with all local capabilities; deploy the Gateway only when you need browser-based remote access to your local agent.
+ZeroBox login, groups, and keys require the local USA-Zero backend at `http://127.0.0.1:8080`. Gateway is only required for WebUI access.
 
 </details>
 
 <details>
 <summary><b>Which models are supported?</b></summary>
 
-Claude (Anthropic), Codex (OpenAI), and Gemini protocols are built in, plus custom Base URL support for any compatible third-party service.
+Claude, Codex, and Gemini protocols are supported through active USA-Zero groups. Third-party Base URLs are not accepted.
 
 </details>
 
@@ -400,17 +414,17 @@ Before submitting a PR, make sure all of the following checks pass (they match t
 
 ## 👥 Contributors
 
-Thanks to everyone who has contributed to LiveAgent!
+Thanks to everyone who has contributed to ZeroBox!
 
-<a href="https://github.com/Stack-Cairn/LiveAgent/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Stack-Cairn/LiveAgent" alt="Contributors" />
+<a href="https://github.com/tkxs/ZeroBox/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=tkxs/ZeroBox" alt="Contributors" />
 </a>
 
 ---
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=Stack-Cairn%2FLiveAgent&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=tkxs%2FZeroBox&type=date&legend=top-left">
 
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="docs/images/star-history-dark.svg" />

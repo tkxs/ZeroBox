@@ -388,9 +388,9 @@ export function getBuiltinCustomProviders(): CustomProvider[] {
   return [
     {
       id: "builtin-claude_code",
-      name: "Anthropic",
+      name: "USA-零 Claude",
       type: "claude_code",
-      baseUrl: "https://api.anthropic.com/v1",
+      baseUrl: "http://127.0.0.1:8080/v1",
       apiKey: "",
       customHeaders: [],
       models: [],
@@ -402,9 +402,9 @@ export function getBuiltinCustomProviders(): CustomProvider[] {
     },
     {
       id: "builtin-codex",
-      name: "OpenAI",
+      name: "USA-零 OpenAI",
       type: "codex",
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: "http://127.0.0.1:8080",
       apiKey: "",
       customHeaders: [],
       models: [],
@@ -417,9 +417,9 @@ export function getBuiltinCustomProviders(): CustomProvider[] {
     },
     {
       id: "builtin-gemini",
-      name: "Gemini",
+      name: "USA-零 Gemini",
       type: "gemini",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      baseUrl: "http://127.0.0.1:8080",
       apiKey: "",
       customHeaders: [],
       models: [],

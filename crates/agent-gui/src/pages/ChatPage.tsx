@@ -1769,7 +1769,7 @@ export function ChatPage(props: ChatPageProps) {
         await invoke("app_confirmed_exit");
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(asErrorMessage(error, "退出 LiveAgent 失败"));
+          setErrorMessage(asErrorMessage(error, "退出 ZeroBox 失败"));
         }
       }
     })

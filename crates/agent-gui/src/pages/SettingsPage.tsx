@@ -20,7 +20,7 @@ import { AgentsSection } from "./settings/AgentsSection";
 import { CronSection } from "./settings/CronSection";
 import { HooksSection } from "./settings/HooksSection";
 import { MemoryPanel } from "./settings/memory/MemoryPanel";
-import { ProvidersSection } from "./settings/ProvidersSection";
+import { RelayProvidersSection } from "./settings/RelayProvidersSection";
 import { RemoteSection } from "./settings/RemoteSection";
 import { SshSection } from "./settings/SshSection";
 import { SystemSettingsForm } from "./settings/SystemSettingsForm";
@@ -179,7 +179,7 @@ export function SettingsPage(props: SettingsPageProps) {
   const sectionContent = (() => {
     switch (section) {
       case "providers":
-        return <ProvidersSection settings={settings} setSettings={setSettings} />;
+        return <RelayProvidersSection settings={settings} setSettings={setSettings} />;
       case "system":
         return <SystemSettingsForm settings={settings} setSettings={setSettings} />;
       case "systemTools":

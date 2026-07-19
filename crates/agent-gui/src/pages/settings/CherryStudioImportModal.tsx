@@ -348,7 +348,7 @@ export function CherryStudioImportModal(props: CherryStudioImportModalProps) {
 
         <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-6 py-4">
           <div className="text-xs text-muted-foreground">
-            已选择 {selectedItems.length} 个供应商配置
+            已选择 {selectedItems.length} 个密钥配置
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={onClose} disabled={importing}>

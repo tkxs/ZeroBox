@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="docs/images/banner.webp" alt="LiveAgent" />
+  <img src="docs/images/zerobox-logo.png" alt="ZeroBox" width="180" />
 </p>
 
-<h1 align="center">LiveAgent</h1>
+<h1 align="center">ZeroBox</h1>
 
 <p align="center">
-  <strong>Your Local-First AI Agent Desktop</strong><br/>
-  多模型接入 · 本地工具执行 · MCP & Skills 生态 · 远程 Gateway
+  <strong>USA-零专属本地 AI Agent 终端</strong><br/>
+  账户登录 · 密钥自动绑定 · 本地工具执行 · 桌面与 WebUI
 </p>
 
 <p align="center">
@@ -66,20 +66,24 @@
 ## 🤝 一起来开发吧！
 
 <p align="center">
-  <img src="docs/images/QQ.png" alt="LiveAgent QQ 交流群" width="300" />
+  <img src="docs/images/QQ.png" alt="ZeroBox QQ 交流群" width="300" />
 </p>
 
 <p align="center">
-  欢迎扫码进群，一起推进 LiveAgent 的开发！<br/>
+  欢迎扫码进群，一起推进 ZeroBox 的开发！<br/>
   （至于为什么是QQ群，感觉功能比微信群多一些～）
 </p>
 
 
 ---
 
-## 为什么是 LiveAgent?
+## 为什么是 ZeroBox?
 
-LiveAgent 是一个 **本地优先** 的 AI Agent 桌面客户端。它将大语言模型的推理能力与本地系统工具深度整合,让 AI 能够真正操作你的文件系统、执行命令、管理定时任务,同时通过 Gateway 实现远程访问与协作。
+ZeroBox 是一个绑定本机 **USA-零** 服务的本地优先 AI Agent 客户端。账户、分组和 API Key 由 USA-零 统一管理，客户端不允许连接任意第三方 Provider 地址。
+
+- 固定 USA-零 后端：`http://127.0.0.1:8080`
+- 登录后自动同步可用分组与模型；无 Key 时引导多选分组并快速创建
+- 密钥默认隐藏，复制前必须再次验证 USA-零 账户密码
 
 - **真正动手的 Agent** — 不止于对话:读写文件、精确编辑、执行 Bash、托管长驻进程
 - **生态完全开放** — MCP 协议桥接任意外部工具,Skills 技能包按需加载
@@ -93,7 +97,7 @@ LiveAgent 是一个 **本地优先** 的 AI Agent 桌面客户端。它将大语
 
 ### 🧠 多模型与对话
 
-- **多模型路由** — Claude(Anthropic)与 Codex(OpenAI)、Gemini 三协议,支持自定义 Base URL 接入第三方兼容服务
+- **多模型路由** — 通过 USA-零 分组使用 Claude、Codex 与 Gemini 协议，服务地址固定且不可改为第三方地址
 - **富文本渲染** — Markdown 流式渲染,内建 KaTeX 公式、Mermaid 图表与 Monaco 代码预览
 - **历史压缩** — Segment + Summary Checkpoint 双层持久化,长对话不丢上下文
 - **国际化** — 内建 i18n 多语言框架
@@ -124,7 +128,7 @@ LiveAgent 是一个 **本地优先** 的 AI Agent 桌面客户端。它将大语
 
 ## 下载与部署
 
-安装包由 GitHub Actions 自动构建、签名并发布,请前往 [**GitHub Releases**](https://github.com/Stack-Cairn/LiveAgent/releases/latest) 获取最新版本。
+安装包由 GitHub Actions 自动构建并发布,请前往 [**GitHub Releases**](https://github.com/tkxs/ZeroBox/releases/latest) 获取最新版本。
 
 ### 系统要求
 
@@ -136,36 +140,36 @@ LiveAgent 是一个 **本地优先** 的 AI Agent 桌面客户端。它将大语
 
 ### macOS 用户
 
-从 [Releases](https://github.com/Stack-Cairn/LiveAgent/releases/latest) 下载对应芯片的 DMG,打开后将 LiveAgent 拖入「应用程序」:
+从 [Releases](https://github.com/tkxs/ZeroBox/releases/latest) 下载对应芯片的 DMG,打开后将 ZeroBox 拖入「应用程序」:
 
-- Apple Silicon(M 系列):`LiveAgent-<版本>-macOS-aarch64.dmg`
-- Intel:`LiveAgent-<版本>-macOS-x64.dmg`
+- Apple Silicon(M 系列):`ZeroBox-<版本>-macOS-aarch64.dmg`
+- Intel:`ZeroBox-<版本>-macOS-x64.dmg`
 
 > 安装包已签名并通过 Apple 公证,首次启动无需在安全设置中手动放行。
 
 ### Windows 用户
 
-从 [Releases](https://github.com/Stack-Cairn/LiveAgent/releases/latest) 按需选择一种安装方式:
+从 [Releases](https://github.com/tkxs/ZeroBox/releases/latest) 按需选择一种安装方式:
 
 | 方式 | 文件 | 适合 |
 |---|---|---|
-| 安装向导 | `LiveAgent-<版本>-Windows-x64-Setup.exe` | 大多数用户 |
-| MSI 包 | `LiveAgent-<版本>-Windows-x64.msi` | 企业分发 / 静默安装 |
-| 便携版 | `LiveAgent-<版本>-Windows-x64-portable.zip` | 免安装,解压即用 |
+| 安装向导 | `ZeroBox-<版本>-Windows-x64-Setup.exe` | 大多数用户 |
+| MSI 包 | `ZeroBox-<版本>-Windows-x64.msi` | 企业分发 / 静默安装 |
+| 便携版 | `ZeroBox-<版本>-Windows-x64-portable.zip` | 免安装,解压即用 |
 
 ### Linux 用户
 
-从 [Releases](https://github.com/Stack-Cairn/LiveAgent/releases/latest) 按发行版选择:
+从 [Releases](https://github.com/tkxs/ZeroBox/releases/latest) 按发行版选择:
 
 | 格式 | 适用发行版 | 安装方式 |
 |---|---|---|
 | AppImage | 任意发行版 | `chmod +x` 后直接运行 |
-| DEB | Debian / Ubuntu 系 | `sudo dpkg -i LiveAgent-<版本>-Linux-x86_64.deb` |
-| RPM | Fedora / openSUSE 系 | `sudo rpm -i LiveAgent-<版本>-Linux-x86_64.rpm` |
+| DEB | Debian / Ubuntu 系 | `sudo dpkg -i ZeroBox-<版本>-Linux-x86_64.deb` |
+| RPM | Fedora / openSUSE 系 | `sudo rpm -i ZeroBox-<版本>-Linux-x86_64.rpm` |
 
 ### 需要远程访问? 部署 Gateway
 
-桌面端开箱即用,不依赖任何服务端。只有想 **在浏览器里远程操控本地 Agent** 时,才需要部署 Gateway。
+桌面端需要本机 USA-零 后端运行在 `8080`。只有想 **在浏览器里远程操控本地 Agent** 时,才额外部署 Gateway。
 
 **注意：在部署并使用Nginx反向代理后，设置中Remote页面Gateway地址填写Https地址，端口号填写443。**
 
@@ -237,6 +241,16 @@ location / {
 
 ### 从源码构建
 
+前置条件：Node.js 22、pnpm 10、Rust stable、Go 1.25 和 `protoc`。先启动本机 USA-零前端 `http://127.0.0.1:3000` 与后端 `http://127.0.0.1:8080`。
+
+```powershell
+cd crates/agent-gui
+pnpm install
+pnpm tauri dev
+```
+
+桌面开发页面由 Tauri 加载 `http://localhost:2120`。由于 USA-零前端已占用 `3000`，本地启动 Gateway 时设置 `PORT=3001`，然后访问 ZeroBox WebUI：`http://127.0.0.1:3001`。浏览器中的 USA-零请求会经 Gateway 的固定本地代理转发到 `8080`。
+
 展开下方「开发指南」查看完整 Make 命令。
 
 ![](docs/images/architecture.webp)
@@ -307,7 +321,7 @@ location / {
 <summary><b>项目结构</b> — 目录树</summary>
 
 ```
-LiveAgent/
+ZeroBox/
 ├── crates/
 │   ├── agent-gui/                # 桌面客户端
 │   │   ├── src/                  # React 前端
@@ -345,21 +359,21 @@ LiveAgent/
 <details>
 <summary><b>API Key 会离开本机吗?</b></summary>
 
-不会。秘钥仅保存在桌面端本地,Gateway 只做协议中继 — 不访问文件系统、不存储任何凭据。
+Provider 密钥通过现有设置同步回传桌面端；浏览器本地持久化内容会自动脱敏。Gateway 只提供鉴权后的固定 USA-零代理，不接受任意上游地址。
 
 </details>
 
 <details>
 <summary><b>必须部署 Gateway 吗?</b></summary>
 
-不需要。桌面客户端可独立使用全部本地能力;只有需要从浏览器远程访问本地 Agent 时,才部署 Gateway。
+ZeroBox 登录、分组和密钥依赖本机 `http://127.0.0.1:8080` 的 USA-零 后端；Gateway 只在需要 WebUI 时使用。
 
 </details>
 
 <details>
 <summary><b>支持哪些模型?</b></summary>
 
-内置 Claude(Anthropic) 与 Codex(OpenAI)、Gemini 三协议,并支持自定义 Base URL 接入任何兼容的第三方服务。
+通过 USA-零 的可用分组支持 Claude、Codex 和 Gemini 协议，不接受第三方 Base URL。
 
 </details>
 
@@ -400,17 +414,17 @@ LiveAgent/
 
 ## 👥 贡献者
 
-感谢所有为 LiveAgent 做出贡献的朋友们！
+感谢所有为 ZeroBox 做出贡献的朋友们！
 
-<a href="https://github.com/Stack-Cairn/LiveAgent/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Stack-Cairn/LiveAgent" alt="Contributors" />
+<a href="https://github.com/tkxs/ZeroBox/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=tkxs/ZeroBox" alt="Contributors" />
 </a>
 
 ---
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=Stack-Cairn%2FLiveAgent&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=tkxs%2FZeroBox&type=date&legend=top-left">
 
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="docs/images/star-history-dark.svg" />

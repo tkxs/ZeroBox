@@ -9,6 +9,7 @@ import {
 } from "@/lib/automation";
 import type { GatewayWebSocketClientLike } from "@/lib/gatewaySocket";
 import { setPreferredMonacoNlsLocale } from "@/lib/monacoNls";
+import { enforceRelayProviderConstraint } from "@/lib/relay/providers";
 import {
   type AppSettings,
   normalizeSettings,
@@ -32,7 +33,9 @@ export function useGatewaySettingsSync(params: {
   api: GatewayWebSocketClientLike | null;
 }) {
   const { token, api } = params;
-  const [settings, setSettingsState] = useState<AppSettings>(() => loadWebSettings(loadToken()));
+  const [settings, setSettingsState] = useState<AppSettings>(() =>
+    enforceRelayProviderConstraint(loadWebSettings(loadToken())),
+  );
   const [settingsSyncReady, setSettingsSyncReady] = useState(() => token.trim() === "");
   const [settingsSyncError, setSettingsSyncError] = useState<string | null>(null);
   const [settingsSaveState, setSettingsSaveState] = useState<WebSettingsSaveState>({
@@ -66,16 +69,18 @@ export function useGatewaySettingsSync(params: {
 
   useEffect(() => {
     setSettingsState((prev) =>
-      resolveAppWorkspaceProjects(
-        normalizeSettings({
-          ...prev,
-          remote: {
-            ...prev.remote,
-            gatewayUrl: window.location.origin,
-            token: token.trim(),
-            enabled: token.trim() !== "" || prev.remote.enabled,
-          },
-        }),
+      enforceRelayProviderConstraint(
+        resolveAppWorkspaceProjects(
+          normalizeSettings({
+            ...prev,
+            remote: {
+              ...prev.remote,
+              gatewayUrl: window.location.origin,
+              token: token.trim(),
+              enabled: token.trim() !== "" || prev.remote.enabled,
+            },
+          }),
+        ),
       ),
     );
   }, [token]);
@@ -149,7 +154,9 @@ export function useGatewaySettingsSync(params: {
         feedHooksSnapshot(automation.automationHooks);
       }
       const prev = settingsRef.current;
-      const rawNext = resolveAppWorkspaceProjects(applyGatewaySettingsSyncPayload(prev, payload));
+      const rawNext = enforceRelayProviderConstraint(
+        resolveAppWorkspaceProjects(applyGatewaySettingsSyncPayload(prev, payload)),
+      );
       const next = redactSettingsForWebStorage(rawNext);
       if (!hasSettingsSyncChanged(prev, next)) {
         return;
@@ -166,7 +173,9 @@ export function useGatewaySettingsSync(params: {
       const prev = settingsRef.current;
       const updated = updater(prev);
       if (updated === prev) return;
-      const rawNext = resolveAppWorkspaceProjects(normalizeSettings(updated));
+      const rawNext = enforceRelayProviderConstraint(
+        resolveAppWorkspaceProjects(normalizeSettings(updated)),
+      );
       const next = redactSettingsForWebStorage(rawNext);
       settingsRef.current = next;
       setSettingsState(next);

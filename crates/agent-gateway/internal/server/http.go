@@ -46,6 +46,7 @@ func NewHTTPServer(cfg *config.Config, sm *session.Manager) http.Handler {
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("GET /api/status", handler.Status(sm))
 	apiMux.HandleFunc("POST /api/files/import", handler.ImportReadableFiles(sm, cfg.RequestTimeout))
+	apiMux.HandleFunc("/api/usa-zero/", handler.USAZeroProxy(cfg.RequestTimeout))
 	rootMux.Handle("/api/", auth.HTTPMiddleware(cfg.Token, apiMux))
 
 	webFS, err := fs.Sub(gateway.WebUIAssets, "web/dist")

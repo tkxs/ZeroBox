@@ -6,10 +6,13 @@ import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { CronPromptRunner } from "./components/cron/CronPromptRunner";
 import { useNativeInputContextMenu } from "./components/input-context-menu/NativeInputContextMenu";
 import { MemoryOrganizerHost } from "./components/memory/useMemoryOrganizer";
+import { RelayAccessGate } from "./components/relay/RelayAccessGate";
 import { WindowsTitleBar } from "./components/WindowsTitleBar";
 import { LocaleContext, t as translate } from "./i18n";
 import { useAppUpdateController } from "./lib/appUpdates";
 import { initAutomation } from "./lib/automation";
+import { RELAY_SESSION_CHANGED_EVENT } from "./lib/relay/client";
+import { enforceRelayProviderConstraint } from "./lib/relay/providers";
 import {
   type AppSettings,
   getDefaultSettings,
@@ -122,16 +125,19 @@ function applyRuntimeSystemDefaults(settings: AppSettings, defaultWorkdir: strin
           ...settings.system,
           workdir: normalizedDefaultWorkdir,
         };
-  return normalizeSettings({
-    ...settings,
-    system: resolveWorkspaceProjects(system, normalizedDefaultWorkdir),
-  });
+  return enforceRelayProviderConstraint(
+    normalizeSettings({
+      ...settings,
+      system: resolveWorkspaceProjects(system, normalizedDefaultWorkdir),
+    }),
+  );
 }
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SectionId>("system");
   const [settingsReady, setSettingsReady] = useState(false);
+  const [relayReady, setRelayReady] = useState(false);
   const [settings, setSettingsState] = useState<AppSettings>(() => getDefaultSettings());
   const [settingsSaveState, setSettingsSaveState] = useState<SettingsSaveState>({
     status: "idle",
@@ -176,6 +182,16 @@ export default function App() {
       // Ignore non-Tauri and older desktop shells.
     });
   }, [settingsReady, settings.closeWindowBehavior]);
+
+  useEffect(() => {
+    const handleSessionChanged = () => {
+      setRelayReady(false);
+      setSettingsOpen(false);
+      setOverlay("closed");
+    };
+    window.addEventListener(RELAY_SESSION_CHANGED_EVENT, handleSessionChanged);
+    return () => window.removeEventListener(RELAY_SESSION_CHANGED_EVENT, handleSessionChanged);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -405,6 +421,20 @@ export default function App() {
           <div className="flex h-full w-full items-center justify-center bg-background text-sm text-muted-foreground">
             {translate("chat.loading", settings.locale)}
           </div>
+        </AppChrome>
+      </LocaleContext.Provider>
+    );
+  }
+
+  if (!relayReady) {
+    return (
+      <LocaleContext.Provider value={localeContextValue}>
+        <AppChrome>
+          <RelayAccessGate
+            settings={settings}
+            setSettings={setSettings}
+            onReady={() => setRelayReady(true)}
+          />
         </AppChrome>
       </LocaleContext.Provider>
     );

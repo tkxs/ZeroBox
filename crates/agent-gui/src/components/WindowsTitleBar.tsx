@@ -26,7 +26,7 @@ function isWindowsTauriRuntime() {
 }
 
 function reportWindowChromeError(action: string, error: unknown) {
-  console.error(`failed to ${action} LiveAgent window`, error);
+  console.error(`failed to ${action} ZeroBox window`, error);
 }
 
 export function WindowsTitleBar() {

@@ -20,6 +20,7 @@ import type {
   GitFileContextPayload,
 } from "@/components/project-tools/git-review";
 import { RightDockPanel } from "@/components/project-tools/RightDockPanel";
+import { RelayAccessGate } from "@/components/relay/RelayAccessGate";
 import { Button } from "@/components/ui/button";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -64,6 +65,7 @@ import type {
 import { parseHistoryMessagesJsonAsync } from "@/lib/historyParser";
 import { memoryDeleteProject } from "@/lib/memory/api";
 import { toModelValue } from "@/lib/providers/llm";
+import { RELAY_SESSION_CHANGED_EVENT } from "@/lib/relay/client";
 import {
   type ChatRuntimeControls,
   DEFAULT_WORKSPACE_PROJECT_ID,
@@ -263,6 +265,17 @@ export default function GatewayApp() {
   const [overlay, setOverlay] = useState<OverlayState>("closed");
   const { settings, setSettings, settingsSyncReady, settingsSyncError, settingsSaveState } =
     useGatewaySettingsSync({ token, api });
+  const [relayReady, setRelayReady] = useState(false);
+
+  useEffect(() => {
+    const handleRelaySessionChanged = () => {
+      setRelayReady(false);
+      setSettingsOpen(false);
+      setOverlay("closed");
+    };
+    window.addEventListener(RELAY_SESSION_CHANGED_EVENT, handleRelaySessionChanged);
+    return () => window.removeEventListener(RELAY_SESSION_CHANGED_EVENT, handleRelaySessionChanged);
+  }, []);
   const effectiveTheme = resolveEffectiveTheme(settings.theme);
   const isAgentMode = settings.system.executionMode !== "text";
   const [activeWorkspaceProjectId, setActiveWorkspaceProjectId] = useState<string>(
@@ -3972,6 +3985,18 @@ export default function GatewayApp() {
             </div>
           </main>
         </div>
+      </LocaleContext.Provider>
+    );
+  }
+
+  if (!relayReady) {
+    return (
+      <LocaleContext.Provider value={localeContextValue}>
+        <RelayAccessGate
+          settings={settings}
+          setSettings={setSettings}
+          onReady={() => setRelayReady(true)}
+        />
       </LocaleContext.Provider>
     );
   }

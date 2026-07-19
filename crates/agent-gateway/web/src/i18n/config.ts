@@ -17,7 +17,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "app.errorBoundaryReload": "重新加载",
     "app.errorBoundaryTitle": "页面出现异常",
     "app.loading": "正在加载设置...",
-    "app.name": "LiveAgent",
+    "app.name": "ZeroBox",
     "window.close": "关闭",
 
     /* ── Tooltip ── */
@@ -82,7 +82,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.resizeSidebarSections": "调整工作空间与最近对话占比",
     "chat.emptyChatHistory": "暂无历史对话",
     "chat.clickNewConversation": "点击上方「新对话」开始聊天",
-    "chat.welcome": "欢迎使用 LiveAgent",
+    "chat.welcome": "欢迎使用 ZeroBox",
     "chat.greetingMorning": "早上好",
     "chat.greetingNoon": "中午好",
     "chat.greetingAfternoon": "下午好",
@@ -99,8 +99,8 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.suggestIdeateHint": "从想法到落地方案",
     "chat.suggestIdeatePrompt": "我有一个新功能的想法，帮我一起设计实现方案：",
     "chat.noModelSelected": "你还没有配置模型。",
-    "chat.configureModel": "点击下方按钮，配置供应商和模型。",
-    "chat.goToSettings": "配置供应商",
+    "chat.configureModel": "点击下方按钮，配置密钥和模型。",
+    "chat.goToSettings": "配置密钥",
     "chat.loading": "正在加载设置...",
     "chat.sendMessage": "发送消息",
     "chat.send": "发送",
@@ -802,7 +802,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     /* ── Settings Nav ── */
     "settings.navSystem": "系统设置",
     "settings.navSystemTools": "系统工具",
-    "settings.navProviders": "供应商配置",
+    "settings.navProviders": "密钥配置",
     "settings.navHooks": "Hooks",
     "settings.navAgents": "全局提示词",
     "settings.navSsh": "SSH",
@@ -1076,7 +1076,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.systemToolsTabBuiltin": "内置工具",
     "settings.systemToolsTabCustom": "自定义工具",
     "settings.systemToolsBuiltinDesc":
-      "LiveAgent 在 Agent 模式下自动注册的内置工具，此处仅供查阅。",
+      "ZeroBox 在 Agent 模式下自动注册的内置工具，此处仅供查阅。",
     "settings.systemToolsCustomDesc":
       "可按需启用的自定义系统工具；启用后会在 Agent 模式下注册，供模型在对话中调用。",
     "settings.systemToolsViewDetail": "查看详情",
@@ -1192,7 +1192,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.baseUrl": "Base URL",
     "settings.apiKey": "API Key",
     "settings.customHeaders": "自定义请求头",
-    "settings.providerDialogNavigation": "供应商配置导航",
+    "settings.providerDialogNavigation": "密钥配置导航",
     "settings.providerDialogGeneral": "普通配置",
     "settings.providerDialogNetwork": "网络配置",
     "settings.providerDialogHeaders": "请求头配置",
@@ -1415,7 +1415,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.cronReasoningLabel": "思考程度",
     "settings.cronWorkdirHint": "任务将在触发时的当前活跃工作空间目录下运行。",
     "settings.cronPromptModelRequired": "请选择 Auto Prompt 要使用的模型。",
-    "settings.cronPromptModelEmpty": "请先在供应商配置中至少启用一个模型。",
+    "settings.cronPromptModelEmpty": "请先在密钥配置中至少启用一个模型。",
     "settings.cronPromptRequired": "请输入要执行的 Prompt 内容。",
     "settings.cronPromptRunHint":
       "Auto Prompt 会在后台独立执行，不会进入主页面最近对话，只会将最终结论写入当前任务的日志列表。",
@@ -1486,7 +1486,7 @@ export const translations: Record<Locale, Record<string, string>> = {
 
     /* ── Settings Remote ── */
     "settings.remoteTitle": "远程访问",
-    "settings.remoteDesc": "通过云端 Gateway 远程控制本地 LiveAgent",
+    "settings.remoteDesc": "通过云端 Gateway 远程控制本地 ZeroBox",
     "settings.remoteConnected": "已连接",
     "settings.remoteDisconnected": "未连接",
     "settings.remoteEnable": "启用远程访问",
@@ -1522,7 +1522,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.remoteHeartbeatHint":
       "与 Gateway 连接的保活心跳间隔（生效范围 10-60 秒），用于维持连接和检测在线状态",
     "settings.remoteInfoBanner":
-      "启用后，本地 LiveAgent 将通过 WebSocket（v2 协议）连接云端 Gateway。你可以在浏览器中通过 WebUI 远程发送 Chat 消息、管理 Cron 任务和查看历史记录。所有工具执行仍在本地完成，远程端仅转发指令和结果。",
+      "启用后，本地 ZeroBox 将通过 WebSocket（v2 协议）连接云端 Gateway。你可以在浏览器中通过 WebUI 远程发送 Chat 消息、管理 Cron 任务和查看历史记录。所有工具执行仍在本地完成，远程端仅转发指令和结果。",
 
     /* ── MCP Hub ── */
     "mcpHub.title": "MCP Servers",
@@ -1659,7 +1659,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.skillsHubStoreTab": "技能商店",
     "settings.skillsHubImportTab": "本地导入",
     "settings.skillsImportDesc":
-      "扫描本机 Claude Code、Codex、CodeBuddy 的技能目录，勾选后导入到 LiveAgent。",
+      "扫描本机 Claude Code、Codex、CodeBuddy 的技能目录，勾选后导入到 ZeroBox。",
     "settings.skillsImportOverwriteHint": "同名技能将自动备份后覆盖。",
     "settings.skillsImportScanning": "正在扫描本地技能...",
     "settings.skillsImportRescan": "重新扫描",
@@ -1858,7 +1858,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "app.errorBoundaryReload": "Reload",
     "app.errorBoundaryTitle": "Something went wrong",
     "app.loading": "Loading settings...",
-    "app.name": "LiveAgent",
+    "app.name": "ZeroBox",
     "window.close": "Close",
 
     /* ── Tooltip ── */
@@ -1928,7 +1928,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.resizeSidebarSections": "Resize workspaces and recent conversations",
     "chat.emptyChatHistory": "No conversation history",
     "chat.clickNewConversation": "Click 'New Conversation' above to start chatting",
-    "chat.welcome": "Welcome to LiveAgent",
+    "chat.welcome": "Welcome to ZeroBox",
     "chat.greetingMorning": "Good morning",
     "chat.greetingNoon": "Good afternoon",
     "chat.greetingAfternoon": "Good afternoon",
@@ -2674,7 +2674,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     /* ── Settings Nav ── */
     "settings.navSystem": "System",
     "settings.navSystemTools": "System Tools",
-    "settings.navProviders": "Providers",
+    "settings.navProviders": "Key Configuration",
     "settings.navHooks": "Hooks",
     "settings.navAgents": "Prompt",
     "settings.navSsh": "SSH",
@@ -2961,7 +2961,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.systemToolsTabBuiltin": "Built-in",
     "settings.systemToolsTabCustom": "Custom",
     "settings.systemToolsBuiltinDesc":
-      "Built-in tools that LiveAgent registers automatically in Agent mode. Read-only list; click the eye icon for details.",
+      "Built-in tools that ZeroBox registers automatically in Agent mode. Read-only list; click the eye icon for details.",
     "settings.systemToolsCustomDesc":
       "Optional custom system tools. Enabled tools are registered in Agent mode for the model to call during conversations.",
     "settings.systemToolsViewDetail": "View details",
@@ -3079,7 +3079,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.baseUrl": "Base URL",
     "settings.apiKey": "API Key",
     "settings.customHeaders": "Custom request headers",
-    "settings.providerDialogNavigation": "Provider configuration",
+    "settings.providerDialogNavigation": "Key configuration",
     "settings.providerDialogGeneral": "Basic",
     "settings.providerDialogNetwork": "Network",
     "settings.providerDialogHeaders": "Headers",
@@ -3313,7 +3313,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.cronReasoningLabel": "Thinking",
     "settings.cronWorkdirHint": "The task runs in whichever workspace is active when it fires.",
     "settings.cronPromptModelRequired": "Select the model for this Auto Prompt task.",
-    "settings.cronPromptModelEmpty": "Enable at least one model in provider settings first.",
+    "settings.cronPromptModelEmpty": "Enable at least one model in key configuration first.",
     "settings.cronPromptRequired": "Enter the prompt content to execute.",
     "settings.cronPromptRunHint":
       "Auto Prompt runs in the background, does not appear in recent conversations, and only writes the final conclusion to this task's log list.",
@@ -3387,7 +3387,7 @@ export const translations: Record<Locale, Record<string, string>> = {
 
     /* ── Settings Remote ── */
     "settings.remoteTitle": "Remote Access",
-    "settings.remoteDesc": "Control your local LiveAgent remotely via cloud Gateway",
+    "settings.remoteDesc": "Control your local ZeroBox remotely via cloud Gateway",
     "settings.remoteConnected": "Connected",
     "settings.remoteDisconnected": "Disconnected",
     "settings.remoteEnable": "Enable remote access",
@@ -3425,7 +3425,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.remoteHeartbeatHint":
       "Keepalive heartbeat interval for the Gateway connection (effective range 10-60 seconds), used to maintain the connection and detect online status",
     "settings.remoteInfoBanner":
-      "When enabled, the local LiveAgent connects to the cloud Gateway over WebSocket (protocol v2). You can remotely send Chat messages, manage Cron tasks, and view history through the WebUI in your browser. All tool execution remains local — the remote end only relays commands and results.",
+      "When enabled, the local ZeroBox connects to the cloud Gateway over WebSocket (protocol v2). You can remotely send Chat messages, manage Cron tasks, and view history through the WebUI in your browser. All tool execution remains local — the remote end only relays commands and results.",
 
     /* ── MCP Hub ── */
     "mcpHub.title": "MCP Servers",
@@ -3564,7 +3564,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.skillsHubStoreTab": "Skills Store",
     "settings.skillsHubImportTab": "Local Import",
     "settings.skillsImportDesc":
-      "Scan local Claude Code, Codex, and CodeBuddy skill directories, then pick skills to import into LiveAgent.",
+      "Scan local Claude Code, Codex, and CodeBuddy skill directories, then pick skills to import into ZeroBox.",
     "settings.skillsImportOverwriteHint":
       "Skills with the same name are backed up, then overwritten.",
     "settings.skillsImportScanning": "Scanning local skills...",
