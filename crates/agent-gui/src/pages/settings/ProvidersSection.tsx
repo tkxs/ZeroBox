@@ -260,10 +260,7 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
       setFetchingModels(true);
       setFetchError(null);
       try {
-        const list = await fetchModelsFromApi(providerType, url, key, {
-          useSystemProxy,
-          customHeaders,
-        });
+        const list = await fetchModelsFromApi(providerType, url, key, { useSystemProxy });
         setModels((prev) => mergeFetchedModels(list, prev));
       } catch (err) {
         setFetchError(err instanceof Error ? err.message : String(err));
@@ -271,13 +268,13 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
         setFetchingModels(false);
       }
     },
-    [customHeaders, providerType, useSystemProxy],
+    [providerType, useSystemProxy],
   );
 
   useEffect(() => {
     const trimUrl = baseUrl.trim();
     const trimKey = apiKeyForRequest;
-    const key = buildProviderModelsFetchKey(trimUrl, trimKey, useSystemProxy, customHeaders);
+    const key = buildProviderModelsFetchKey(trimUrl, trimKey, useSystemProxy);
     if (!trimUrl || !trimKey) return;
     if (key === prevFetchKey.current) return;
 
@@ -290,7 +287,7 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [apiKeyForRequest, baseUrl, customHeaders, doFetch, useSystemProxy]);
+  }, [apiKeyForRequest, baseUrl, doFetch, useSystemProxy]);
 
   function handleRefresh() {
     const trimUrl = baseUrl.trim();

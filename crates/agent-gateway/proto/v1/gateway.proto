@@ -1107,7 +1107,6 @@ message ProviderModelsRequest {
   string base_url = 2;
   string api_key = 3;
   bool use_system_proxy = 4;
-  string custom_headers_json = 5;
 }
 
 message ProviderModelsResponse {

@@ -355,19 +355,10 @@ pub async fn handle_provider_list() -> Result<proto::ProviderListResponse, Strin
 pub async fn handle_provider_models(
     request: proto::ProviderModelsRequest,
 ) -> Result<proto::ProviderModelsResponse, String> {
-    let custom_headers = if request.custom_headers_json.trim().is_empty() {
-        Vec::new()
-    } else {
-        serde_json::from_str::<Vec<crate::services::provider_models::ProviderCustomHeader>>(
-            request.custom_headers_json.trim(),
-        )
-        .map_err(|_| "invalid provider custom headers".to_string())?
-    };
     let models_json = crate::services::provider_models::fetch_provider_models(
         request.provider_type.trim(),
         request.base_url.trim(),
         request.api_key.trim(),
-        &custom_headers,
         request.use_system_proxy,
     )
     .await?;

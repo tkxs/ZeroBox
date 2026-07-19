@@ -1,8 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { mergeCustomHeaders } from "../../lib/providers/customHeaders";
 import { prepareProxyRequest } from "../../lib/providers/proxy";
 import {
-  type CustomProvider,
   createProviderModelConfig,
   normalizeProviderModelConfigs,
   type ProviderId,
@@ -89,57 +87,40 @@ export function buildProviderModelsUrl(
   return baseUrl.endsWith("/v1") ? `${baseUrl}/models` : `${baseUrl}/v1/models`;
 }
 
-function buildDefaultModelsHeaders(
-  type: ProviderId,
-  apiKey: string,
-  customHeaders?: CustomProvider["customHeaders"],
-): Record<string, string> {
+function buildDefaultModelsHeaders(type: ProviderId, apiKey: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${apiKey}`,
   };
   if (type === "gemini") {
     headers["x-goog-api-key"] = apiKey;
-    return mergeCustomHeaders(headers, customHeaders);
+    return headers;
   }
   headers["x-api-key"] = apiKey;
   if (type === "claude_code") {
     headers["anthropic-version"] = ANTHROPIC_API_VERSION;
   }
-  return mergeCustomHeaders(headers, customHeaders);
+  return headers;
 }
 
-function buildOfficialModelsHeaders(
-  type: ProviderId,
-  apiKey: string,
-  customHeaders?: CustomProvider["customHeaders"],
-): Record<string, string> {
+function buildOfficialModelsHeaders(type: ProviderId, apiKey: string): Record<string, string> {
   if (type === "gemini") {
-    return mergeCustomHeaders(
-      {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      customHeaders,
-    );
+    return {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
+    };
   }
   if (type === "claude_code") {
-    return mergeCustomHeaders(
-      {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": ANTHROPIC_API_VERSION,
-      },
-      customHeaders,
-    );
-  }
-  return mergeCustomHeaders(
-    {
+    return {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    customHeaders,
-  );
+      "x-api-key": apiKey,
+      "anthropic-version": ANTHROPIC_API_VERSION,
+    };
+  }
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
 }
 
 function providerModelsAttemptSignature(
@@ -156,11 +137,10 @@ export function buildProviderModelsAttempts(
   type: ProviderId,
   baseUrl: string,
   apiKey: string,
-  customHeaders?: CustomProvider["customHeaders"],
 ): ProviderModelsAttempt[] {
   const candidates: ProviderModelsAttempt[] = [
-    { kind: "default", headers: buildDefaultModelsHeaders(type, apiKey, customHeaders) },
-    { kind: "official", headers: buildOfficialModelsHeaders(type, apiKey, customHeaders) },
+    { kind: "default", headers: buildDefaultModelsHeaders(type, apiKey) },
+    { kind: "official", headers: buildOfficialModelsHeaders(type, apiKey) },
   ];
 
   const attempts: ProviderModelsAttempt[] = [];
@@ -220,7 +200,6 @@ async function fetchModelsThroughGateway(
   baseUrl: string,
   apiKey: string,
   useSystemProxy: boolean,
-  customHeaders?: CustomProvider["customHeaders"],
 ): Promise<ProviderModelConfig[]> {
   const token =
     typeof window !== "undefined"
@@ -235,7 +214,6 @@ async function fetchModelsThroughGateway(
     base_url: baseUrl,
     api_key: apiKey,
     use_system_proxy: useSystemProxy,
-    custom_headers: customHeaders ?? [],
   });
 
   const items = extractModelListItems(data);
@@ -355,24 +333,15 @@ export function buildProviderModelsFetchKey(
   baseUrl: string,
   apiKey: string,
   useSystemProxy: boolean,
-  customHeaders?: CustomProvider["customHeaders"],
 ): string {
-  return [
-    baseUrl.trim(),
-    apiKey.trim(),
-    useSystemProxy ? "proxy" : "direct",
-    JSON.stringify(customHeaders ?? []),
-  ].join("||");
+  return `${baseUrl.trim()}||${apiKey.trim()}||${useSystemProxy ? "proxy" : "direct"}`;
 }
 
 export async function fetchModelsFromApi(
   type: ProviderId,
   baseUrl: string,
   apiKey: string,
-  options?: {
-    useSystemProxy?: boolean;
-    customHeaders?: CustomProvider["customHeaders"];
-  },
+  options?: { useSystemProxy?: boolean },
 ): Promise<ProviderModelConfig[]> {
   const normalizedUrl = normalizeModelBaseUrl(type, baseUrl);
   const normalizedApiKey = apiKey.trim();
@@ -382,16 +351,10 @@ export async function fetchModelsFromApi(
       normalizedUrl,
       normalizedApiKey,
       options?.useSystemProxy === true,
-      options?.customHeaders,
     );
   }
 
-  const attempts = buildProviderModelsAttempts(
-    type,
-    normalizedUrl,
-    normalizedApiKey,
-    options?.customHeaders,
-  );
+  const attempts = buildProviderModelsAttempts(type, normalizedUrl, normalizedApiKey);
   const failures: ProviderModelsFailure[] = [];
   let emptyResult: ProviderModelConfig[] | null = null;
 

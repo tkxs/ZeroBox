@@ -10914,14 +10914,13 @@ func (x *ErrorResponse) GetMessage() string {
 }
 
 type ProviderModelsRequest struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	ProviderType      string                 `protobuf:"bytes,1,opt,name=provider_type,json=providerType,proto3" json:"provider_type,omitempty"`
-	BaseUrl           string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
-	ApiKey            string                 `protobuf:"bytes,3,opt,name=api_key,json=apiKey,proto3" json:"api_key,omitempty"`
-	UseSystemProxy    bool                   `protobuf:"varint,4,opt,name=use_system_proxy,json=useSystemProxy,proto3" json:"use_system_proxy,omitempty"`
-	CustomHeadersJson string                 `protobuf:"bytes,5,opt,name=custom_headers_json,json=customHeadersJson,proto3" json:"custom_headers_json,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ProviderType   string                 `protobuf:"bytes,1,opt,name=provider_type,json=providerType,proto3" json:"provider_type,omitempty"`
+	BaseUrl        string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
+	ApiKey         string                 `protobuf:"bytes,3,opt,name=api_key,json=apiKey,proto3" json:"api_key,omitempty"`
+	UseSystemProxy bool                   `protobuf:"varint,4,opt,name=use_system_proxy,json=useSystemProxy,proto3" json:"use_system_proxy,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ProviderModelsRequest) Reset() {
@@ -10980,13 +10979,6 @@ func (x *ProviderModelsRequest) GetUseSystemProxy() bool {
 		return x.UseSystemProxy
 	}
 	return false
-}
-
-func (x *ProviderModelsRequest) GetCustomHeadersJson() string {
-	if x != nil {
-		return x.CustomHeadersJson
-	}
-	return ""
 }
 
 type ProviderModelsResponse struct {
@@ -11922,13 +11914,12 @@ const file_proto_v1_gateway_proto_rawDesc = "" +
 	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"=\n" +
 	"\rErrorResponse\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xca\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x9a\x01\n" +
 	"\x15ProviderModelsRequest\x12#\n" +
 	"\rprovider_type\x18\x01 \x01(\tR\fproviderType\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x17\n" +
 	"\aapi_key\x18\x03 \x01(\tR\x06apiKey\x12(\n" +
-	"\x10use_system_proxy\x18\x04 \x01(\bR\x0euseSystemProxy\x12.\n" +
-	"\x13custom_headers_json\x18\x05 \x01(\tR\x11customHeadersJson\"9\n" +
+	"\x10use_system_proxy\x18\x04 \x01(\bR\x0euseSystemProxy\"9\n" +
 	"\x16ProviderModelsResponse\x12\x1f\n" +
 	"\vmodels_json\x18\x01 \x01(\tR\n" +
 	"modelsJson*\xc6\x04\n" +

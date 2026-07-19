@@ -228,21 +228,6 @@ test("encodeRequestFrame maps v1 request types onto GatewayEnvelope arms", () =>
   assert.equal(terminalFrame.payload.value.payload.value.action, "create");
   assert.equal(terminalFrame.payload.value.payload.value.cols, 120);
 
-  const customHeadersJson = JSON.stringify([
-    { key: "anthropic-beta", value: "context-1m-2025-08-07" },
-  ]);
-  const providerFrame = decodeClientFrame(
-    encodeRequestFrame("req-provider", "provider.models", {
-      type: "claude_code",
-      base_url: "https://api.anthropic.com",
-      api_key: "secret",
-      use_system_proxy: true,
-      custom_headers_json: customHeadersJson,
-    }),
-  );
-  assert.equal(providerFrame.payload.value.payload.case, "providerModels");
-  assert.equal(providerFrame.payload.value.payload.value.customHeadersJson, customHeadersJson);
-
   // chat.command 的 64 位字段在出站边界收窄为 bigint。
   const commandFrame = decodeClientFrame(
     encodeRequestFrame("req-3", "chat.command", {

@@ -307,10 +307,6 @@ export async function invoke<T>(command: string, args?: Record<string, unknown>)
         String(args?.base_url ?? ""),
         String(args?.api_key ?? ""),
         args?.use_system_proxy === true,
-        (Array.isArray(args?.custom_headers) ? args.custom_headers : []) as Array<{
-          key: string;
-          value: string;
-        }>,
       )) as T;
     case "settings_reset_ssh_known_host": {
       const host = String(args?.host ?? "").trim();

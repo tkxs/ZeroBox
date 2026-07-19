@@ -128,8 +128,8 @@ test("provider model fetch identity changes when system proxy routing changes", 
     true,
   );
 
-  assert.equal(direct, "https://relay.example.com/v1||test-key||direct||[]");
-  assert.equal(proxied, "https://relay.example.com/v1||test-key||proxy||[]");
+  assert.equal(direct, "https://relay.example.com/v1||test-key||direct");
+  assert.equal(proxied, "https://relay.example.com/v1||test-key||proxy");
   assert.notEqual(direct, proxied);
 });
 
@@ -289,7 +289,6 @@ test("gateway WebUI forwards the system proxy choice to desktop model fetching",
         type: "codex",
         base_url: "https://relay.example.com/v1",
         api_key: "test-key",
-        custom_headers: [],
         use_system_proxy: true,
       },
     ]);

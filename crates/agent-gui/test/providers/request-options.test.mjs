@@ -1220,19 +1220,3 @@ test("custom provider headers accept undefined and empty arrays", () => {
   assert.deepEqual(providers.mergeCustomHeaders(base, []), base);
 });
 
-test("provider model attempts include valid custom headers and keep auth headers", () => {
-  const attempts = providerUtils.buildProviderModelsAttempts(
-    "claude_code",
-    "https://api.anthropic.com/v1",
-    "real-key",
-    [
-      { key: "anthropic-beta", value: "feature" },
-      { key: "x-api-key", value: "attacker" },
-    ],
-  );
-  assert.equal(attempts.length, 2);
-  for (const attempt of attempts) {
-    assert.equal(attempt.headers["anthropic-beta"], "feature");
-    assert.equal(attempt.headers["x-api-key"], "real-key");
-  }
-});
