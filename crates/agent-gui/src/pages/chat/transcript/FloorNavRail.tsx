@@ -170,7 +170,6 @@ export function FloorNavRail(props: {
       style={{ bottom: Math.ceil(bottomReservePx) + 8 }}
     >
       {expanded ? (
-        // biome-ignore lint/a11y/noStaticElementInteractions: 悬停仅控制面板展开/收起，交互本体是内部按钮。
         <div
           className="floor-nav-panel pointer-events-auto flex max-h-[min(78%,560px)] w-60 flex-col overflow-hidden rounded-xl border border-border/50 bg-background/85 shadow-[0_12px_32px_-16px_rgba(15,23,42,0.28)] backdrop-blur-xl dark:border-white/[0.08] dark:bg-white/[0.06]"
           {...hoverHandlers}
@@ -189,7 +188,6 @@ export function FloorNavRail(props: {
           </div>
         </div>
       ) : (
-        // biome-ignore lint/a11y/noStaticElementInteractions: 悬停仅控制面板展开/收起，短横线按钮本身可聚焦、可回车跳转。
         <div
           className="pointer-events-auto flex max-h-full flex-col items-end gap-[7px] overflow-hidden py-2 pl-3 pr-0.5"
           {...hoverHandlers}
