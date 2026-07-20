@@ -843,7 +843,7 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
               includeUploadedFilesMetadata: true,
             }),
           );
-          const compactedContext = await compaction.compactDuringRun({
+          const { context: compactedContext } = await compaction.compactDuringRun({
             trigger: "post-tool",
             state: tempState,
             budgetContext: tempContext,
@@ -901,7 +901,7 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
       applyConversationState(tempState);
       clearPersistableAgentProgress();
 
-      const compactedContext = await compaction.compactDuringRun({
+      const compactionResult = await compaction.compactDuringRun({
         trigger: "mid-stream",
         state: tempState,
         budgetContext: withSubagentRuntimeContext(
@@ -915,16 +915,12 @@ export async function runAgentConversationTurn(params: RunAgentConversationTurnP
         includeUploadedFilesMetadata: true,
       });
 
-      if (compactedContext) {
-        pendingAgentContext = compactedContext;
-      } else {
-        // 压缩与 prune 均不可用：本轮禁用 mid-stream 保护，带原上下文续跑，
-        // 让真正的溢出错误由 provider 显式暴露，而不是让整轮失败。
+      if (!compactionResult.context) {
+        throw new Error("Mid-stream compaction did not provide a continuation context.");
+      }
+      pendingAgentContext = compactionResult.context;
+      if (compactionResult.shouldDisableProtection) {
         midStreamProtectionDisabled = true;
-        pendingAgentContext = buildPreparedContext(tempState, combinedTools, {
-          includeAbortedMessages: true,
-          includeUploadedFilesMetadata: true,
-        });
       }
     } finally {
       scope.release();

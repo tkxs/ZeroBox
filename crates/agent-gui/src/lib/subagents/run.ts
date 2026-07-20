@@ -615,7 +615,7 @@ export async function executeSubagentRun(
 
         // controller 内部消化非中止失败（含 prune 降级）；用户中止会原样抛出。
         compactionAppliedState = null;
-        const compactedContext = await compaction.compactDuringRun({
+        const { context: compactedContext } = await compaction.compactDuringRun({
           trigger: "post-tool",
           state: view,
         });

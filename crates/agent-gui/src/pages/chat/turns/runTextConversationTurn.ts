@@ -322,21 +322,19 @@ export async function runTextConversationTurn(params: RunTextConversationTurnPar
             );
           }
 
-          const compactedContext = await compaction.compactDuringRun({
+          const compactionResult = await compaction.compactDuringRun({
             trigger: "mid-stream",
             state: getNextConversationState(),
             includeAbortedMessages: true,
             includeUploadedFilesMetadata: true,
           });
 
-          if (compactedContext) {
-            pendingTextContext = compactedContext;
-          } else {
+          if (!compactionResult.context) {
+            throw new Error("Mid-stream compaction did not provide a continuation context.");
+          }
+          pendingTextContext = compactionResult.context;
+          if (compactionResult.shouldDisableProtection) {
             protectionCompactionDisabled = true;
-            pendingTextContext = buildPreparedContext(getNextConversationState(), undefined, {
-              includeAbortedMessages: true,
-              includeUploadedFilesMetadata: true,
-            });
           }
           textRound += 1;
           continue textResponseLoop;
