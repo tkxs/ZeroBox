@@ -57,7 +57,6 @@ import {
   CODEX_REQUEST_FORMAT_LABELS,
   type CodexRequestFormat,
   type CustomProvider,
-  type ModelCapability,
   type ProviderId,
   type ProviderModelConfig,
   updateCustomProviders,
@@ -96,7 +95,6 @@ type ModelEditDraft = {
   model: ProviderModelConfig;
   contextWindow: string;
   maxOutputToken: string;
-  capabilities: ModelCapability[];
   costInput: string;
   costOutput: string;
   costCacheRead: string;
@@ -120,7 +118,6 @@ type CcsProvidersResponse = {
 };
 
 const PROVIDER_TABS: ProviderId[] = ["claude_code", "codex", "gemini"];
-const MODEL_CAPABILITIES: ModelCapability[] = ["reasoning", "vision", "tools"];
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   claude_code: "Anthropic",
   codex: "OpenAI",
@@ -362,23 +359,12 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
             model: target,
             contextWindow: String(target.contextWindow),
             maxOutputToken: String(target.maxOutputToken),
-            capabilities: [...(target.capabilities ?? [])],
             costInput: formatCostRate(target.cost?.input),
             costOutput: formatCostRate(target.cost?.output),
             costCacheRead: formatCostRate(target.cost?.cacheRead),
             costCacheWrite: formatCostRate(target.cost?.cacheWrite),
           },
     );
-  }
-
-  function toggleModelCapability(capability: ModelCapability) {
-    setEditingModel((prev) => {
-      if (!prev) return prev;
-      const capabilities = prev.capabilities.includes(capability)
-        ? prev.capabilities.filter((item) => item !== capability)
-        : [...prev.capabilities, capability];
-      return { ...prev, capabilities };
-    });
   }
 
   const editingModelContextWindow = editingModel
@@ -430,7 +416,6 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
       ...editingModel.model,
       contextWindow: editingModelContextWindow,
       maxOutputToken: editingModelMaxOutputToken,
-      capabilities: editingModel.capabilities,
       cost: hasCost ? cost : undefined,
     };
     setModels((prev) => prev.map((item) => (item.id === nextModel.id ? nextModel : item)));
@@ -850,18 +835,6 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
                               <div className="min-w-0 flex-1 max-[720px]:basis-[calc(100%-3rem)]">
                                 <div className="flex min-w-0 items-center gap-2">
                                   <span className="truncate text-sm font-medium">{model.id}</span>
-                                  {model.capabilities?.length ? (
-                                    <span className="flex shrink-0 items-center gap-1">
-                                      {model.capabilities.map((capability) => (
-                                        <span
-                                          key={capability}
-                                          className="rounded border bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                                        >
-                                          {t("settings.capability." + capability)}
-                                        </span>
-                                      ))}
-                                    </span>
-                                  ) : null}
                                 </div>
                               </div>
                               <div className="shrink-0 text-[11px] tabular-nums text-muted-foreground max-[720px]:order-3 max-[720px]:ml-12 max-[720px]:basis-full">
@@ -946,29 +919,6 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
                                       }
                                     />
                                   </div>
-                                </div>
-
-                                <div className="mt-3 text-xs font-medium text-muted-foreground">
-                                  {t("settings.capabilityTypes")}
-                                </div>
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  {MODEL_CAPABILITIES.map((capability) => {
-                                    const selected = editingModel.capabilities.includes(capability);
-                                    return (
-                                      <button
-                                        key={capability}
-                                        type="button"
-                                        className={cn(
-                                          "min-h-9 rounded-full border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary",
-                                          selected && "border-primary bg-primary/10 text-primary",
-                                        )}
-                                        aria-pressed={selected}
-                                        onClick={() => toggleModelCapability(capability)}
-                                      >
-                                        {t("settings.capability." + capability)}
-                                      </button>
-                                    );
-                                  })}
                                 </div>
 
                                 <div className="mt-3 text-xs font-medium text-muted-foreground">

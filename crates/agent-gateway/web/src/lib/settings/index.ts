@@ -176,8 +176,6 @@ export type SelectedModel = {
   model: string;
 };
 
-export type ModelCapability = "reasoning" | "vision" | "tools";
-
 /** 单价均为 USD / 百万 token，与 pi-ai 模型目录的 cost 字段同单位。 */
 export type ProviderModelCost = {
   input: number;
@@ -190,7 +188,6 @@ export type ProviderModelConfig = {
   id: string;
   contextWindow: number;
   maxOutputToken: number;
-  capabilities?: ModelCapability[];
   /** 用户自填单价：目录外模型（中转/改名）没有官方定价时用于成本展示。 */
   cost?: ProviderModelCost;
 };
@@ -1224,20 +1221,6 @@ export function createProviderModelConfig(
   };
 }
 
-function normalizeModelCapabilities(input: unknown): ModelCapability[] | undefined {
-  if (!Array.isArray(input)) return undefined;
-
-  const out: ModelCapability[] = [];
-  const seen = new Set<ModelCapability>();
-  for (const value of input) {
-    if (value !== "reasoning" && value !== "vision" && value !== "tools") continue;
-    if (seen.has(value)) continue;
-    seen.add(value);
-    out.push(value);
-  }
-  return out;
-}
-
 function normalizeNonNegativeNumber(input: unknown): number {
   const numeric =
     typeof input === "number" ? input : typeof input === "string" ? Number(input) : NaN;
@@ -1260,7 +1243,6 @@ function normalizeProviderModelCost(input: unknown): ProviderModelCost | undefin
   return cost;
 }
 
-// Capabilities are persisted for display only; runtime behavior will be connected in a later iteration.
 export function normalizeProviderModelConfig(
   input: unknown,
   providerId: ProviderId,
@@ -1280,7 +1262,6 @@ export function normalizeProviderModelConfig(
   if (!id) return null;
 
   const defaults = getProviderModelDefaults(providerId, id);
-  const capabilities = normalizeModelCapabilities(obj.capabilities);
   const cost = normalizeProviderModelCost(obj.cost);
   return {
     id,
@@ -1289,7 +1270,6 @@ export function normalizeProviderModelConfig(
       obj.maxOutputToken ?? obj.maxTokens,
       defaults.maxOutputToken,
     ),
-    ...(capabilities !== undefined ? { capabilities } : {}),
     ...(cost !== undefined ? { cost } : {}),
   };
 }
