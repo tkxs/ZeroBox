@@ -13,10 +13,13 @@ use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
 #[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::Emitter;
 use tauri::Manager;
+#[cfg(desktop)]
+use tauri::Emitter;
+#[cfg(desktop)]
 use tauri::WindowEvent;
 
+#[cfg(desktop)]
 const MAIN_WINDOW_LABEL: &str = "main";
 #[cfg(desktop)]
 const TRAY_SHOW_ID: &str = "tray-show";
@@ -26,8 +29,10 @@ const TRAY_QUIT_ID: &str = "tray-quit";
 const TRAY_DOUBLE_CLICK_INTERVAL_MS: u64 = 500;
 #[cfg(desktop)]
 const TRAY_SHOW_MENU_ON_LEFT_CLICK: bool = !cfg!(target_os = "windows");
+#[cfg(desktop)]
 const TERMINAL_EXIT_REQUESTED_EVENT: &str = "terminal:exit-requested";
 
+#[cfg(desktop)]
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TerminalExitRequestedEvent {
@@ -270,6 +275,7 @@ macro_rules! app_invoke_handler {
     };
 }
 
+#[cfg(desktop)]
 fn show_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         window.show()?;
@@ -280,6 +286,7 @@ fn show_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(desktop)]
 fn request_app_exit(
     app: &tauri::AppHandle,
     allow_exit: &AtomicBool,
@@ -448,6 +455,7 @@ pub fn run() {
         .manage(Arc::clone(&automation_scheduler))
         .manage(Arc::new(commands::hook::HookScopeRegistry::default()))
         .setup({
+            #[cfg(desktop)]
             let allow_exit = Arc::clone(&allow_exit);
             let terminal_registry = Arc::clone(&terminal_registry);
             let sftp_registry = Arc::clone(&sftp_registry);
@@ -509,20 +517,26 @@ pub fn run() {
             }
         })
         .on_window_event({
+            #[cfg(desktop)]
             let allow_exit = Arc::clone(&allow_exit);
+            #[cfg(desktop)]
             let close_window_behavior = Arc::clone(&close_window_behavior);
+            #[cfg(desktop)]
             let terminal_registry = Arc::clone(&terminal_registry);
-            move |window, event| {
-                if window.label() != MAIN_WINDOW_LABEL {
-                    return;
-                }
+            move |_window, _event| {
+                #[cfg(desktop)]
+                {
+                    if _window.label() != MAIN_WINDOW_LABEL {
+                        return;
+                    }
 
-                if let WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    if commands::app::is_close_window_exit(&close_window_behavior) {
-                        request_app_exit(window.app_handle(), &allow_exit, &terminal_registry);
-                    } else if let Err(error) = window.hide() {
-                        eprintln!("failed to hide ZeroBox window on close: {error}");
+                    if let WindowEvent::CloseRequested { api, .. } = _event {
+                        api.prevent_close();
+                        if commands::app::is_close_window_exit(&close_window_behavior) {
+                            request_app_exit(_window.app_handle(), &allow_exit, &terminal_registry);
+                        } else if let Err(error) = _window.hide() {
+                            eprintln!("failed to hide ZeroBox window on close: {error}");
+                        }
                     }
                 }
             }
@@ -547,6 +561,7 @@ pub fn run() {
                 eprintln!("failed to show ZeroBox window from dock reopen: {error}");
             }
         }
+        #[cfg(desktop)]
         tauri::RunEvent::ExitRequested { api, .. } => {
             if !allow_exit.load(Ordering::SeqCst) {
                 let running_count = terminal_registry.running_session_count();
