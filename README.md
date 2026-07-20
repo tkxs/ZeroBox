@@ -166,6 +166,16 @@ Choose by distribution from [Releases](https://github.com/tkxs/ZeroBox/releases/
 | DEB | Debian / Ubuntu family | `sudo dpkg -i ZeroBox-<version>-Linux-x86_64.deb` |
 | RPM | Fedora / openSUSE family | `sudo rpm -i ZeroBox-<version>-Linux-x86_64.rpm` |
 
+### Android (arm64)
+
+Download `ZeroBox-<version>-Android-arm64.apk` from [Releases](https://github.com/tkxs/ZeroBox/releases/latest) and allow installation from your browser or file manager when Android prompts for permission.
+
+ZeroBox remains bound to USA-Zero at `127.0.0.1:8080`. To test the APK on an emulator or a USB-connected Android device while USA-Zero runs on this computer, enable port reverse forwarding before opening ZeroBox:
+
+```bash
+adb reverse tcp:8080 tcp:8080
+```
+
 ### Need Remote Access? Deploy the Gateway
 
 The desktop app requires the local USA-Zero backend on port `8080`. Deploy the Gateway in addition only if you want to **control your local agent from a browser**.

@@ -3,19 +3,28 @@ mod runtime;
 mod services;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(desktop)]
+use std::sync::Mutex;
+#[cfg(desktop)]
 use std::time::{Duration, Instant};
 
+#[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem};
+#[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::WindowEvent;
 
 const MAIN_WINDOW_LABEL: &str = "main";
+#[cfg(desktop)]
 const TRAY_SHOW_ID: &str = "tray-show";
+#[cfg(desktop)]
 const TRAY_QUIT_ID: &str = "tray-quit";
+#[cfg(desktop)]
 const TRAY_DOUBLE_CLICK_INTERVAL_MS: u64 = 500;
+#[cfg(desktop)]
 const TRAY_SHOW_MENU_ON_LEFT_CLICK: bool = !cfg!(target_os = "windows");
 const TERMINAL_EXIT_REQUESTED_EVENT: &str = "terminal:exit-requested";
 
@@ -294,6 +303,7 @@ fn request_app_exit(
     app.exit(0);
 }
 
+#[cfg(desktop)]
 fn record_tray_left_click(last_click_at: &Mutex<Option<Instant>>) -> bool {
     let now = Instant::now();
     let mut last_click_at = last_click_at.lock().unwrap();
@@ -306,6 +316,7 @@ fn record_tray_left_click(last_click_at: &Mutex<Option<Instant>>) -> bool {
     is_double_click
 }
 
+#[cfg(desktop)]
 fn configure_system_tray(
     app: &tauri::App,
     allow_exit: Arc<AtomicBool>,
@@ -443,6 +454,7 @@ pub fn run() {
             let managed_process_registry = Arc::clone(&managed_process_registry);
             move |app| {
                 commands::history_db::initialize_history_db()?;
+                #[cfg(desktop)]
                 configure_system_tray(
                     app,
                     Arc::clone(&allow_exit),
