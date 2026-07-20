@@ -2376,7 +2376,10 @@ fn read_url_image_source(source: &str) -> Result<ReadResponse, FsError> {
         }
     }
 
-    let client = reqwest::blocking::Client::builder()
+    // Image.url 供模型读取远程图片：与聊天图片反代同语义，应用代理启用时
+    // 经代理出网，代理配置异常时 fail fast，不静默直连。
+    let client = crate::services::system_proxy::blocking_client_builder()
+        .map_err(|e| FsError::Other(format!("Failed to create the HTTP client: {e}")))?
         .timeout(Duration::from_secs(IMAGE_SOURCE_HTTP_TIMEOUT_SECS))
         .build()
         .map_err(|e| FsError::Other(format!("Failed to create the HTTP client: {e}")))?;

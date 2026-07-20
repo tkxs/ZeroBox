@@ -1084,7 +1084,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.systemProxy": "应用代理",
     "settings.systemProxyEnable": "启用应用代理",
     "settings.systemProxyDesc":
-      "生效范围：本地命令环境变量（Bash / 后台任务 / 自动化脚本）、勾选“使用应用代理”的供应商请求、更新检查与技能下载。",
+      "生效范围：本地命令环境变量（Bash / 后台任务 / 自动化脚本）、勾选“使用应用代理”的供应商请求、Hook / Cron HTTP 任务、聊天图片加载、更新检查与技能下载。",
     "settings.systemProxyInvalid":
       "代理已启用，请填写有效的代理地址和端口；配置有效前相关请求将直接报错。",
     "settings.systemProxyEnableHint": "请先填写有效的代理地址和端口后再启用代理。",
@@ -3062,7 +3062,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.systemProxy": "App Proxy",
     "settings.systemProxyEnable": "Enable app proxy",
     "settings.systemProxyDesc":
-      "Applies to: local command environment (Bash / background tasks / automation scripts), providers with “Use app proxy” checked, update checks and skill downloads.",
+      "Applies to: local command environment (Bash / background tasks / automation scripts), providers with “Use app proxy” checked, Hook / Cron HTTP tasks, chat image loading, update checks and skill downloads.",
     "settings.systemProxyInvalid":
       "The proxy is enabled. Enter a valid host and port; affected requests fail until the configuration is valid.",
     "settings.systemProxyEnableHint":
