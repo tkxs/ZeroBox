@@ -13,6 +13,7 @@ function readRepoFile(relativePath) {
 
 test("Android workflow builds a signed arm64 APK and can publish it", () => {
   const workflow = readRepoFile(".github/workflows/android-release.yml");
+  const cargoToml = readRepoFile("crates/agent-gui/src-tauri/Cargo.toml");
 
   assert.match(workflow, /java-version: "17"/);
   assert.match(workflow, /targets: aarch64-linux-android/);
@@ -21,6 +22,10 @@ test("Android workflow builds a signed arm64 APK and can publish it", () => {
   assert.match(workflow, /apksigner" sign/);
   assert.match(workflow, /apksigner" verify --verbose --print-certs/);
   assert.match(workflow, /gh release upload/);
+  assert.match(
+    cargoToml,
+    /target\.'cfg\(not\(any\(target_os = "android", target_os = "ios"\)\)\)'\.dependencies/,
+  );
 });
 
 test("Android install instructions preserve the fixed USA-Zero endpoint", () => {

@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+#[cfg(desktop)]
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -632,6 +633,7 @@ fn infer_native_attachment_mime(path: &Path, kind: Option<&str>) -> String {
     }
 }
 
+#[cfg(desktop)]
 fn system_pick_readable_files_sync(
     workdir: String,
     max_files: Option<usize>,
@@ -1083,6 +1085,7 @@ pub(crate) fn system_create_project_folder_sync(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+#[cfg(desktop)]
 pub async fn system_pick_folder(initial_workdir: Option<String>) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut dialog = FileDialog::new();
@@ -1099,6 +1102,13 @@ pub async fn system_pick_folder(initial_workdir: Option<String>) -> Result<Optio
 }
 
 #[tauri::command(rename_all = "snake_case")]
+#[cfg(mobile)]
+pub async fn system_pick_folder(_initial_workdir: Option<String>) -> Result<Option<String>, String> {
+    Err("Android 暂不支持原生文件夹选择器".to_string())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+#[cfg(desktop)]
 pub async fn system_pick_file(
     initial_workdir: Option<String>,
     filter_name: Option<String>,
@@ -1123,6 +1133,16 @@ pub async fn system_pick_file(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+#[cfg(mobile)]
+pub async fn system_pick_file(
+    _initial_workdir: Option<String>,
+    _filter_name: Option<String>,
+    _extensions: Option<Vec<String>>,
+) -> Result<Option<String>, String> {
+    Err("Android 暂不支持原生文件选择器".to_string())
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn system_create_project_folder(
     parent: String,
     name: String,
@@ -1133,6 +1153,7 @@ pub async fn system_create_project_folder(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+#[cfg(desktop)]
 pub async fn system_pick_readable_files(
     workdir: String,
     max_files: Option<usize>,
@@ -1142,6 +1163,15 @@ pub async fn system_pick_readable_files(
     })
     .await
     .map_err(|e| format!("system_pick_readable_files join failed: {e}"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+#[cfg(mobile)]
+pub async fn system_pick_readable_files(
+    _workdir: String,
+    _max_files: Option<usize>,
+) -> Result<SystemPickReadableFilesResponse, String> {
+    Err("Android 暂不支持原生文件选择器".to_string())
 }
 
 #[tauri::command(rename_all = "snake_case")]
