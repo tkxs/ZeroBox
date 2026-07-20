@@ -25,6 +25,9 @@ test("Android workflow builds a signed arm64 APK and can publish it", () => {
   assert.match(workflow, /import xml\.etree\.ElementTree as ET/);
   assert.match(workflow, /application\.set\(f"\{\{\{android_namespace\}\}\}usesCleartextTraffic", "true"\)/);
   assert.doesNotMatch(workflow, /sed -i .*usesCleartextTraffic/);
+  assert.match(workflow, /networkTimeout=120000/);
+  assert.match(workflow, /\.\/gradlew --version --no-daemon/);
+  assert.match(workflow, /for attempt in 1 2 3/);
   assert.match(
     cargoToml,
     /target\.'cfg\(not\(any\(target_os = "android", target_os = "ios"\)\)\)'\.dependencies/,

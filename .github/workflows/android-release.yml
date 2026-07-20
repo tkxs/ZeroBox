@@ -127,6 +127,28 @@ jobs:
           PY
           grep -q 'android:usesCleartextTraffic="true"' "$manifest"
 
+      - name: Warm Gradle distribution
+        shell: bash
+        working-directory: crates/agent-gui/src-tauri/gen/android
+        run: |
+          set -euo pipefail
+          wrapper_properties="gradle/wrapper/gradle-wrapper.properties"
+          test -f "$wrapper_properties"
+          if grep -q '^networkTimeout=' "$wrapper_properties"; then
+            sed -i 's/^networkTimeout=.*/networkTimeout=120000/' "$wrapper_properties"
+          else
+            printf '\nnetworkTimeout=120000\n' >> "$wrapper_properties"
+          fi
+          for attempt in 1 2 3; do
+            if ./gradlew --version --no-daemon; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
+
       - name: Build Android release APK
         working-directory: crates/agent-gui
         run: pnpm tauri android build --apk --target aarch64 --ci --config "$LIVEAGENT_TAURI_VERSION_CONFIG"
