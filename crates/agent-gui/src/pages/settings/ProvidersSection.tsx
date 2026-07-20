@@ -1526,11 +1526,10 @@ function CcsImportModal(props: {
   initialType: ProviderId;
   items: CcsProviderImportItem[];
   existingProviders: CustomProvider[];
-  importing: boolean;
   onImport: (items: CcsProviderImportItem[]) => Promise<string>;
   onClose: () => void;
 }) {
-  const { initialType, items, existingProviders, importing, onImport, onClose } = props;
+  const { initialType, items, existingProviders, onImport, onClose } = props;
   const { t } = useLocale();
 
   const existingIdentity = useMemo(
@@ -1564,6 +1563,9 @@ function CcsImportModal(props: {
 
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [result, setResult] = useState<string | null>(null);
+  // Import resolves as soon as the configs are written locally; this only
+  // guards the brief await against double-submit.
+  const [submitting, setSubmitting] = useState(false);
   const [activeType, setActiveType] = useState<ProviderId>(initialType);
 
   const selectableKeys = rows.filter((row) => row.selectable).map((row) => row.key);
@@ -1602,14 +1604,17 @@ function CcsImportModal(props: {
     const chosen = rows
       .filter((row) => row.selectable && selected.has(row.key))
       .map((row) => row.item);
-    if (!chosen.length || importing) return;
+    if (!chosen.length || submitting) return;
     setResult(null);
+    setSubmitting(true);
     try {
       const summary = await onImport(chosen);
       setResult(summary);
       setSelected(new Set());
     } catch (err) {
       setResult(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -1617,7 +1622,7 @@ function CcsImportModal(props: {
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-        onClick={importing ? undefined : onClose}
+        onClick={submitting ? undefined : onClose}
       />
 
       <div className="relative z-10 flex h-[min(35rem,85vh)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border bg-background shadow-2xl">
@@ -1633,7 +1638,7 @@ function CcsImportModal(props: {
             type="button"
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
             onClick={onClose}
-            disabled={importing}
+            disabled={submitting}
             title={t("settings.cancel")}
             aria-label={t("settings.cancel")}
           >
@@ -1698,7 +1703,7 @@ function CcsImportModal(props: {
                     size="sm"
                     className="h-7 px-2 text-xs"
                     onClick={toggleAllActive}
-                    disabled={!activeSelectableKeys.length || importing}
+                    disabled={!activeSelectableKeys.length || submitting}
                   >
                     {activeAllSelected ? t("settings.deselectAll") : t("settings.selectAll")}
                   </Button>
@@ -1718,7 +1723,7 @@ function CcsImportModal(props: {
                           type="checkbox"
                           className="h-4 w-4 shrink-0 accent-primary"
                           checked={selectable && selected.has(key)}
-                          disabled={!selectable || importing}
+                          disabled={!selectable || submitting}
                           onChange={() => toggleRow(key)}
                         />
                         <div className="min-w-0 flex-1 max-[720px]:basis-[calc(100%-3rem)]">
@@ -1769,7 +1774,7 @@ function CcsImportModal(props: {
             <Button
               variant="outline"
               onClick={onClose}
-              disabled={importing}
+              disabled={submitting}
               className="max-[720px]:h-10 max-[720px]:flex-1"
             >
               {result ? "关闭" : t("settings.cancel")}
@@ -1777,9 +1782,9 @@ function CcsImportModal(props: {
             <Button
               className="gap-1.5"
               onClick={() => void handleImport()}
-              disabled={importing || selectedCount === 0}
+              disabled={submitting || selectedCount === 0}
             >
-              {importing ? (
+              {submitting ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   正在导入…
@@ -1805,7 +1810,6 @@ function ProviderList(props: {
   onDelete: (id: string) => void;
   ccsProviders: CcsProvidersResponse | null;
   ccsLoading: boolean;
-  ccsImporting: boolean;
   ccsMessage: string | null;
   cherryProviders: CherryProvidersResponse | null;
   cherryLoading: boolean;
@@ -1826,7 +1830,6 @@ function ProviderList(props: {
     onDelete,
     ccsProviders,
     ccsLoading,
-    ccsImporting,
     ccsMessage,
     cherryProviders,
     cherryLoading,
@@ -1858,17 +1861,15 @@ function ProviderList(props: {
   }
 
   const scanned = ccsProviders !== null;
-  const ccsSubtitle = ccsImporting
-    ? "正在导入供应商、获取并激活模型…"
-    : ccsLoading
-      ? "正在扫描本地配置…"
-      : ccsAll.length
-        ? `发现 ${ccsBreakdown
-            .map((entry) => `${getProviderLabel(entry.type)} ${entry.count}`)
-            .join(" · ")}`
-        : scanned
-          ? ccsMessage || "未发现可导入的供应商"
-          : "点击扫描本地配置";
+  const ccsSubtitle = ccsLoading
+    ? "正在扫描本地配置…"
+    : ccsAll.length
+      ? `发现 ${ccsBreakdown
+          .map((entry) => `${getProviderLabel(entry.type)} ${entry.count}`)
+          .join(" · ")}`
+      : scanned
+        ? ccsMessage || "未发现可导入的供应商"
+        : "点击扫描本地配置";
   // The import modal shows every provider type, so the badge and fallback
   // subtitle must count across all of them — not just the current tab.
   const cherryReady = cherryAll.filter((provider) => provider.importable).length;
@@ -1880,7 +1881,7 @@ function ProviderList(props: {
         ? cherryMessage || `发现 ${cherryReady} 个可同步配置`
         : cherryMessage || "点击扫描本地配置";
   const thirdPartyLoading = ccsLoading || cherryLoading;
-  const thirdPartyImporting = ccsImporting || cherryImporting;
+  const thirdPartyImporting = cherryImporting;
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
@@ -1944,7 +1945,7 @@ function ProviderList(props: {
               <div className="p-1.5">
                 <DropdownMenuItem
                   className="model-selector-item cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2.5"
-                  disabled={ccsLoading || ccsImporting || !ccsAll.length}
+                  disabled={ccsLoading || !ccsAll.length}
                   onSelect={onOpenCcsImport}
                 >
                   <CcsSourceLogo className="h-9 w-9" />
@@ -1964,7 +1965,7 @@ function ProviderList(props: {
                       {ccsSubtitle}
                     </span>
                   </span>
-                  {ccsLoading || ccsImporting ? (
+                  {ccsLoading ? (
                     <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
                   ) : null}
                 </DropdownMenuItem>
@@ -2084,7 +2085,6 @@ export function ProvidersSection(props: SettingsSectionProps) {
   const [cherryImportType, setCherryImportType] = useState<ProviderId | null>(null);
   const [ccsProviders, setCcsProviders] = useState<CcsProvidersResponse | null>(null);
   const [ccsLoading, setCcsLoading] = useState(false);
-  const [ccsImporting, setCcsImporting] = useState(false);
   const [ccsMessage, setCcsMessage] = useState<string | null>(null);
   const [cherryProviders, setCherryProviders] = useState<CherryProvidersResponse | null>(null);
   const [cherryLoading, setCherryLoading] = useState(false);
@@ -2203,6 +2203,65 @@ export function ProvidersSection(props: SettingsSectionProps) {
     return imported;
   }
 
+  // 后台补拉模型列表：失败只体现在 ccsMessage 里，导入的配置不受影响。
+  // 恒带 useSystemProxy —— 反代按应用代理配置出网（未启用=直连）。
+  async function syncCcsModelsInBackground(
+    transferable: CcsProviderImportItem[],
+    importedSummary: string,
+  ) {
+    const syncable = transferable.filter(ccsProviderCanSyncModels);
+    const modelResults = await Promise.all(
+      syncable.map(async (item) => {
+        const identity = ccsImportIdentity({
+          type: item.providerType,
+          name: item.name,
+          baseUrl: item.baseUrl,
+        });
+        try {
+          const models = await fetchModelsFromApi(item.providerType, item.baseUrl, item.apiKey, {
+            useSystemProxy: true,
+          });
+          return { identity, models, fetched: true };
+        } catch {
+          return { identity, models: [] as ProviderModelConfig[], fetched: false };
+        }
+      }),
+    );
+
+    const resultsByIdentity = new Map(
+      modelResults.map((result) => [result.identity, result] as const),
+    );
+    setSettings((prev) => {
+      let changed = false;
+      const providers = prev.customProviders.map((provider) => {
+        const result = resultsByIdentity.get(ccsImportIdentity(provider));
+        if (!result?.fetched) return provider;
+        const models = mergeFetchedModels(result.models, provider.models);
+        const activeModels = models.map((model) => model.id);
+        if (
+          models === provider.models &&
+          activeModels.length === provider.activeModels.length &&
+          activeModels.every((model, index) => model === provider.activeModels[index])
+        ) {
+          return provider;
+        }
+        changed = true;
+        return { ...provider, models, activeModels };
+      });
+      return changed ? updateCustomProviders(prev, providers) : prev;
+    });
+
+    const fetchedCount = modelResults.filter((result) => result.fetched).length;
+    const failedCount = modelResults.length - fetchedCount;
+    const totalModels = modelResults.reduce((total, result) => total + result.models.length, 0);
+    const details = [
+      importedSummary,
+      fetchedCount > 0 ? `已在后台获取并激活 ${totalModels} 个模型` : "",
+      failedCount > 0 ? `${failedCount} 个供应商模型获取失败（导入的配置不受影响）` : "",
+    ].filter(Boolean);
+    setCcsMessage(details.join("，"));
+  }
+
   async function importCcsProviders(items: CcsProviderImportItem[]): Promise<string> {
     const transferable = items.filter(ccsProviderIsTransferable);
     if (!transferable.length) {
@@ -2211,80 +2270,25 @@ export function ProvidersSection(props: SettingsSectionProps) {
       return message;
     }
 
-    setCcsImporting(true);
-    setCcsMessage("正在导入供应商、获取并激活全部模型…");
+    setSettings((prev) => {
+      const nextImported = buildCcsImportedProviders(prev.customProviders, transferable);
+      if (!nextImported.length) return prev;
+      return updateCustomProviders(prev, [...prev.customProviders, ...nextImported]);
+    });
 
-    try {
-      setSettings((prev) => {
-        const nextImported = buildCcsImportedProviders(prev.customProviders, transferable);
-        if (!nextImported.length) return prev;
-        return updateCustomProviders(prev, [...prev.customProviders, ...nextImported]);
-      });
-
-      const modelResults = await Promise.all(
-        transferable.map(async (item) => {
-          const identity = ccsImportIdentity({
-            type: item.providerType,
-            name: item.name,
-            baseUrl: item.baseUrl,
-          });
-          if (!ccsProviderCanSyncModels(item)) {
-            return { identity, models: [] as ProviderModelConfig[], fetched: false, failed: false };
-          }
-          try {
-            const models = await fetchModelsFromApi(item.providerType, item.baseUrl, item.apiKey);
-            return { identity, models, fetched: true, failed: false };
-          } catch {
-            return { identity, models: [] as ProviderModelConfig[], fetched: false, failed: true };
-          }
-        }),
-      );
-
-      const resultsByIdentity = new Map(
-        modelResults.map((result) => [result.identity, result] as const),
-      );
-      setSettings((prev) => {
-        let changed = false;
-        const providers = prev.customProviders.map((provider) => {
-          const result = resultsByIdentity.get(ccsImportIdentity(provider));
-          if (!result) return provider;
-          const models = result.fetched
-            ? mergeFetchedModels(result.models, provider.models)
-            : provider.models;
-          const activeModels = models.map((model) => model.id);
-          if (
-            models === provider.models &&
-            activeModels.length === provider.activeModels.length &&
-            activeModels.every((model, index) => model === provider.activeModels[index])
-          ) {
-            return provider;
-          }
-          changed = true;
-          return { ...provider, models, activeModels };
-        });
-        return changed ? updateCustomProviders(prev, providers) : prev;
-      });
-
-      const fetchedCount = modelResults.filter((result) => result.fetched).length;
-      const failedCount = modelResults.filter((result) => result.failed).length;
-      const totalModels = modelResults.reduce((total, result) => total + result.models.length, 0);
-      const importedByType = PROVIDER_TABS.map((tab) => ({
-        type: tab,
-        count: transferable.filter((item) => item.providerType === tab).length,
-      })).filter((entry) => entry.count > 0);
-      const details = [
-        `已导入 ${importedByType
-          .map((entry) => `${entry.count} 个 ${getProviderLabel(entry.type)}`)
-          .join("、")} 供应商`,
-        fetchedCount > 0 ? `获取并激活 ${totalModels} 个模型` : "已激活供应商内的全部模型",
-        failedCount > 0 ? `${failedCount} 个供应商模型获取失败` : "",
-      ].filter(Boolean);
-      const summary = details.join("，");
-      setCcsMessage(summary);
-      return summary;
-    } finally {
-      setCcsImporting(false);
-    }
+    const importedByType = PROVIDER_TABS.map((tab) => ({
+      type: tab,
+      count: transferable.filter((item) => item.providerType === tab).length,
+    })).filter((entry) => entry.count > 0);
+    const importedSummary = `已导入 ${importedByType
+      .map((entry) => `${entry.count} 个 ${getProviderLabel(entry.type)}`)
+      .join("、")} 供应商`;
+    const summary = transferable.some(ccsProviderCanSyncModels)
+      ? `${importedSummary}，正在后台获取模型列表…`
+      : `${importedSummary}，已激活供应商内的全部模型`;
+    setCcsMessage(summary);
+    void syncCcsModelsInBackground(transferable, importedSummary);
+    return summary;
   }
 
   async function importCherryProviders(items: CherryProviderImportItem[]) {
@@ -2509,7 +2513,6 @@ export function ProvidersSection(props: SettingsSectionProps) {
                 onDelete={handleDelete}
                 ccsProviders={ccsProviders}
                 ccsLoading={ccsLoading}
-                ccsImporting={ccsImporting}
                 ccsMessage={ccsMessage}
                 cherryProviders={cherryProviders}
                 cherryLoading={cherryLoading}
@@ -2538,7 +2541,6 @@ export function ProvidersSection(props: SettingsSectionProps) {
           initialType={ccsImportType}
           items={ccsProviders?.providers ?? []}
           existingProviders={settings.customProviders}
-          importing={ccsImporting}
           onImport={importCcsProviders}
           onClose={() => setCcsImportType(null)}
         />
