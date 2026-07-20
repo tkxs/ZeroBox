@@ -867,11 +867,7 @@ function detectMention(root: HTMLElement, skillsEnabled: boolean): MentionContex
     }
     // "/" only triggers a skill mention at a word boundary; slashes inside an
     // @file query (e.g. "@docs/foo") must keep scanning back toward the "@".
-    if (
-      before[i] === "/" &&
-      skillsEnabled &&
-      (i === 0 || isMentionBoundaryChar(before[i - 1]))
-    ) {
+    if (before[i] === "/" && skillsEnabled && (i === 0 || isMentionBoundaryChar(before[i - 1]))) {
       triggerIdx = i;
       trigger = "skill";
       break;
