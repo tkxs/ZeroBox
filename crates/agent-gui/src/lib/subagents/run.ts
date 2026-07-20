@@ -12,6 +12,7 @@ import { runAssistantWithTools } from "../chat/runner/agentRunner";
 import type { RuntimePlatform } from "../runtimePlatform";
 import type {
   CodexRequestFormat,
+  CustomProvider,
   ProviderId,
   ProviderModelConfig,
   ReasoningLevel,
@@ -51,10 +52,12 @@ import {
 export type SubagentProviderRuntime = {
   baseUrl: string;
   apiKey: string;
+  customHeaders?: CustomProvider["customHeaders"];
   requestFormat?: CodexRequestFormat;
   reasoning?: ReasoningLevel;
   promptCachingEnabled?: boolean;
   nativeWebSearchEnabled?: boolean;
+  useSystemProxy?: boolean;
   modelConfig?: ProviderModelConfig;
 };
 
