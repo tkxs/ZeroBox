@@ -4759,14 +4759,30 @@ export function ChatPage(props: ChatPageProps) {
     });
   }, [activeWorkspaceProjectPath, isAgentMode, openController]);
 
-  // 全局快捷键「新建对话」：Rust 端呼出窗口后发事件，这里开新会话。
+  // 全局快捷键「新建对话」：Rust 端呼出窗口后发事件，这里切回对话视图
+  // （可能停在 Skills/MCP Hub）、开新会话并聚焦输入框，行为对齐侧栏按钮。
   const handleNewConversationRef = useRef(handleNewConversation);
   handleNewConversationRef.current = handleNewConversation;
+  const activeViewRef = useRef(activeView);
+  activeViewRef.current = activeView;
+  const isDraftConversationRef = useRef(isDraftConversation);
+  isDraftConversationRef.current = isDraftConversation;
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
     listen("global-shortcut:new-chat", () => {
-      handleNewConversationRef.current();
+      const wasInHub = activeViewRef.current !== "chat";
+      setActiveView("chat");
+      // 与侧栏"新建对话"一致：从 Hub 返回且当前已是空白草稿会话时直接复用。
+      if (!wasInHub || !isDraftConversationRef.current) {
+        handleNewConversationRef.current();
+      }
+      // 视图与会话切换渲染完成后再聚焦输入框。
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          composerRef.current?.focus();
+        });
+      });
     })
       .then((nextUnlisten) => {
         if (cancelled) {
