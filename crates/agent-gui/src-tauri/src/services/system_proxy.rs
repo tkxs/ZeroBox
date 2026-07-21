@@ -3,6 +3,9 @@
 //! MCP http/sse transport、Hook / Cron HTTP、网络自检、Image.url 读取）按需读取。
 //! reqwest 侧与 shell env 共用 NO_PROXY_DEFAULT：环回地址永不走代理。
 //! 凭据绝不进入日志与错误信息（只输出 host:port）。
+//! 例外：GitHub 更新链路在应用代理未启用时不做 no_proxy() 收口，而是回退
+//! reqwest 默认代理探测（OS 代理环境变量/系统代理设置），见
+//! `client_builder_with_os_proxy_fallback()`。
 
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde_json::Value;
@@ -274,8 +277,21 @@ pub fn cached_client() -> Result<reqwest::Client, String> {
     Ok(client)
 }
 
-pub fn client_builder() -> Result<reqwest::ClientBuilder, String> {
-    async_client_builder_for_mode(&current_snapshot().mode)
+fn os_proxy_fallback_builder_for_mode(mode: &ProxyMode) -> Result<reqwest::ClientBuilder, String> {
+    match mode {
+        // 不调 no_proxy()：保留 reqwest 默认代理探测（OS 代理环境变量与
+        // macOS/Windows 系统代理设置，system-proxy 默认特性），无系统代理即直连。
+        ProxyMode::Disabled => Ok(reqwest::Client::builder()),
+        mode => async_client_builder_for_mode(mode),
+    }
+}
+
+/// GitHub 更新链路专用：应用代理启用时与其他出网点一致走应用代理（配置无效
+/// 同样 fail fast）；未启用时回退 OS 系统代理探测而不是强制直连，尽可能保证
+/// GitHub 更新地址可达。其余出网点仍用 `cached_client()`/
+/// `blocking_client_builder()` 的显式 no_proxy 语义。
+pub fn client_builder_with_os_proxy_fallback() -> Result<reqwest::ClientBuilder, String> {
+    os_proxy_fallback_builder_for_mode(&current_snapshot().mode)
 }
 
 pub fn blocking_client_builder() -> Result<reqwest::blocking::ClientBuilder, String> {
@@ -283,10 +299,12 @@ pub fn blocking_client_builder() -> Result<reqwest::blocking::ClientBuilder, Str
 }
 
 /// Resolved proxy URL for consumers that configure their own HTTP client rather
-/// than using `client_builder()`/`cached_client()` (e.g. `tauri-plugin-updater`,
-/// which only accepts a `Url` on its builder). `Ok(None)` means the app proxy is
-/// disabled — callers must still explicitly disable their own client's proxy in
-/// that case instead of leaving it to fall back to OS proxy env vars.
+/// than using `cached_client()`/`blocking_client_builder()` (e.g.
+/// `tauri-plugin-updater`, which only accepts a `Url` on its builder).
+/// `Ok(None)` means the app proxy is
+/// disabled — the GitHub update path deliberately leaves its client on reqwest's
+/// default proxy detection then (OS proxy env vars / system proxy settings),
+/// mirroring `client_builder_with_os_proxy_fallback()`.
 pub fn current_proxy_url() -> Result<Option<reqwest::Url>, String> {
     match current_snapshot().mode {
         ProxyMode::Disabled => Ok(None),
@@ -364,8 +382,20 @@ mod tests {
             assert!(matches!(mode, ProxyMode::Invalid(_)));
             assert!(async_client_builder_for_mode(&mode).is_err());
             assert!(blocking_client_builder_for_mode(&mode).is_err());
+            // 更新链路的回退 builder 同样不许把 Invalid 静默降级为直连/系统代理。
+            assert!(os_proxy_fallback_builder_for_mode(&mode).is_err());
             assert!(shell_proxy_envs_for_mode(&mode).is_err());
         }
+    }
+
+    #[test]
+    fn os_proxy_fallback_builder_accepts_disabled_and_enabled_modes() {
+        assert!(os_proxy_fallback_builder_for_mode(&ProxyMode::Disabled).is_ok());
+        let enabled = parse_proxy_mode(Some(&json!({
+            "enabled": true, "type": "http", "host": "proxy.local", "port": 8080
+        })));
+        assert!(matches!(enabled, ProxyMode::Enabled(_)));
+        assert!(os_proxy_fallback_builder_for_mode(&enabled).is_ok());
     }
 
     #[test]

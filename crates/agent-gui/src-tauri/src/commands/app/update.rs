@@ -292,8 +292,9 @@ fn selected_release_candidates_from_entries(
 }
 
 fn github_client() -> Result<reqwest::Client, String> {
-    // 系统代理启用时更新检查随之走代理（GitHub 直连常不可达）。
-    crate::services::system_proxy::client_builder()?
+    // 应用代理启用时更新检查随之走应用代理；未启用时回退 reqwest 默认代理探测
+    // （OS 代理环境变量/系统代理设置），无系统代理即直连，尽可能保证 GitHub 可达。
+    crate::services::system_proxy::client_builder_with_os_proxy_fallback()?
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| format!("failed to create GitHub client: {error}"))
@@ -452,12 +453,12 @@ fn build_updater(
         builder = builder.pubkey(public_key);
     }
 
-    // 更新下载/安装与 github_client() 的探测请求保持同一份应用代理配置；未启用时
-    // 显式 no_proxy()，避免插件内部 client 兜底读取 OS 代理环境变量。
-    builder = match crate::services::system_proxy::current_proxy_url()? {
-        Some(proxy_url) => builder.proxy(proxy_url),
-        None => builder.no_proxy(),
-    };
+    // 更新下载/安装与 github_client() 的探测请求保持同一份代理语义：应用代理
+    // 启用时显式走应用代理；未启用时不调 no_proxy()，让插件内部 client 走
+    // reqwest 默认代理探测（OS 代理环境变量/系统代理设置），无系统代理即直连。
+    if let Some(proxy_url) = crate::services::system_proxy::current_proxy_url()? {
+        builder = builder.proxy(proxy_url);
+    }
 
     builder
         .endpoints(vec![manifest_url])
