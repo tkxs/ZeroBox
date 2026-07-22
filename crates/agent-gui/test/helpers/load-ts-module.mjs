@@ -41,25 +41,16 @@ const piAiValidation = await import(
   pathToFileURL(path.join(piAiDistDir, "utils/validation.js")).href
 );
 const piAiEventStream = await import(
-  new URL(
-    "../../node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js",
-    import.meta.url,
-  ).href
+  pathToFileURL(path.join(piAiDistDir, "utils/event-stream.js")).href
 );
 const piAiRetry = await import(
-  new URL("../../node_modules/@earendil-works/pi-ai/dist/utils/retry.js", import.meta.url).href
+  pathToFileURL(path.join(piAiDistDir, "utils/retry.js")).href
 );
 const piAiProvidersAll = await import(
-  new URL(
-    "../../node_modules/@earendil-works/pi-ai/dist/providers/all.js",
-    import.meta.url,
-  ).href
+  pathToFileURL(path.join(piAiDistDir, "providers/all.js")).href
 );
 const piAiModels = await import(
-  new URL(
-    "../../node_modules/@earendil-works/pi-ai/dist/models.js",
-    import.meta.url,
-  ).href
+  pathToFileURL(path.join(piAiDistDir, "models.js")).href
 );
 
 function createDefaultMocks() {
