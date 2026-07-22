@@ -1173,7 +1173,7 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
                                   else focusCustomHeader(index + 1, "key");
                                 }}
                               />
-                              <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 max-[720px]:opacity-100">
+                              <div className="settings-hover-actions absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 max-[720px]:opacity-100">
                                 <Button
                                   type="button"
                                   variant="ghost"
@@ -1484,7 +1484,7 @@ function ProviderList(props: {
                     {provider.activeModels.length} {t("settings.activeModels")}
                   </div>
                 </div>
-                <div className="settings-card-actions settings-hover-actions flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <div className="settings-card-actions settings-hover-actions flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
                   <Button
                     variant="ghost"
                     size="icon"

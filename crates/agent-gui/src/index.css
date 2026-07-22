@@ -2408,6 +2408,16 @@
   }
 }
 
+/* Tailwind v4 gates every hover:/group-hover: utility behind
+ * @media (hover: hover), so on devices whose primary pointer cannot hover
+ * (touch-primary 2-in-1s, some pen/touch webviews) the reveal rule never
+ * exists. Hover-revealed action clusters must stay visible there. */
+@media (hover: none) {
+  .settings-hover-actions {
+    opacity: 1 !important;
+  }
+}
+
 /*
  * Streamdown mermaid / table fullscreen fix — macOS WebKit (Tauri WKWebView)
  *

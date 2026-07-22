@@ -3188,6 +3188,17 @@ html[data-liveagent-webui="gateway"]
   }
 }
 
+/* Tailwind v4 gates every hover:/group-hover: utility behind
+ * @media (hover: hover), so on devices whose primary pointer cannot hover
+ * (tablets, touch-primary 2-in-1s) the reveal rule never exists.
+ * Hover-revealed settings action clusters must stay visible there. */
+@media (hover: none), (pointer: coarse) {
+  html[data-liveagent-webui="gateway"] .settings-card-actions,
+  html[data-liveagent-webui="gateway"] .settings-hover-actions {
+    opacity: 1 !important;
+  }
+}
+
 @media (max-width: 640px) {
   .login-shell {
     padding: 10px;
