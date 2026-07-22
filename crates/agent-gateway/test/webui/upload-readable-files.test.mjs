@@ -30,7 +30,7 @@ test("importReadableFiles validates token and workdir before network calls", asy
 
   await assert.rejects(
     () => upload.importReadableFiles(" ", "/workspace", [createNamedBlob("a.txt", "a")]),
-    /Gateway token is required/,
+    /Execution selection credential is required/,
   );
   await assert.rejects(
     () => upload.importReadableFiles("token", " ", [createNamedBlob("a.txt", "a")]),

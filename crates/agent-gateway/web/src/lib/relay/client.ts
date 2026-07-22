@@ -1,13 +1,7 @@
-import { loadToken } from "@/lib/storage";
-
 export const RELAY_ORIGIN = "http://127.0.0.1:8080";
 export const RELAY_SESSION_CHANGED_EVENT = "zerobox:relay-session-changed";
 
 const RELAY_PROXY_BASE = "/api/usa-zero";
-const RELAY_AUTH_HEADER = "X-USA-Zero-Authorization";
-const ACCESS_TOKEN_KEY = "zerobox.relay.access-token";
-const REFRESH_TOKEN_KEY = "zerobox.relay.refresh-token";
-const EXPIRES_AT_KEY = "zerobox.relay.expires-at";
 
 type RelayEnvelope<T> = {
   code: number;
@@ -27,7 +21,29 @@ export type RelayUser = {
   status?: string;
   created_at?: string;
   total_recharged?: number;
+  avatar_url?: string;
+  email_bound?: boolean;
 };
+
+export type RelayDashboardStats = {
+  today_tokens: number;
+  today_input_tokens?: number;
+  today_output_tokens?: number;
+  today_cache_creation_tokens?: number;
+  today_cache_read_tokens?: number;
+};
+
+export function formatRelayBalance(balance?: number) {
+  return Number.isFinite(balance) ? `$${Number(balance).toFixed(2)}` : "--";
+}
+
+export function formatRelayTokenCount(tokens?: number) {
+  if (!Number.isFinite(tokens)) return "--";
+  return new Intl.NumberFormat("zh-CN", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Number(tokens));
+}
 
 type RelaySessionTokens = {
   access_token: string;
@@ -97,32 +113,12 @@ export class RelayApiError extends Error {
   }
 }
 
-function readAccessToken() {
-  return localStorage.getItem(ACCESS_TOKEN_KEY)?.trim() ?? "";
-}
-
-function readRefreshToken() {
-  return localStorage.getItem(REFRESH_TOKEN_KEY)?.trim() ?? "";
-}
-
-function saveSession(response: RelaySessionTokens) {
-  localStorage.setItem(ACCESS_TOKEN_KEY, response.access_token.trim());
-  if (response.refresh_token?.trim()) {
-    localStorage.setItem(REFRESH_TOKEN_KEY, response.refresh_token.trim());
-  }
-  if (response.expires_in && response.expires_in > 0) {
-    localStorage.setItem(EXPIRES_AT_KEY, String(Date.now() + response.expires_in * 1000));
-  }
-}
-
 export function clearRelaySession() {
-  localStorage.removeItem(ACCESS_TOKEN_KEY);
-  localStorage.removeItem(REFRESH_TOKEN_KEY);
-  localStorage.removeItem(EXPIRES_AT_KEY);
+  // Tokens remain server-side and are represented only by an HttpOnly cookie.
 }
 
 export function hasStoredRelaySession() {
-  return Boolean(readAccessToken() || readRefreshToken());
+  return true;
 }
 
 type RelayRequestOptions = {
@@ -133,18 +129,10 @@ type RelayRequestOptions = {
 };
 
 async function requestRelay<T>(path: string, options: RelayRequestOptions = {}): Promise<T> {
-  const gatewayToken = loadToken().trim();
-  if (!gatewayToken) throw new RelayApiError("Gateway 登录已失效", 401);
   const headers: Record<string, string> = {
     Accept: "application/json",
     "Content-Type": "application/json",
-    Authorization: `Bearer ${gatewayToken}`,
   };
-  if (options.authenticated) {
-    const relayToken = readAccessToken();
-    if (!relayToken) throw new RelayApiError("请先登录 USA-零", 401);
-    headers[RELAY_AUTH_HEADER] = `Bearer ${relayToken}`;
-  }
 
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   let response: Response;
@@ -152,6 +140,7 @@ async function requestRelay<T>(path: string, options: RelayRequestOptions = {}):
     response = await fetch(`${RELAY_PROXY_BASE}${normalizedPath}`, {
       method: options.method ?? "GET",
       headers,
+      credentials: "include",
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: AbortSignal.timeout(30_000),
     });
@@ -169,11 +158,6 @@ async function requestRelay<T>(path: string, options: RelayRequestOptions = {}):
     throw new RelayApiError(`USA-零返回了无效响应 (HTTP ${response.status})`, response.status);
   }
 
-  if (response.status === 401 && options.authenticated && options.retryAfterRefresh !== false) {
-    if (await refreshRelaySession()) {
-      return requestRelay<T>(path, { ...options, retryAfterRefresh: false });
-    }
-  }
   if (!response.ok || envelope.code !== 0 || envelope.data === undefined) {
     throw new RelayApiError(
       envelope.message || `请求失败 (HTTP ${response.status})`,
@@ -185,41 +169,23 @@ async function requestRelay<T>(path: string, options: RelayRequestOptions = {}):
   return envelope.data;
 }
 
-async function refreshRelaySession() {
-  const refreshToken = readRefreshToken();
-  if (!refreshToken) {
-    clearRelaySession();
-    return false;
-  }
-  try {
-    const response = await requestRelay<RelaySessionTokens>("/auth/refresh", {
-      method: "POST",
-      body: { refresh_token: refreshToken },
-      retryAfterRefresh: false,
-    });
-    saveSession(response);
-    return true;
-  } catch {
-    clearRelaySession();
-    return false;
-  }
-}
-
-function isFullAuthResponse(response: RelayLoginResponse): response is RelayAuthResponse {
-  return "access_token" in response && typeof response.access_token === "string";
-}
-
 export function getRelayPublicSettings() {
-  return requestRelay<RelayPublicSettings>("/settings/public");
+  return requestGatewayAccount<RelayPublicSettings>("/api/auth/settings");
 }
 
 export async function loginRelay(email: string, password: string) {
-  const response = await requestRelay<RelayLoginResponse>("/auth/login", {
+  const response = await requestGatewayAccount<
+    { user: RelayUser } | { requires_2fa: true; temp_token: string; user_email_masked?: string }
+  >("/api/auth/login", {
     method: "POST",
     body: { email: email.trim(), password },
   });
-  if (isFullAuthResponse(response)) saveSession(response);
-  return response;
+  if ("requires_2fa" in response) return response;
+  return {
+    access_token: "cookie-session",
+    token_type: "Cookie",
+    user: response.user,
+  } satisfies RelayAuthResponse;
 }
 
 export async function verifyRelayPassword(email: string, password: string) {
@@ -230,12 +196,15 @@ export async function verifyRelayPassword(email: string, password: string) {
 }
 
 export async function loginRelay2FA(tempToken: string, totpCode: string) {
-  const response = await requestRelay<RelayAuthResponse>("/auth/login/2fa", {
+  const response = await requestGatewayAccount<{ user: RelayUser }>("/api/auth/2fa", {
     method: "POST",
     body: { temp_token: tempToken, totp_code: totpCode.trim() },
   });
-  saveSession(response);
-  return response;
+  return {
+    access_token: "cookie-session",
+    token_type: "Cookie",
+    user: response.user,
+  } satisfies RelayAuthResponse;
 }
 
 export async function registerRelay(input: {
@@ -244,7 +213,7 @@ export async function registerRelay(input: {
   verifyCode?: string;
   invitationCode?: string;
 }) {
-  const response = await requestRelay<RelayAuthResponse>("/auth/register", {
+  const response = await requestGatewayAccount<{ user: RelayUser }>("/api/auth/register", {
     method: "POST",
     body: {
       email: input.email.trim(),
@@ -253,19 +222,71 @@ export async function registerRelay(input: {
       invitation_code: input.invitationCode?.trim() ?? "",
     },
   });
-  saveSession(response);
-  return response;
+  return {
+    access_token: "cookie-session",
+    token_type: "Cookie",
+    user: response.user,
+  } satisfies RelayAuthResponse;
 }
 
 export function sendRelayVerifyCode(email: string) {
-  return requestRelay<{ message: string; countdown: number }>("/auth/send-verify-code", {
+  return requestGatewayAccount<{ message: string; countdown: number }>(
+    "/api/auth/send-verify-code",
+    {
+      method: "POST",
+      body: { email: email.trim() },
+    },
+  );
+}
+
+export function getRelayCurrentUser() {
+  return requestGatewayAccount<{ user: RelayUser }>("/api/auth/me").then(
+    (response) => response.user,
+  );
+}
+
+export function getRelayProfile() {
+  return requestRelay<RelayUser>("/user/profile", { authenticated: true });
+}
+
+export function getRelayDashboardStats() {
+  return requestRelay<RelayDashboardStats>("/usage/dashboard/stats", { authenticated: true });
+}
+
+export function updateRelayProfile(profile: { username?: string; avatar_url?: string | null }) {
+  return requestRelay<RelayUser>("/user", {
+    method: "PUT",
+    authenticated: true,
+    body: profile,
+  });
+}
+
+export function sendRelayEmailBindingCode(email: string) {
+  return requestRelay<{ message?: string }>("/user/account-bindings/email/send-code", {
     method: "POST",
+    authenticated: true,
     body: { email: email.trim() },
   });
 }
 
-export function getRelayCurrentUser() {
-  return requestRelay<RelayUser>("/auth/me", { authenticated: true });
+export function bindRelayEmail(email: string, verifyCode: string, password: string) {
+  return requestRelay<RelayUser>("/user/account-bindings/email", {
+    method: "POST",
+    authenticated: true,
+    body: {
+      email: email.trim(),
+      verify_code: verifyCode.trim(),
+      password,
+    },
+  });
+}
+
+export function changeRelayPassword(oldPassword: string, newPassword: string) {
+  return requestRelay<{ message?: string }>("/user/password", {
+    method: "PUT",
+    authenticated: true,
+    body: { old_password: oldPassword, new_password: newPassword },
+  });
 }
 
 export async function listRelayApiKeys() {
@@ -302,18 +323,51 @@ export async function createRelayApiKeys(name: string, groupIds: number[], group
   return created;
 }
 
+export function getRelayProviderModels(keyId: number) {
+  return requestGatewayAccount<{ models: unknown }>(
+    `/api/web-chat/provider-keys/${encodeURIComponent(String(keyId))}/models`,
+  ).then((response) => response.models);
+}
+
+async function requestGatewayAccount<T>(
+  path: string,
+  options: { method?: "GET" | "POST"; body?: unknown } = {},
+): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: options.method ?? "GET",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    throw new RelayApiError(
+      `无法连接账户服务：${error instanceof Error ? error.message : String(error)}`,
+      0,
+    );
+  }
+  if (response.status === 204) return undefined as T;
+  const payload = (await response.json().catch(() => null)) as
+    | (T & { error?: string; reason?: string })
+    | null;
+  if (!response.ok || !payload) {
+    throw new RelayApiError(
+      payload?.error || `请求失败 (HTTP ${response.status})`,
+      response.status,
+      undefined,
+      payload?.reason,
+    );
+  }
+  return payload;
+}
+
 export async function logoutRelay() {
-  const refreshToken = readRefreshToken();
-  if (refreshToken) {
-    try {
-      await requestRelay<{ message: string }>("/auth/logout", {
-        method: "POST",
-        body: { refresh_token: refreshToken },
-        retryAfterRefresh: false,
-      });
-    } catch {
-      // Local logout still completes when USA-零 is unavailable.
-    }
+  try {
+    await requestGatewayAccount<void>("/api/auth/logout", { method: "POST" });
+  } catch {
+    // The UI session still clears when USA-Zero is temporarily unavailable.
   }
   clearRelaySession();
   window.dispatchEvent(new Event(RELAY_SESSION_CHANGED_EVENT));

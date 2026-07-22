@@ -922,7 +922,7 @@ export function resolveConversationBrowserTitle(params: {
   newConversationTitle: string;
 }) {
   const conversationId = params.conversationId?.trim() ?? "";
-  const newConversationTitle = params.newConversationTitle.trim() || "LiveAgent";
+  const newConversationTitle = params.newConversationTitle.trim() || "零 Agent";
   if (!conversationId || params.isLocalDraftConversation) {
     return newConversationTitle;
   }

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	gateway "github.com/liveagent/agent-gateway"
+	"github.com/liveagent/agent-gateway/internal/account"
 	"github.com/liveagent/agent-gateway/internal/auth"
 	"github.com/liveagent/agent-gateway/internal/config"
 	"github.com/liveagent/agent-gateway/internal/handler"
@@ -22,11 +24,27 @@ import (
 )
 
 func NewHTTPServer(cfg *config.Config, sm *session.Manager) http.Handler {
+	origin := strings.TrimSpace(cfg.USAZeroOrigin)
+	if origin == "" {
+		origin = "http://127.0.0.1:8080"
+	}
+	usaClient, err := account.NewUSAClient(origin, cfg.RequestTimeout)
+	if err != nil {
+		panic(err)
+	}
+	accountService := account.NewService(account.NewMemoryStore(), usaClient, cfg.WebSessionTTL, cfg.SelectionLeaseTTL)
+	return NewHTTPServerWithAccountService(cfg, sm, accountService)
+}
+
+func NewHTTPServerWithAccountService(cfg *config.Config, sm *session.Manager, accountService *account.Service) http.Handler {
 	rootMux := http.NewServeMux()
 	rootMux.HandleFunc("GET /healthz", handler.Health())
+	account.NewHTTPHandler(accountService, cfg.CookieSecure).Register(rootMux)
+	accountService.SetDeviceRevoker(sm.DisconnectDevice)
+	sm.SetHistoryObserver(accountService.RecordDeviceHistorySync)
 
 	// v2 统一协议（WebSocket+Protobuf）三链路。
-	v2 := pbws.NewServer(cfg, sm)
+	v2 := pbws.NewServer(cfg, sm, accountService)
 	rootMux.Handle("/ws/v2", v2.BrowserHandler())
 	rootMux.Handle("/ws/v2/agent", v2.AgentHandler())
 	rootMux.Handle("/ws/v2/terminal", v2.TerminalHandler())
@@ -43,11 +61,7 @@ func NewHTTPServer(cfg *config.Config, sm *session.Manager) http.Handler {
 	rootMux.HandleFunc("GET /image-proxy", handler.ImageProxy(cfg.RequestTimeout))
 	rootMux.HandleFunc("GET /api/public/history-shares/{token}", publicHistoryShare(cfg, sm))
 
-	apiMux := http.NewServeMux()
-	apiMux.HandleFunc("GET /api/status", handler.Status(sm))
-	apiMux.HandleFunc("POST /api/files/import", handler.ImportReadableFiles(sm, cfg.RequestTimeout))
-	apiMux.HandleFunc("/api/usa-zero/", handler.USAZeroProxy(cfg.RequestTimeout))
-	rootMux.Handle("/api/", auth.HTTPMiddleware(cfg.Token, apiMux))
+	rootMux.Handle("/api/", protectedAPIHandler(cfg, sm, accountService))
 
 	webFS, err := fs.Sub(gateway.WebUIAssets, "web/dist")
 	if err != nil {
@@ -93,6 +107,63 @@ func NewHTTPServer(cfg *config.Config, sm *session.Manager) http.Handler {
 	})
 
 	return rootMux
+}
+
+type selectionCredentialPayload struct {
+	Lease       string `json:"lease"`
+	RuntimeKind string `json:"runtimeKind"`
+	DeviceID    string `json:"deviceId"`
+	WorkspaceID string `json:"workspaceId"`
+}
+
+func protectedAPIHandler(cfg *config.Config, root *session.Manager, accounts *account.Service) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		target := root
+		authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+		if !auth.ValidateBearerHeader(authorization, cfg.Token) {
+			parts := strings.SplitN(authorization, " ", 2)
+			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			credential, ok := decodeSelectionCredential(parts[1])
+			if !ok || credential.RuntimeKind != account.RuntimeKindDeviceAgent {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid selection credential"})
+				return
+			}
+			cookie, err := r.Cookie(account.SessionCookieName)
+			if err != nil {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "account login required"})
+				return
+			}
+			accountSession, lease, err := accounts.ValidateSelection(r.Context(), cookie.Value, credential.Lease)
+			if err != nil || lease.DeviceID != credential.DeviceID || lease.WorkspaceID != credential.WorkspaceID {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "selection lease is invalid or expired"})
+				return
+			}
+			target = root.DeviceManager(accountSession.UserID, lease.DeviceID)
+		}
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /api/status", handler.Status(target))
+		mux.HandleFunc("POST /api/files/import", handler.ImportReadableFiles(target, cfg.RequestTimeout))
+		mux.ServeHTTP(w, r)
+	})
+}
+
+func decodeSelectionCredential(value string) (selectionCredentialPayload, bool) {
+	const prefix = "selection."
+	if !strings.HasPrefix(value, prefix) {
+		return selectionCredentialPayload{}, false
+	}
+	data, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(value, prefix))
+	if err != nil {
+		return selectionCredentialPayload{}, false
+	}
+	var payload selectionCredentialPayload
+	if json.Unmarshal(data, &payload) != nil || strings.TrimSpace(payload.Lease) == "" {
+		return selectionCredentialPayload{}, false
+	}
+	return payload, true
 }
 
 func isWebUIStaticAssetPath(cleanPath string) bool {

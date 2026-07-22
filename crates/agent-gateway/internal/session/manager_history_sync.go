@@ -2,6 +2,7 @@ package session
 
 import (
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 func (m *Manager) SubscribeHistorySync() (<-chan *gatewayv1.HistorySyncEvent, func()) {
@@ -27,6 +28,15 @@ func (m *Manager) SubscribeHistorySync() (<-chan *gatewayv1.HistorySyncEvent, fu
 func (m *Manager) broadcastHistorySync(event *gatewayv1.HistorySyncEvent) {
 	if event == nil {
 		return
+	}
+	m.historyObserverMu.RLock()
+	observer := m.historyObserver
+	userID := m.identityUserID
+	deviceID := m.identityDeviceID
+	m.historyObserverMu.RUnlock()
+	if observer != nil && userID > 0 && deviceID != "" {
+		copy := proto.Clone(event).(*gatewayv1.HistorySyncEvent)
+		go observer(userID, deviceID, copy)
 	}
 
 	m.syncHub.historyMu.Lock()

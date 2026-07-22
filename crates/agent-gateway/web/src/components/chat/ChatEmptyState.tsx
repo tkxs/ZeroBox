@@ -89,7 +89,7 @@ export function ChatEmptyState({
             className="chat-hero-halo-breathe absolute inset-1 rounded-full bg-sky-500/10 blur-xl dark:bg-sky-400/10"
           />
           <img
-            src="/icon-simple.png"
+            src="/zerobox-logo.png"
             alt=""
             aria-hidden="true"
             draggable={false}

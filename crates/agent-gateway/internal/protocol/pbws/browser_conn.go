@@ -1,6 +1,7 @@
 package pbws
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/liveagent/agent-gateway/internal/account"
+	"github.com/liveagent/agent-gateway/internal/auth"
 	"github.com/liveagent/agent-gateway/internal/config"
 	"github.com/liveagent/agent-gateway/internal/observability"
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
@@ -42,14 +45,23 @@ type browserConn struct {
 	chatStreamsMu sync.Mutex
 	chatStreams   map[string]func() // conversation_id -> 订阅取消
 
-	workspaceSubsMu sync.Mutex
-	workspaceSubs   map[string]*workspaceSubscription
+	workspaceSubsMu     sync.Mutex
+	workspaceSubs       map[string]*workspaceSubscription
+	controllerSessionID string
+	userID              int64
+	deviceID            string
+	workspaceID         string
+	runtimeKind         string
 }
 
 // BrowserHandler 返回 /ws/v2 的 HTTP 处理器。
 func (s *Server) BrowserHandler() http.Handler {
 	upgrader := s.upgrader()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		controllerSessionID := ""
+		if cookie, cookieErr := r.Cookie("zerobox_session"); cookieErr == nil {
+			controllerSessionID = cookie.Value
+		}
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
@@ -57,12 +69,13 @@ func (s *Server) BrowserHandler() http.Handler {
 		conn.SetReadLimit(s.readLimit())
 
 		c := &browserConn{
-			cfg:              s.cfg,
-			sm:               s.sm,
-			srv:              s,
-			conn:             conn,
-			idPrefix:         browserIDPrefix(),
-			terminalInterest: shared.NewTerminalInterestTracker(),
+			cfg:                 s.cfg,
+			sm:                  s.sm,
+			srv:                 s,
+			conn:                conn,
+			idPrefix:            browserIDPrefix(),
+			terminalInterest:    shared.NewTerminalInterestTracker(),
+			controllerSessionID: controllerSessionID,
 		}
 		c.core = wscore.NewConn(conn, wscore.Config{
 			WriteTimeout:    s.cfg.WebSocketWriteTimeout,
@@ -156,7 +169,32 @@ func (c *browserConn) handshake() bool {
 		return false
 	}
 	hello := frame.GetHello()
-	verdict := c.srv.vetHello(hello, gatewayv2.ClientRole_CLIENT_ROLE_BROWSER)
+	verdict := c.srv.vetHelloBase(hello, gatewayv2.ClientRole_CLIENT_ROLE_BROWSER)
+	legacyAuthorized := verdict.ok && auth.ValidateToken(hello.GetToken(), c.srv.cfg.Token)
+	if verdict.ok && !legacyAuthorized {
+		if c.srv.accounts == nil || hello.GetSelectionLease() == "" {
+			verdict = helloVerdict{message: "account login and selection lease required"}
+		} else {
+			var accountSession *account.Session
+			var lease *account.SelectionLease
+			var err error
+			if c.controllerSessionID != "" {
+				accountSession, lease, err = c.srv.accounts.ValidateSelection(context.Background(), c.controllerSessionID, hello.GetSelectionLease())
+			} else {
+				accountSession, lease, err = c.srv.accounts.ValidateDesktopSelection(context.Background(), hello.GetToken(), hello.GetSelectionLease())
+			}
+			if err != nil || lease.RuntimeKind != "device_agent" || lease.DeviceID == "" ||
+				hello.GetRuntimeKind() != lease.RuntimeKind || hello.GetWorkspaceId() != lease.WorkspaceID {
+				verdict = helloVerdict{message: "invalid selection lease"}
+			} else {
+				c.userID = accountSession.UserID
+				c.deviceID = lease.DeviceID
+				c.workspaceID = lease.WorkspaceID
+				c.runtimeKind = lease.RuntimeKind
+				c.sm = c.srv.sm.DeviceManager(c.userID, c.deviceID)
+			}
+		}
+	}
 	if !verdict.ok {
 		_ = writeDirectMessage(c.conn, c.srv.writeTimeout(), &gatewayv2.WebServerFrame{
 			RequestId: frame.GetRequestId(),
@@ -180,7 +218,7 @@ func (c *browserConn) handshake() bool {
 	if err := c.send(wscore.FrameResponse, "hello", &gatewayv2.WebServerFrame{
 		RequestId: frame.GetRequestId(),
 		Payload: &gatewayv2.WebServerFrame_Hello{
-			Hello: c.srv.serverHello(true, "", ""),
+			Hello: c.srv.serverHelloFor(true, "", "", c.userID, c.deviceID, c.workspaceID, c.runtimeKind),
 		},
 	}); err != nil {
 		c.core.Close()

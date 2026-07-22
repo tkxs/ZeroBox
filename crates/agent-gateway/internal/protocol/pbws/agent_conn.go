@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/liveagent/agent-gateway/internal/auth"
 	"github.com/liveagent/agent-gateway/internal/observability"
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
 	gatewayv2 "github.com/liveagent/agent-gateway/internal/proto/v2"
@@ -38,7 +39,22 @@ func (s *Server) serveAgent(conn *websocket.Conn) {
 		return
 	}
 	hello := frame.GetHello()
-	verdict := s.vetHello(hello, gatewayv2.ClientRole_CLIENT_ROLE_AGENT)
+	verdict := s.vetHelloBase(hello, gatewayv2.ClientRole_CLIENT_ROLE_AGENT)
+	targetManager := s.sm
+	var userID int64
+	deviceID := ""
+	if verdict.ok && hello.GetDeviceId() != "" && hello.GetDeviceCredential() != "" && s.accounts != nil {
+		device, authErr := s.accounts.AuthenticateDevice(context.Background(), hello.GetDeviceId(), hello.GetDeviceCredential())
+		if authErr != nil {
+			verdict = helloVerdict{message: "unauthorized device"}
+		} else {
+			userID = device.UserID
+			deviceID = device.ID
+			targetManager = s.sm.DeviceManager(userID, deviceID)
+		}
+	} else if verdict.ok && !auth.ValidateToken(hello.GetToken(), s.cfg.Token) {
+		verdict = helloVerdict{message: "unauthorized"}
+	}
 	if !verdict.ok {
 		_ = writeDirectMessage(conn, s.writeTimeout(), &gatewayv2.AgentServerFrame{
 			Payload: &gatewayv2.AgentServerFrame_Hello{
@@ -50,10 +66,10 @@ func (s *Server) serveAgent(conn *websocket.Conn) {
 	}
 
 	sessionID := uuid.NewString()
-	s.sm.RecordAuthentication(hello.GetAgentId(), hello.GetAgentVersion(), sessionID)
+	targetManager.RecordAuthentication(hello.GetAgentId(), hello.GetAgentVersion(), sessionID)
 	if err := writeDirectMessage(conn, s.writeTimeout(), &gatewayv2.AgentServerFrame{
 		Payload: &gatewayv2.AgentServerFrame_Hello{
-			Hello: s.serverHello(true, "", sessionID),
+			Hello: s.serverHelloFor(true, "", sessionID, userID, deviceID, "", "device_agent"),
 		},
 	}); err != nil {
 		return
@@ -64,10 +80,10 @@ func (s *Server) serveAgent(conn *websocket.Conn) {
 	defer observability.Usage.V2AgentActive.Add(-1)
 
 	// ---- 会话接管（等价 AgentConnect 流建立）----
-	sess := session.NewAgentSession(s.sm.LatestAuthSnapshot())
+	sess := session.NewAgentSession(targetManager.LatestAuthSnapshot())
 	toAgent := sess.Outbound()
-	s.sm.SetSession(sess)
-	defer s.sm.ClearSession(sess)
+	targetManager.SetSession(sess)
+	defer targetManager.ClearSession(sess)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -84,11 +100,14 @@ func (s *Server) serveAgent(conn *websocket.Conn) {
 		_ = conn.Close()
 	}()
 
-	go s.agentHeartbeatLoop(ctx, conn, sess)
+	go s.agentHeartbeatLoop(ctx, conn, targetManager, sess, deviceID)
 
 	// WS 控制帧 pong 计入桌面端存活（对应 h2 keepalive 的职能）。
 	conn.SetPongHandler(func(string) error {
-		s.sm.TouchHeartbeat(sess)
+		targetManager.TouchHeartbeat(sess)
+		if deviceID != "" {
+			_ = s.accounts.TouchDevice(context.Background(), deviceID)
+		}
 		return nil
 	})
 
@@ -143,13 +162,13 @@ func (s *Server) serveAgent(conn *websocket.Conn) {
 		env := frame.GetEnvelope()
 		if env == nil {
 			// 重复 hello 或空帧：忽略（仍计入存活）。
-			s.sm.TouchHeartbeat(sess)
+			targetManager.TouchHeartbeat(sess)
 			continue
 		}
 		// 任何入站信封都证明桌面端存活；活跃流式传输中的 agent 绝不能被判心跳过期。
-		s.sm.TouchHeartbeat(sess)
+		targetManager.TouchHeartbeat(sess)
 		// Pong 与其他信封同一分发：关联探测按 request_id 命中注册流，周期心跳的 Pong 无注册流、被无害忽略。
-		s.sm.DispatchFromAgentForSession(sess, env)
+		targetManager.DispatchFromAgentForSession(sess, env)
 	}
 }
 
@@ -189,7 +208,7 @@ func (s *Server) writeAgentEnvelope(conn *websocket.Conn, env *gatewayv1.Gateway
 
 // agentHeartbeatLoop：周期发应用层 Ping（走专用心跳通道）、
 // 驱逐心跳过期会话；额外补发 WS 控制帧 ping，由 tokio-tungstenite 自动 pong 承担传输层保活。
-func (s *Server) agentHeartbeatLoop(ctx context.Context, conn *websocket.Conn, sess *session.AgentSession) {
+func (s *Server) agentHeartbeatLoop(ctx context.Context, conn *websocket.Conn, sm *session.Manager, sess *session.AgentSession, deviceID string) {
 	period := 30 * time.Second
 	if s.cfg != nil && s.cfg.HeartbeatPeriod > 0 {
 		period = s.cfg.HeartbeatPeriod
@@ -209,8 +228,11 @@ func (s *Server) agentHeartbeatLoop(ctx context.Context, conn *websocket.Conn, s
 		case <-sess.Done():
 			return
 		case <-ticker.C:
-			if s.sm.ClearSessionIfHeartbeatStale(sess, timeout) {
+			if sm.ClearSessionIfHeartbeatStale(sess, timeout) {
 				return
+			}
+			if deviceID != "" {
+				_ = s.accounts.TouchDevice(context.Background(), deviceID)
 			}
 			deadline := time.Now().Add(s.writeTimeout())
 			_ = conn.WriteControl(websocket.PingMessage, nil, deadline)

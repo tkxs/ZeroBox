@@ -13,7 +13,7 @@ export function SettingsSyncLoading({ locale }: SettingsSyncLoadingProps) {
       <div className="sync-loading-stage">
         <div className="sync-loading-icon">
           <img
-            src="/favicon.svg"
+            src="/zerobox-logo.png"
             alt=""
             width={60}
             height={60}

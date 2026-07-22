@@ -1,6 +1,6 @@
 import type { AppSettings, CustomProvider, ProviderId, ProviderModelConfig } from "@/lib/settings";
-import { fetchModelsFromApi } from "@/pages/settings/providerUtils";
-import { RELAY_ORIGIN, type RelayApiKey, type RelayGroup } from "./client";
+import { normalizeFetchedModels } from "@/pages/settings/providerUtils";
+import { getRelayProviderModels, RELAY_ORIGIN, type RelayApiKey, type RelayGroup } from "./client";
 
 const RELAY_PROVIDER_PREFIX = "relay-key-";
 
@@ -64,14 +64,23 @@ export async function buildRelayProviders(
       .filter((key) => key.status === "active" && key.group_id != null && key.key.trim())
       .map(async (key): Promise<CustomProvider | null> => {
         const group = resolveKeyGroup(key, groups);
-        if (!group || group.status !== "active") return null;
+        if (group?.status !== "active") return null;
         const type = relayProviderTypeForPlatform(group.platform);
         if (!type) return null;
         const existing = existingById.get(relayProviderId(key.id));
         let models: ProviderModelConfig[] = existing?.models ?? [];
         if (forceModelRefresh || models.length === 0) {
           try {
-            models = await fetchModelsFromApi(type, relayProviderBaseUrl(type), key.key);
+            const response = await getRelayProviderModels(key.id);
+            const payload = response as { data?: unknown; models?: unknown } | null;
+            const items = Array.isArray(response)
+              ? response
+              : Array.isArray(payload?.data)
+                ? payload.data
+                : Array.isArray(payload?.models)
+                  ? payload.models
+                  : [];
+            models = normalizeFetchedModels(items, type);
           } catch {
             models = existing?.models ?? [];
           }

@@ -5,6 +5,7 @@ import {
   memo,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
@@ -38,7 +39,6 @@ import {
   Pin,
   PinOff,
   Plus,
-  Settings,
   Share2,
   Trash2,
 } from "../icons";
@@ -82,6 +82,8 @@ type ChatHistorySidebarProps = {
   fontScale?: number;
   activeView?: "chat" | "skills-hub" | "mcp-hub";
   showProjects?: boolean;
+  workspaceSectionLabel?: string;
+  showAgentHubs?: boolean;
   // Pre-sorted by the container (pinned/running/activity); rendered as-is.
   projects?: WorkspaceProject[];
   activeProjectId?: string;
@@ -122,7 +124,7 @@ type ChatHistorySidebarProps = {
   onDeleteConversation: (id: string) => void;
   onLoadMore: () => void;
   onCloseSidebar: () => void;
-  onOpenSettings: () => void;
+  accountMenu: ReactNode;
   onOpenSkillsHub?: () => void;
   onOpenMcpHub?: () => void;
 };
@@ -1249,6 +1251,8 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     fontScale = 1,
     activeView = "chat",
     showProjects = false,
+    workspaceSectionLabel,
+    showAgentHubs = true,
     projects = [],
     activeProjectId,
     missingProjectPathKeys,
@@ -1285,7 +1289,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     onDeleteConversation,
     onLoadMore,
     onCloseSidebar,
-    onOpenSettings,
+    accountMenu,
     onOpenSkillsHub,
     onOpenMcpHub,
   } = props;
@@ -1909,14 +1913,14 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 -translate-y-0.5 items-center gap-2">
               <img
-                src="/icon-simple.png"
+                src="/zerobox-logo.png"
                 alt=""
                 aria-hidden="true"
                 draggable={false}
                 className="h-8 w-8 shrink-0 select-none rounded-xl object-contain"
               />
               <div className="min-w-0">
-                <div className="truncate font-semibold tracking-tight">Live Agent</div>
+                <div className="truncate font-semibold tracking-tight">零 Agent</div>
               </div>
             </div>
 
@@ -1949,46 +1953,50 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                 {t("chat.newConversation")}
               </span>
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenSkillsHub?.()}
-              className={cn(
-                "sidebar-hub-menu-item h-[30px] w-full justify-start gap-3 rounded-lg px-3 text-[calc(14px*var(--zone-font-scale,1))] font-normal leading-5 shadow-none transition-colors",
-                activeView === "skills-hub"
-                  ? "bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]"
-                  : "text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]",
-              )}
-              title="Skills Hub"
-            >
-              <Blend
-                className={cn(
-                  "h-4 w-4 shrink-0",
-                  activeView === "skills-hub" ? "text-amber-500" : "text-foreground/85",
-                )}
-              />
-              <span className="truncate">Skills</span>
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenMcpHub?.()}
-              className={cn(
-                "sidebar-hub-menu-item h-[30px] w-full justify-start gap-3 rounded-lg px-3 text-[calc(14px*var(--zone-font-scale,1))] font-normal leading-5 shadow-none transition-colors",
-                activeView === "mcp-hub"
-                  ? "bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]"
-                  : "text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]",
-              )}
-              title="MCP Hub"
-            >
-              <Cable
-                className={cn(
-                  "h-4 w-4 shrink-0",
-                  activeView === "mcp-hub" ? "text-violet-500" : "text-foreground/85",
-                )}
-              />
-              <span className="truncate">MCP</span>
-            </Button>
+            {showAgentHubs ? (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => onOpenSkillsHub?.()}
+                  className={cn(
+                    "sidebar-hub-menu-item h-[30px] w-full justify-start gap-3 rounded-lg px-3 text-[calc(14px*var(--zone-font-scale,1))] font-normal leading-5 shadow-none transition-colors",
+                    activeView === "skills-hub"
+                      ? "bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]"
+                      : "text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]",
+                  )}
+                  title="Skills Hub"
+                >
+                  <Blend
+                    className={cn(
+                      "h-4 w-4 shrink-0",
+                      activeView === "skills-hub" ? "text-amber-500" : "text-foreground/85",
+                    )}
+                  />
+                  <span className="truncate">Skills</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => onOpenMcpHub?.()}
+                  className={cn(
+                    "sidebar-hub-menu-item h-[30px] w-full justify-start gap-3 rounded-lg px-3 text-[calc(14px*var(--zone-font-scale,1))] font-normal leading-5 shadow-none transition-colors",
+                    activeView === "mcp-hub"
+                      ? "bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]"
+                      : "text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]",
+                  )}
+                  title="MCP Hub"
+                >
+                  <Cable
+                    className={cn(
+                      "h-4 w-4 shrink-0",
+                      activeView === "mcp-hub" ? "text-violet-500" : "text-foreground/85",
+                    )}
+                  />
+                  <span className="truncate">MCP</span>
+                </Button>
+              </>
+            ) : null}
           </div>
         </div>
 
@@ -2016,7 +2024,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                   onClick={handleProjectsCollapsedChange}
                   disabled={sectionsDisabled}
                 >
-                  <span>{t("chat.workspaceSection")}</span>
+                  <span>{workspaceSectionLabel ?? t("chat.workspaceSection")}</span>
                   <ChevronRight
                     aria-hidden="true"
                     className="h-3.5 w-3.5 shrink-0 opacity-0 transition-[opacity,transform] duration-300 ease-in-out group-hover:opacity-100"
@@ -2331,16 +2339,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
           </div>
         </div>
         <div className="shrink-0 border-t border-border/50 bg-[hsl(var(--sidebar-bg))] px-2 py-1.5">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={onOpenSettings}
-            className="h-8 w-full justify-start gap-2.5 rounded-lg px-2.5 text-[calc(13px*var(--zone-font-scale,1))] font-normal text-foreground/85 shadow-none hover:bg-foreground/[0.08] hover:text-foreground"
-            title={t("tooltip.settings")}
-          >
-            <Settings className="h-4 w-4 shrink-0 text-foreground/75" />
-            <span className="truncate">{t("tooltip.settings")}</span>
-          </Button>
+          {accountMenu}
         </div>
       </div>
     </aside>

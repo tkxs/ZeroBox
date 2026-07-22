@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AlertCircle,
   CheckCircle2,
   Copy,
-  AlertCircle,
   Key,
   Loader2,
   LogOut,
@@ -155,7 +155,7 @@ export function RelayProvidersSection({ settings, setSettings }: SettingsSection
             type="button"
             variant="outline"
             size="sm"
-            disabled={loading || syncing}
+            disabled={loading || syncing || creating}
             onClick={() => void syncProviders(true)}
           >
             {syncing ? (
@@ -213,7 +213,7 @@ export function RelayProvidersSection({ settings, setSettings }: SettingsSection
             当前账户还没有密钥
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="max-h-[min(22rem,34vh)] space-y-2 overflow-y-auto overscroll-contain rounded-xl border border-border/60 bg-muted/10 p-2 [scrollbar-gutter:stable]">
             {keys.map((key) => {
               const group = key.group ?? groups.find((item) => item.id === key.group_id);
               return (
@@ -259,40 +259,55 @@ export function RelayProvidersSection({ settings, setSettings }: SettingsSection
         )}
       </section>
 
-      <section className="space-y-3 border-t pt-5">
-        <div>
-          <h4 className="text-sm font-semibold">创建密钥</h4>
-          <p className="mt-1 text-xs text-muted-foreground">
-            可多选分组，每个分组会创建一条独立密钥。
-          </p>
+      <section className="space-y-4 rounded-2xl border border-border/60 bg-card p-4 sm:p-5">
+        <div className="flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <Plus className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <h4 className="text-sm font-semibold">创建密钥</h4>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              每个选中的分组会创建一条独立密钥，可用于对应的模型服务。
+            </p>
+          </div>
         </div>
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)_auto] md:items-end">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
           <div className="space-y-2">
-            <Label htmlFor="relay-key-name">名称</Label>
+            <Label htmlFor="relay-key-name">密钥名称</Label>
             <Input
               id="relay-key-name"
               value={keyName}
               onChange={(event) => setKeyName(event.target.value)}
               maxLength={80}
+              placeholder="例如：ZeroBox 网页端"
             />
+            <p className="text-[11px] text-muted-foreground">用于在密钥列表中识别用途。</p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="relay-key-group">分组</Label>
+            <Label htmlFor="relay-key-group">模型分组</Label>
             <GroupMultiSelect
               id="relay-key-group"
               groups={usableGroups}
               selectedIds={selectedGroupIds}
               onChange={setSelectedGroupIds}
+              disabled={creating || syncing}
             />
           </div>
+        </div>
+        <div className="flex flex-col gap-3 border-t border-border/60 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-muted-foreground">
+            {selectedGroupIds.length > 0
+              ? `将创建 ${selectedGroupIds.length} 条密钥`
+              : "请选择至少一个模型分组"}
+          </p>
           <Button
             type="button"
-            className="w-full md:w-auto"
-            disabled={creating || selectedGroupIds.length === 0}
-            onClick={createKey}
+            className="w-full sm:w-auto"
+            disabled={creating || syncing || selectedGroupIds.length === 0}
+            onClick={() => void createKey()}
           >
             {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            创建
+            {creating ? "创建中..." : "创建密钥"}
           </Button>
         </div>
       </section>

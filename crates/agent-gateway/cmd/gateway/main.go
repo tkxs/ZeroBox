@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/liveagent/agent-gateway/internal/account"
 	"github.com/liveagent/agent-gateway/internal/config"
 	"github.com/liveagent/agent-gateway/internal/observability"
 	"github.com/liveagent/agent-gateway/internal/server"
@@ -30,10 +31,30 @@ func main() {
 		slog.Warn("-grpc-addr is deprecated and ignored: the v1 gRPC listener was removed; desktop clients connect via /ws/v2/agent on the HTTP port")
 	}
 	sm := session.NewManager()
+	usaClient, err := account.NewUSAClient(cfg.USAZeroOrigin, cfg.RequestTimeout)
+	if err != nil {
+		fatal("invalid USA-Zero configuration", "err", err)
+	}
+	var accountStore account.Store = account.NewMemoryStore()
+	var closeAccountStore func() error
+	if cfg.DatabaseURL != "" || cfg.RedisURL != "" {
+		startupCtx, startupCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		persistentStore, storeErr := account.OpenPersistentStore(startupCtx, cfg.DatabaseURL, cfg.RedisURL)
+		startupCancel()
+		if storeErr != nil {
+			fatal("account storage startup failed", "err", storeErr)
+		}
+		accountStore = persistentStore
+		closeAccountStore = persistentStore.Close
+		slog.Info("account storage enabled", "postgres", true, "redis", true)
+	} else {
+		slog.Warn("DATABASE_URL and REDIS_URL are not configured; account sessions and devices use in-memory development storage")
+	}
+	accountService := account.NewService(accountStore, usaClient, cfg.WebSessionTTL, cfg.SelectionLeaseTTL)
 
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           server.NewHTTPServer(cfg, sm),
+		Handler:           server.NewHTTPServerWithAccountService(cfg, sm, accountService),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -67,5 +88,10 @@ func main() {
 
 	if err := httpServer.Shutdown(ctx); err != nil {
 		slog.Warn("http shutdown error", "err", err)
+	}
+	if closeAccountStore != nil {
+		if err := closeAccountStore(); err != nil {
+			slog.Warn("account storage close error", "err", err)
+		}
 	}
 }

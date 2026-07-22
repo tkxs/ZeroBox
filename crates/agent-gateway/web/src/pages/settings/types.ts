@@ -1,9 +1,11 @@
+import type { RelayDashboardStats, RelayUser } from "../../lib/relay/client";
 import type { AppSettings } from "../../lib/settings";
 import type { WebSettingsSaveState } from "../../lib/webSettings";
 
 export type SetSettingsFn = (updater: (prev: AppSettings) => AppSettings) => void;
 
 export type SectionId =
+  | "account"
   | "system"
   | "systemTools"
   | "providers"
@@ -21,6 +23,11 @@ export type SettingsPageProps = {
   onBack: () => void;
   initialSection?: SectionId;
   hiddenSections?: SectionId[];
+  relayUser: RelayUser;
+  relayStats: RelayDashboardStats | null;
+  onRelayUserChange: (user: RelayUser) => void;
+  onRelayStatsChange: (stats: RelayDashboardStats) => void;
+  runtimeKind?: "web_chat" | "device_agent";
 };
 
 export type SettingsSectionProps = {

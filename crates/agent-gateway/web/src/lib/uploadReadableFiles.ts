@@ -70,7 +70,7 @@ export async function importReadableFiles(
   const normalizedToken = token.trim();
   const normalizedWorkdir = workdir.trim();
   if (!normalizedToken) {
-    throw new Error("Gateway token is required");
+    throw new Error("Execution selection credential is required");
   }
   if (!normalizedWorkdir) {
     throw new Error("项目目录未选择，无法导入文件。");

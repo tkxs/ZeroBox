@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/liveagent/agent-gateway/internal/account"
 	"github.com/liveagent/agent-gateway/internal/config"
 	"github.com/liveagent/agent-gateway/internal/protocol/shared"
 	"github.com/liveagent/agent-gateway/internal/session"
@@ -29,13 +30,18 @@ const closeCodeUnauthorized = 4401
 
 // Server 聚合三条 v2 链路的依赖，由 http 路由层构造一次、复用于全部连接。
 type Server struct {
-	cfg *config.Config
-	sm  *session.Manager
+	cfg      *config.Config
+	sm       *session.Manager
+	accounts *account.Service
 }
 
 // NewServer 构造 v2 协议服务端。
-func NewServer(cfg *config.Config, sm *session.Manager) *Server {
-	return &Server{cfg: cfg, sm: sm}
+func NewServer(cfg *config.Config, sm *session.Manager, accounts ...*account.Service) *Server {
+	server := &Server{cfg: cfg, sm: sm}
+	if len(accounts) > 0 {
+		server.accounts = accounts[0]
+	}
+	return server
 }
 
 func (s *Server) upgrader() websocket.Upgrader {

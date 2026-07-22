@@ -14,13 +14,13 @@ import type {
   MentionComposerHandle,
 } from "@/components/chat/MentionComposer";
 import { SharedHistoryManagerModal } from "@/components/chat/SharedHistoryManagerModal";
+import { ExecutionEnvironmentSwitcher } from "@/components/ExecutionEnvironmentSwitcher";
 import { ChevronDown, PanelRightClose, PanelRightOpen, Terminal } from "@/components/icons";
 import type {
   GitCommitContextPayload,
   GitFileContextPayload,
 } from "@/components/project-tools/git-review";
 import { RightDockPanel } from "@/components/project-tools/RightDockPanel";
-import { RelayAccessGate } from "@/components/relay/RelayAccessGate";
 import { Button } from "@/components/ui/button";
 import { useConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -53,6 +53,7 @@ import {
   type ChatEntry,
   resolveConversationBrowserTitle,
 } from "@/lib/chatUi";
+import { resolveExecutionTarget } from "@/lib/executionTargets";
 import type { GatewayChatCommandInput } from "@/lib/gatewaySocket";
 import type {
   AgentStatus,
@@ -65,7 +66,13 @@ import type {
 import { parseHistoryMessagesJsonAsync } from "@/lib/historyParser";
 import { memoryDeleteProject } from "@/lib/memory/api";
 import { toModelValue } from "@/lib/providers/llm";
-import { RELAY_SESSION_CHANGED_EVENT } from "@/lib/relay/client";
+import {
+  getRelayDashboardStats,
+  getRelayProfile,
+  RELAY_SESSION_CHANGED_EVENT,
+  type RelayDashboardStats,
+  type RelayUser,
+} from "@/lib/relay/client";
 import {
   type ChatRuntimeControls,
   DEFAULT_WORKSPACE_PROJECT_ID,
@@ -139,8 +146,9 @@ import {
   normalizeRunningConversationItems,
 } from "@/lib/sidebar/webSidebarBackend";
 import { findWorkspaceProject, mergeWorkspaceProjectsWithHistory } from "@/lib/workspaceProjects";
+import { AccountLoginPage } from "@/pages/AccountLoginPage";
+import { CloudChatPage } from "@/pages/CloudChatPage";
 import { FloorNavRail } from "@/pages/chat/transcript/FloorNavRail";
-import { LoginPage } from "@/pages/LoginPage";
 import { SettingsSyncLoading } from "@/pages/SettingsSyncLoading";
 import { SharedHistoryPage } from "@/pages/SharedHistoryPage";
 import { WorkdirPickerModal } from "@/pages/settings/WorkdirPickerModal";
@@ -213,16 +221,32 @@ function scheduleIdleTask(task: () => void): () => void {
 
 export default function GatewayApp() {
   const historyShareToken = useMemo(() => parseHistoryShareToken(), []);
+  const desktopEmbedded = useMemo(
+    () => new URLSearchParams(window.location.search).get("controller_surface") === "desktop_embed",
+    [],
+  );
   const {
     token,
-    loginToken,
+    accountUser,
+    environments,
+    selection,
     authSubmitting,
     authError,
-    setLoginToken,
+    twoFactorRequired,
     setAuthError,
     login: handleLoginSubmit,
+    register: handleRegisterSubmit,
+    verifyTwoFactor,
+    switchExecutionTarget,
     clearSession,
   } = useGatewaySession(historyShareToken);
+  const workspaceSectionLabel = useMemo(() => {
+    if (!desktopEmbedded || selection?.runtime_kind !== "device_agent") return undefined;
+    return (
+      environments.find((environment) => environment.device_id === selection.device_id)?.name ??
+      "远程电脑"
+    );
+  }, [desktopEmbedded, environments, selection]);
   const { api, terminalClient, sftpClient, gitClient } = useGatewayClients(token);
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -266,16 +290,44 @@ export default function GatewayApp() {
   const { settings, setSettings, settingsSyncReady, settingsSyncError, settingsSaveState } =
     useGatewaySettingsSync({ token, api });
   const [relayReady, setRelayReady] = useState(false);
+  const [relayUser, setRelayUser] = useState<RelayUser | null>(null);
+  const [relayStats, setRelayStats] = useState<RelayDashboardStats | null>(null);
+
+  useEffect(() => {
+    if (!accountUser) return;
+    setRelayUser(accountUser);
+    setRelayReady(true);
+  }, [accountUser]);
 
   useEffect(() => {
     const handleRelaySessionChanged = () => {
       setRelayReady(false);
+      setRelayUser(null);
+      setRelayStats(null);
       setSettingsOpen(false);
       setOverlay("closed");
     };
     window.addEventListener(RELAY_SESSION_CHANGED_EVENT, handleRelaySessionChanged);
     return () => window.removeEventListener(RELAY_SESSION_CHANGED_EVENT, handleRelaySessionChanged);
   }, []);
+
+  const relayUserId = relayUser?.id;
+  useEffect(() => {
+    if (!relayReady || !relayUserId) return;
+    let cancelled = false;
+    void Promise.all([getRelayProfile(), getRelayDashboardStats()])
+      .then(([profile, stats]) => {
+        if (cancelled) return;
+        setRelayUser(profile);
+        setRelayStats(stats);
+      })
+      .catch(() => {
+        // Keep the session profile when optional account details are unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [relayReady, relayUserId]);
   const effectiveTheme = resolveEffectiveTheme(settings.theme);
   const isAgentMode = settings.system.executionMode !== "text";
   const [activeWorkspaceProjectId, setActiveWorkspaceProjectId] = useState<string>(
@@ -467,10 +519,48 @@ export default function GatewayApp() {
   const sidebarWorkdirs = useSidebarSelector(sidebarStore, (snapshot) => snapshot.workdirs);
   const sidebarConversationsById = useSidebarSelector(sidebarStore, (snapshot) => snapshot.byId);
 
-  const workspaceProjects = useMemo(
-    () => mergeWorkspaceProjectsWithHistory(settings.system, sidebarWorkdirs),
-    [settings.system, sidebarWorkdirs],
+  const selectedExecutionWorkspace = useMemo(
+    () => resolveExecutionTarget(environments, selection).workspace,
+    [environments, selection],
   );
+  const workspaceProjects = useMemo(() => {
+    const projects = mergeWorkspaceProjectsWithHistory(settings.system, sidebarWorkdirs);
+    if (selection?.runtime_kind !== "device_agent" || !selectedExecutionWorkspace) {
+      return projects;
+    }
+    const selectedPathKey = workspaceProjectPathKey(selectedExecutionWorkspace.path ?? "");
+    const index = projects.findIndex(
+      (project) =>
+        project.id === selectedExecutionWorkspace.id ||
+        (selectedPathKey !== "" && workspaceProjectPathKey(project.path) === selectedPathKey),
+    );
+    if (index >= 0) {
+      if (!selectedExecutionWorkspace.path) return projects;
+      return projects.map((project, projectIndex) =>
+        projectIndex === index
+          ? {
+              ...project,
+              id: selectedExecutionWorkspace.id,
+              name: selectedExecutionWorkspace.name || project.name,
+              path: selectedExecutionWorkspace.path ?? project.path,
+            }
+          : project,
+      );
+    }
+    if (!selectedExecutionWorkspace.path) return projects;
+    const now = Date.now();
+    return [
+      {
+        id: selectedExecutionWorkspace.id,
+        name: selectedExecutionWorkspace.name,
+        path: selectedExecutionWorkspace.path,
+        kind: "managed" as const,
+        createdAt: now,
+        updatedAt: now,
+      },
+      ...projects,
+    ];
+  }, [selectedExecutionWorkspace, selection?.runtime_kind, settings.system, sidebarWorkdirs]);
   const archivedWorkspaceProjectPathKeys = useMemo(
     () => new Set(settings.system.archivedWorkspaceProjectPaths.map(workspaceProjectPathKey)),
     [settings.system.archivedWorkspaceProjectPaths],
@@ -492,6 +582,12 @@ export default function GatewayApp() {
       setActiveWorkspaceProjectId(activeWorkspaceProject.id);
     }
   }, [activeWorkspaceProject?.id, activeWorkspaceProjectId]);
+  useEffect(() => {
+    if (selection?.runtime_kind !== "device_agent" || !selectedExecutionWorkspace?.id) return;
+    setActiveWorkspaceProjectId((current) =>
+      current === selectedExecutionWorkspace.id ? current : selectedExecutionWorkspace.id,
+    );
+  }, [selectedExecutionWorkspace?.id, selection?.runtime_kind]);
   const activeWorkspaceProjectPath = activeWorkspaceProject?.path.trim() ?? "";
 
   // Scope derivation: agent mode with a project → that workdir; agent mode
@@ -3330,7 +3426,7 @@ export default function GatewayApp() {
     transcriptStoreRegistry,
   ]);
 
-  const userMenuLabel = (status?.agent_id || "当前用户").trim() || "当前用户";
+  const userMenuLabel = relayUser?.username?.trim() || relayUser?.email.split("@")[0] || "当前用户";
   const userAvatarLabel = userMenuLabel.slice(0, 1).toUpperCase();
 
   const localeContextValue = useMemo(
@@ -3482,10 +3578,7 @@ export default function GatewayApp() {
   );
 
   const canShareHistory = Boolean(
-    api &&
-      settings.remote.enabled &&
-      settings.remote.gatewayUrl.trim() &&
-      settings.remote.token.trim(),
+    api && settings.remote.enabled && settings.remote.gatewayUrl.trim(),
   );
   // Sidebar rows, running dots, and project activity all render inside
   // <GatewaySidebarContainer/> from the sidebar store — no app-root memos.
@@ -3845,6 +3938,13 @@ export default function GatewayApp() {
     document.title = browserTitle;
   }, [browserTitle]);
   const transcriptBusy = displayedConversationBusy;
+  useEffect(() => {
+    if (!desktopEmbedded || window.parent === window) return;
+    window.parent.postMessage({ type: "zerobox:execution-busy", busy: transcriptBusy }, "*");
+    return () => {
+      window.parent.postMessage({ type: "zerobox:execution-busy", busy: false }, "*");
+    };
+  }, [desktopEmbedded, transcriptBusy]);
   // Pipeline pending (pre-first-token) shows the preparing status until the
   // stream's own tool_status takes over.
   const displayedHasPendingCommand =
@@ -3953,21 +4053,47 @@ export default function GatewayApp() {
     );
   }
 
-  if (!token) {
+  if (!accountUser) {
     return (
-      <LoginPage
-        token={loginToken}
+      <AccountLoginPage
         error={authError}
         isSubmitting={authSubmitting}
-        onTokenChange={(nextToken) => {
-          setLoginToken(nextToken);
-          if (authError) {
-            setAuthError(null);
-          }
-        }}
-        onSubmit={handleLoginSubmit}
+        twoFactorRequired={twoFactorRequired}
+        onSubmit={(email, password) => void handleLoginSubmit(email, password)}
+        onRegister={(input) => void handleRegisterSubmit(input)}
+        onSubmitTwoFactor={(code) => void verifyTwoFactor(code)}
+        onClearError={() => setAuthError(null)}
+        onSetError={setAuthError}
       />
     );
+  }
+
+  if (selection?.runtime_kind === "web_chat") {
+    return (
+      <LocaleContext.Provider value={localeContextValue}>
+        <CloudChatPage
+          user={relayUser ?? accountUser}
+          onUserChange={setRelayUser}
+          environments={environments}
+          selection={selection}
+          settings={settings}
+          setSettings={setSettings}
+          settingsSaveState={settingsSaveState}
+          onSwitch={async (environment, workspace, password) => {
+            const next = await switchExecutionTarget(environment, workspace, password);
+            if (next.runtime_kind === "device_agent") {
+              setActiveWorkspaceProjectId(workspace.id);
+            }
+            return next;
+          }}
+          onLogout={handleLogout}
+        />
+      </LocaleContext.Provider>
+    );
+  }
+
+  if (!token) {
+    return null;
   }
 
   if (!api) {
@@ -3989,17 +4115,7 @@ export default function GatewayApp() {
     );
   }
 
-  if (!relayReady) {
-    return (
-      <LocaleContext.Provider value={localeContextValue}>
-        <RelayAccessGate
-          settings={settings}
-          setSettings={setSettings}
-          onReady={() => setRelayReady(true)}
-        />
-      </LocaleContext.Provider>
-    );
-  }
+  if (!relayReady || !relayUser) return null;
 
   return (
     <LocaleContext.Provider value={localeContextValue}>
@@ -4026,6 +4142,7 @@ export default function GatewayApp() {
               fontScale={settings.customSettings.fontScale.sidebar}
               activeView={activeView}
               showProjects={isAgentMode}
+              workspaceSectionLabel={workspaceSectionLabel}
               projects={workspaceProjects}
               activeProjectId={activeWorkspaceProject?.id}
               missingProjectPathKeys={missingWorkspaceProjectPathKeys}
@@ -4061,7 +4178,21 @@ export default function GatewayApp() {
               onLocalDraftDeleted={handleSidebarLocalDraftDeleted}
               onConversationsRemoved={handleSidebarConversationsRemoved}
               onCloseSidebar={() => setSidebarOpen(false)}
-              onOpenSettings={() => openSettings()}
+              accountMenu={
+                <UserMenu
+                  open={userMenuOpen}
+                  onOpenChange={setUserMenuOpen}
+                  userMenuLabel={userMenuLabel}
+                  userAvatarLabel={userAvatarLabel}
+                  email={relayUser.email}
+                  balance={relayUser.balance}
+                  todayTokens={relayStats?.today_tokens}
+                  avatarUrl={relayUser.avatar_url}
+                  online={status?.online === true}
+                  onOpenSettings={() => openSettings("account")}
+                  onLogout={handleLogout}
+                />
+              }
               onOpenSkillsHub={handleSidebarOpenSkillsHub}
               onOpenMcpHub={handleSidebarOpenMcpHub}
             />
@@ -4154,13 +4285,29 @@ export default function GatewayApp() {
                     }
                     onOpenSidebar={() => setSidebarOpen(true)}
                     preThemeActions={
-                      <span
-                        className={`gateway-online-pill${status?.online ? " gateway-online-pill-active" : ""}`}
-                        title={status?.online ? "Online" : "Offline"}
-                        aria-label={status?.online ? "Online" : "Offline"}
-                      >
-                        {status?.online ? "Online" : "Offline"}
-                      </span>
+                      <>
+                        {!desktopEmbedded ? (
+                          <ExecutionEnvironmentSwitcher
+                            environments={environments}
+                            selection={selection}
+                            disabled={transcriptBusy}
+                            onSwitch={async (environment, workspace, password) => {
+                              await switchExecutionTarget(environment, workspace, password);
+                              setActiveWorkspaceProjectId(workspace.id);
+                              transcriptStoreRegistry.clear();
+                              setConversationId("");
+                              setSelectedHistoryId("");
+                              setSelectedHistory(null);
+                            }}
+                          />
+                        ) : null}
+                        <span
+                          className={`gateway-online-pill${status?.online ? " gateway-online-pill-active" : ""}`}
+                          title={status?.online ? "Online" : "Offline"}
+                        >
+                          {status?.online ? "Online" : "Offline"}
+                        </span>
+                      </>
                     }
                     trailingActions={
                       <>
@@ -4190,14 +4337,6 @@ export default function GatewayApp() {
                             </span>
                           ) : null}
                         </Button>
-                        <UserMenu
-                          open={userMenuOpen}
-                          onOpenChange={setUserMenuOpen}
-                          userMenuLabel={userMenuLabel}
-                          userAvatarLabel={userAvatarLabel}
-                          sessionId={status?.session_id}
-                          onLogout={handleLogout}
-                        />
                       </>
                     }
                   />
@@ -4502,6 +4641,10 @@ export default function GatewayApp() {
                 onBack={closeSettings}
                 initialSection={settingsSection}
                 hiddenSections={["remote"]}
+                relayUser={relayUser}
+                relayStats={relayStats}
+                onRelayUserChange={setRelayUser}
+                onRelayStatsChange={setRelayStats}
               />
             </div>
           ) : null}

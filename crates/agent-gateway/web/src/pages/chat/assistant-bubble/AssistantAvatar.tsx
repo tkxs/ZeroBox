@@ -10,7 +10,7 @@ export function AssistantAvatar(props: { className?: string }) {
       )}
     >
       <img
-        src="/icon-simple.png"
+        src="/zerobox-logo.png"
         alt=""
         aria-hidden="true"
         draggable={false}

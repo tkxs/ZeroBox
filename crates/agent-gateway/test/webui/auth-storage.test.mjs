@@ -70,7 +70,7 @@ test("verifyGatewayAccessToken returns normalized token after successful status 
   assert.equal(token, "good-token");
 });
 
-test("gateway token storage persists and clears the single WebUI token key", () => {
+test("operator token storage persists and clears the diagnostics token key", () => {
   installWindow();
 
   assert.equal(storage.loadToken(), "");
@@ -78,4 +78,19 @@ test("gateway token storage persists and clears the single WebUI token key", () 
   assert.equal(storage.loadToken(), "abc123");
   storage.clearToken();
   assert.equal(storage.loadToken(), "");
+});
+
+test("ephemeral execution credential overrides storage without being persisted", () => {
+  const store = installWindow();
+  storage.saveToken("operator-token");
+
+  storage.setEphemeralCredential("selection-credential");
+  assert.equal(storage.loadToken(), "selection-credential");
+  assert.equal(store.get("liveagent.gateway.token"), "operator-token");
+
+  storage.setEphemeralCredential("");
+  assert.equal(storage.loadToken(), "");
+  storage.setEphemeralCredential(null);
+  assert.equal(storage.loadToken(), "operator-token");
+  storage.clearToken();
 });

@@ -25,6 +25,16 @@ func TestLoadNormalizesTokenAndTLSPaths(t *testing.T) {
 	}
 }
 
+func TestLoadAllowsOperatorDiagnosticsToBeDisabled(t *testing.T) {
+	t.Setenv("LIVEAGENT_GATEWAY_OPERATOR_TOKEN", "")
+	t.Setenv("LIVEAGENT_GATEWAY_TOKEN", "")
+	resetFlagsForTest(t)
+	cfg := Load()
+	if cfg.OperatorToken != "" || cfg.Token != "" {
+		t.Fatalf("operator token = %q, want diagnostics disabled", cfg.OperatorToken)
+	}
+}
+
 func TestLoadWebSocketHeartbeatGrace(t *testing.T) {
 	t.Setenv("LIVEAGENT_GATEWAY_TOKEN", "dev-token")
 	resetFlagsForTest(t)
@@ -111,6 +121,22 @@ func TestLoadUsesRailwayPortForHTTPDefault(t *testing.T) {
 
 	if cfg.HTTPAddr != ":8080" {
 		t.Fatalf("HTTPAddr = %q, want :8080", cfg.HTTPAddr)
+	}
+}
+
+func TestLoadUsesStandaloneDevelopmentDefaults(t *testing.T) {
+	t.Setenv("PORT", "")
+	t.Setenv("LIVEAGENT_GATEWAY_HTTP_ADDR", "")
+	t.Setenv("LIVEAGENT_GATEWAY_COOKIE_SECURE", "")
+	t.Setenv("LIVEAGENT_GATEWAY_TLS_CERT", "")
+	t.Setenv("LIVEAGENT_GATEWAY_TLS_KEY", "")
+	resetFlagsForTest(t)
+	cfg := Load()
+	if cfg.HTTPAddr != ":3001" {
+		t.Fatalf("HTTPAddr = %q, want :3001", cfg.HTTPAddr)
+	}
+	if cfg.CookieSecure {
+		t.Fatal("CookieSecure = true, want false for standalone HTTP development")
 	}
 }
 

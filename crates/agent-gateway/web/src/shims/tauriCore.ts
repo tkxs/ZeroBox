@@ -20,7 +20,7 @@ async function readGatewayStatus(): Promise<GatewayRuntimeStatus> {
       enabled: false,
       configured: false,
       gatewayUrl: typeof window !== "undefined" ? window.location.origin : "",
-      lastError: "未配置 Gateway Token",
+      lastError: "尚未选择可用的执行环境",
     };
   }
 

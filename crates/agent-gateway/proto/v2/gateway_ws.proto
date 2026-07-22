@@ -21,6 +21,12 @@ enum ClientRole {
   CLIENT_ROLE_AGENT = 2;
 }
 
+message DeviceWorkspace {
+  string id = 1;
+  string name = 2;
+  string path = 3;
+}
+
 // ClientHello 是所有 v2 连接的第一帧。
 message ClientHello {
   // 协议版本，当前恒为 2；未知版本被服务端拒绝。
@@ -34,6 +40,16 @@ message ClientHello {
   // 客户端标识（如 "webui" / "desktop"），仅用于观测与日志。
   string client_name = 6;
   string client_version = 7;
+  // 新版 Agent 使用设备凭证；旧 token 字段在迁移期仍可解析。
+  string device_id = 8;
+  string device_credential = 9;
+  string device_name = 10;
+  string platform = 11;
+  repeated DeviceWorkspace workspaces = 12;
+  // Browser/controller 使用账号 Cookie + selection lease 选择目标设备。
+  string selection_lease = 13;
+  string workspace_id = 14;
+  string runtime_kind = 15;
 }
 
 // ServerHello 是服务端对 ClientHello 的应答；ok=false 时随即关闭连接。
@@ -47,6 +63,10 @@ message ServerHello {
   // 服务端心跳周期与消息大小上限，客户端应据此配置本地看门狗与分片。
   uint32 heartbeat_period_seconds = 5;
   uint64 max_message_bytes = 6;
+  int64 user_id = 7;
+  string device_id = 8;
+  string workspace_id = 9;
+  string runtime_kind = 10;
 }
 
 // PingFrame / PongFrame 是应用层心跳：WS 控制帧 ping 探测网络栈，本帧探测页面 JS/事件循环存活。

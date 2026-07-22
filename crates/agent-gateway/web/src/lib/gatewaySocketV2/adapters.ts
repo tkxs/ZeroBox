@@ -88,6 +88,7 @@ import type {
   WebClientFrame,
   WebServerFrame,
 } from "@/lib/proto/gen/proto/v2/gateway_ws_pb";
+import { decodeSelectionCredential } from "@/lib/executionTargets";
 import {
   ChatActivitiesRequestSchema,
   ChatPrepareRequestSchema,
@@ -179,6 +180,7 @@ function frameError(message: string): never {
 // ---------------------------------------------------------------------------
 
 export function encodeHelloFrame(requestId: string, token: string): WireBytes {
+  const selection = decodeSelectionCredential(token);
   const frame = create(WebClientFrameSchema, {
     requestId,
     payload: {
@@ -186,9 +188,12 @@ export function encodeHelloFrame(requestId: string, token: string): WireBytes {
       value: create(ClientHelloSchema, {
         protocolVersion: GATEWAY_V2_PROTOCOL_VERSION,
         role: ClientRole.BROWSER,
-        token,
+        token: selection ? "" : token,
         clientName: "webui",
         clientVersion: "",
+        selectionLease: selection?.lease ?? "",
+        workspaceId: selection?.workspaceId ?? "",
+        runtimeKind: selection?.runtimeKind ?? "",
       }),
     },
   });
@@ -1595,15 +1600,19 @@ export type TerminalWireHeader = {
 };
 
 export function encodeTerminalHelloFrame(token: string): WireBytes {
+  const selection = decodeSelectionCredential(token);
   const frame = create(TerminalClientFrameSchema, {
     payload: {
       case: "hello",
       value: create(ClientHelloSchema, {
         protocolVersion: GATEWAY_V2_PROTOCOL_VERSION,
         role: ClientRole.BROWSER,
-        token,
+        token: selection ? "" : token,
         clientName: "webui",
         clientVersion: "",
+        selectionLease: selection?.lease ?? "",
+        workspaceId: selection?.workspaceId ?? "",
+        runtimeKind: selection?.runtimeKind ?? "",
       }),
     },
   });

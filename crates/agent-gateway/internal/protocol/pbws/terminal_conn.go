@@ -11,6 +11,8 @@ import (
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/liveagent/agent-gateway/internal/account"
+	"github.com/liveagent/agent-gateway/internal/auth"
 	"github.com/liveagent/agent-gateway/internal/observability"
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
 	gatewayv2 "github.com/liveagent/agent-gateway/internal/proto/v2"
@@ -29,16 +31,20 @@ const terminalWriteQueueSize = 1024
 func (s *Server) TerminalHandler() http.Handler {
 	upgrader := s.upgrader()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		controllerSessionID := ""
+		if cookie, cookieErr := r.Cookie("zerobox_session"); cookieErr == nil {
+			controllerSessionID = cookie.Value
+		}
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
 		conn.SetReadLimit(s.readLimit())
-		s.serveTerminal(conn)
+		s.serveTerminal(conn, controllerSessionID)
 	})
 }
 
-func (s *Server) serveTerminal(conn *websocket.Conn) {
+func (s *Server) serveTerminal(conn *websocket.Conn, controllerSessionID string) {
 	defer func() { _ = conn.Close() }()
 
 	frame, ok := readTerminalFrame(conn)
@@ -51,7 +57,39 @@ func (s *Server) serveTerminal(conn *websocket.Conn) {
 	if wantRole == gatewayv2.ClientRole_CLIENT_ROLE_UNSPECIFIED {
 		wantRole = gatewayv2.ClientRole_CLIENT_ROLE_BROWSER
 	}
-	verdict := s.vetHello(hello, wantRole)
+	verdict := s.vetHelloBase(hello, wantRole)
+	targetManager := s.sm
+	var userID int64
+	deviceID, workspaceID, runtimeKind := "", "", ""
+	legacyAuthorized := verdict.ok && auth.ValidateToken(hello.GetToken(), s.cfg.Token)
+	if verdict.ok && !legacyAuthorized && s.accounts != nil {
+		if wantRole == gatewayv2.ClientRole_CLIENT_ROLE_AGENT {
+			device, authErr := s.accounts.AuthenticateDevice(context.Background(), hello.GetDeviceId(), hello.GetDeviceCredential())
+			if authErr != nil {
+				verdict = helloVerdict{message: "unauthorized device"}
+			} else {
+				userID, deviceID, runtimeKind = device.UserID, device.ID, "device_agent"
+				targetManager = s.sm.DeviceManager(userID, deviceID)
+			}
+		} else {
+			var accountSession *account.Session
+			var lease *account.SelectionLease
+			var authErr error
+			if controllerSessionID != "" {
+				accountSession, lease, authErr = s.accounts.ValidateSelection(context.Background(), controllerSessionID, hello.GetSelectionLease())
+			} else {
+				accountSession, lease, authErr = s.accounts.ValidateDesktopSelection(context.Background(), hello.GetToken(), hello.GetSelectionLease())
+			}
+			if authErr != nil || lease.RuntimeKind != "device_agent" || hello.GetWorkspaceId() != lease.WorkspaceID {
+				verdict = helloVerdict{message: "invalid selection lease"}
+			} else {
+				userID, deviceID, workspaceID, runtimeKind = accountSession.UserID, lease.DeviceID, lease.WorkspaceID, lease.RuntimeKind
+				targetManager = s.sm.DeviceManager(userID, deviceID)
+			}
+		}
+	} else if verdict.ok && !legacyAuthorized {
+		verdict = helloVerdict{message: "unauthorized"}
+	}
 	if !verdict.ok {
 		_ = writeDirectMessage(conn, s.writeTimeout(), &gatewayv2.TerminalServerFrame{
 			Payload: &gatewayv2.TerminalServerFrame_Hello{
@@ -63,7 +101,7 @@ func (s *Server) serveTerminal(conn *websocket.Conn) {
 	}
 	if err := writeDirectMessage(conn, s.writeTimeout(), &gatewayv2.TerminalServerFrame{
 		Payload: &gatewayv2.TerminalServerFrame_Hello{
-			Hello: s.serverHello(true, "", ""),
+			Hello: s.serverHelloFor(true, "", "", userID, deviceID, workspaceID, runtimeKind),
 		},
 	}); err != nil {
 		return
@@ -71,11 +109,11 @@ func (s *Server) serveTerminal(conn *websocket.Conn) {
 
 	if wantRole == gatewayv2.ClientRole_CLIENT_ROLE_AGENT {
 		observability.Usage.V2TerminalConnectsTotal.Add(1)
-		s.serveTerminalAgent(conn)
+		s.serveTerminalAgent(conn, targetManager)
 		return
 	}
 	observability.Usage.V2TerminalConnectsTotal.Add(1)
-	s.serveTerminalBrowser(conn)
+	s.serveTerminalBrowser(conn, targetManager)
 }
 
 func readTerminalFrame(conn *websocket.Conn) (*gatewayv2.TerminalClientFrame, bool) {
@@ -99,9 +137,9 @@ func readTerminalFrame(conn *websocket.Conn) (*gatewayv2.TerminalClientFrame, bo
 // Agent 角色（对应 v1 gRPC AgentTerminalConnect）
 // ---------------------------------------------------------------------------
 
-func (s *Server) serveTerminalAgent(conn *websocket.Conn) {
+func (s *Server) serveTerminalAgent(conn *websocket.Conn, sm *session.Manager) {
 	toAgent := make(chan *gatewayv1.TerminalStreamFrame, 4096)
-	cleanup := s.sm.RegisterTerminalStreamToAgent(toAgent)
+	cleanup := sm.RegisterTerminalStreamToAgent(toAgent)
 	defer cleanup()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -135,7 +173,7 @@ func (s *Server) serveTerminalAgent(conn *websocket.Conn) {
 			return
 		}
 		if streamFrame := frame.GetFrame(); streamFrame != nil {
-			s.sm.BroadcastTerminalStreamFrame(streamFrame)
+			sm.BroadcastTerminalStreamFrame(streamFrame)
 		}
 	}
 }
@@ -174,10 +212,10 @@ type terminalBrowserConn struct {
 	streams  map[string]struct{}
 }
 
-func (s *Server) serveTerminalBrowser(conn *websocket.Conn) {
+func (s *Server) serveTerminalBrowser(conn *websocket.Conn, sm *session.Manager) {
 	c := &terminalBrowserConn{
 		srv:      s,
-		sm:       s.sm,
+		sm:       sm,
 		conn:     conn,
 		out:      make(chan []byte, terminalWriteQueueSize),
 		done:     make(chan struct{}),

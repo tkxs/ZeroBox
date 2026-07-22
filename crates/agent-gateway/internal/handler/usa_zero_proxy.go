@@ -13,24 +13,32 @@ import (
 )
 
 const (
-	usaZeroUpstreamOrigin = "http://127.0.0.1:8080"
-	usaZeroRoutePrefix    = "/api/usa-zero/"
-	usaZeroAPIPathPrefix  = "/api/v1/"
-	usaZeroAuthHeader     = "X-USA-Zero-Authorization"
-	usaZeroMaxBodyBytes   = 2 << 20
+	defaultUSAZeroupstreamOrigin = "http://127.0.0.1:8080"
+	usaZeroRoutePrefix           = "/api/usa-zero/"
+	usaZeroAPIPathPrefix         = "/api/v1/"
+	usaZeroAuthHeader            = "X-USA-Zero-Authorization"
+	usaZeroMaxBodyBytes          = 2 << 20
 )
 
 // USAZeroProxy exposes only the local USA-零 API through the authenticated
 // Gateway. The upstream is deliberately fixed and cannot be supplied by WebUI.
-func USAZeroProxy(timeout time.Duration) http.HandlerFunc {
-	return usaZeroProxyWithTransport(timeout, nil)
+func USAZeroProxy(timeout time.Duration, upstreamOrigin ...string) http.HandlerFunc {
+	origin := defaultUSAZeroupstreamOrigin
+	if len(upstreamOrigin) > 0 && strings.TrimSpace(upstreamOrigin[0]) != "" {
+		origin = strings.TrimRight(strings.TrimSpace(upstreamOrigin[0]), "/")
+	}
+	return usaZeroProxyWithOriginAndTransport(timeout, origin, nil)
 }
 
 func usaZeroProxyWithTransport(timeout time.Duration, transport http.RoundTripper) http.HandlerFunc {
+	return usaZeroProxyWithOriginAndTransport(timeout, defaultUSAZeroupstreamOrigin, transport)
+}
+
+func usaZeroProxyWithOriginAndTransport(timeout time.Duration, origin string, transport http.RoundTripper) http.HandlerFunc {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	target, err := url.Parse(usaZeroUpstreamOrigin)
+	target, err := url.Parse(origin)
 	if err != nil {
 		panic(err)
 	}

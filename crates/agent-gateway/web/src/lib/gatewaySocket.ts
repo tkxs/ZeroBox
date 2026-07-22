@@ -1600,7 +1600,7 @@ export class GatewayWebSocketClient {
   // conversation subscription (persistent, run-agnostic) carries the reply.
   async chatCommand(input: GatewayChatCommandInput): Promise<ChatCommandAccepted> {
     if (this.token.trim() === "") {
-      throw new Error("Gateway token is required");
+      throw new Error("Gateway authentication credential is required");
     }
     // Build exactly once: the gateway deduplicates by client_request_id, so a
     // lost acknowledgement can be retried after reconnect without dispatching
@@ -2781,7 +2781,7 @@ export class GatewayWebSocketClient {
       throw new Error("Gateway WebSocket client has been disposed");
     }
     if (this.token.trim() === "") {
-      throw new Error("Gateway token is required");
+      throw new Error("Gateway authentication credential is required");
     }
     if (this.socket && this.authenticated && this.socket.readyState === WebSocket.OPEN) {
       if (this.shouldRecycleAuthenticatedSocket()) {

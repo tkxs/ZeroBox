@@ -18,6 +18,17 @@ type helloVerdict struct {
 
 // vetHello 校验 ClientHello 的协议版本、角色与令牌（常量时间比较）。
 func (s *Server) vetHello(hello *gatewayv2.ClientHello, wantRole gatewayv2.ClientRole) helloVerdict {
+	verdict := s.vetHelloBase(hello, wantRole)
+	if !verdict.ok {
+		return verdict
+	}
+	if !auth.ValidateToken(hello.GetToken(), s.cfg.Token) {
+		return helloVerdict{message: "unauthorized"}
+	}
+	return helloVerdict{ok: true}
+}
+
+func (s *Server) vetHelloBase(hello *gatewayv2.ClientHello, wantRole gatewayv2.ClientRole) helloVerdict {
 	if hello == nil {
 		return helloVerdict{message: "hello frame is required"}
 	}
@@ -29,10 +40,16 @@ func (s *Server) vetHello(hello *gatewayv2.ClientHello, wantRole gatewayv2.Clien
 	if role != gatewayv2.ClientRole_CLIENT_ROLE_UNSPECIFIED && role != wantRole {
 		return helloVerdict{message: "unexpected client role"}
 	}
-	if !auth.ValidateToken(hello.GetToken(), s.cfg.Token) {
-		return helloVerdict{message: "unauthorized"}
-	}
 	return helloVerdict{ok: true}
+}
+
+func (s *Server) serverHelloFor(ok bool, message, sessionID string, userID int64, deviceID, workspaceID, runtimeKind string) *gatewayv2.ServerHello {
+	hello := s.serverHello(ok, message, sessionID)
+	hello.UserId = userID
+	hello.DeviceId = strings.TrimSpace(deviceID)
+	hello.WorkspaceId = strings.TrimSpace(workspaceID)
+	hello.RuntimeKind = strings.TrimSpace(runtimeKind)
+	return hello
 }
 
 // serverHello 构造握手应答；sessionID 仅 agent 角色使用。

@@ -11,7 +11,16 @@ import (
 const DefaultGRPCMaxMessageBytes = 64 * 1024 * 1024
 
 type Config struct {
+	// Token is the legacy field name for OperatorToken. It remains populated so
+	// older startup code and tests keep working during the migration.
 	Token                    string
+	OperatorToken            string
+	USAZeroOrigin            string
+	DatabaseURL              string
+	RedisURL                 string
+	WebSessionTTL            time.Duration
+	SelectionLeaseTTL        time.Duration
+	CookieSecure             bool
 	HTTPAddr                 string
 	TLSCert                  string
 	TLSKey                   string
@@ -42,7 +51,13 @@ type Config struct {
 func Load() *Config {
 	cfg := &Config{}
 
-	flag.StringVar(&cfg.Token, "token", getenv("LIVEAGENT_GATEWAY_TOKEN", ""), "shared authentication token")
+	flag.StringVar(&cfg.OperatorToken, "token", getenv("LIVEAGENT_GATEWAY_OPERATOR_TOKEN", getenv("LIVEAGENT_GATEWAY_TOKEN", "")), "operator token for diagnostics and migration compatibility")
+	flag.StringVar(&cfg.USAZeroOrigin, "usa-zero-origin", getenv("USA_ZERO_ORIGIN", "http://127.0.0.1:8080"), "USA-Zero account service origin")
+	flag.StringVar(&cfg.DatabaseURL, "database-url", getenv("DATABASE_URL", ""), "PostgreSQL connection URL for account and device data")
+	flag.StringVar(&cfg.RedisURL, "redis-url", getenv("REDIS_URL", ""), "Redis URL for web sessions, presence and selection leases")
+	flag.DurationVar(&cfg.WebSessionTTL, "web-session-ttl", getenvDuration("LIVEAGENT_GATEWAY_WEB_SESSION_TTL", 30*24*time.Hour), "web account session lifetime")
+	flag.DurationVar(&cfg.SelectionLeaseTTL, "selection-lease-ttl", getenvDuration("LIVEAGENT_GATEWAY_SELECTION_LEASE_TTL", 8*time.Hour), "execution target selection lease lifetime")
+	flag.BoolVar(&cfg.CookieSecure, "cookie-secure", getenvBool("LIVEAGENT_GATEWAY_COOKIE_SECURE", defaultCookieSecure()), "set Secure on account session cookies")
 	flag.StringVar(&cfg.GRPCAddr, "grpc-addr", getenv("LIVEAGENT_GATEWAY_GRPC_ADDR", ""), "deprecated, no-op (v1 gRPC removed; kept for startup-script compatibility)")
 	flag.StringVar(&cfg.HTTPAddr, "http-addr", getenv("LIVEAGENT_GATEWAY_HTTP_ADDR", defaultHTTPAddr()), "HTTP listen address")
 	flag.StringVar(&cfg.TLSCert, "tls-cert", getenv("LIVEAGENT_GATEWAY_TLS_CERT", ""), "TLS certificate path")
@@ -62,14 +77,14 @@ func Load() *Config {
 	flag.DurationVar(&cfg.CommandQueueTimeout, "command-queue-timeout", getenvDuration("LIVEAGENT_GATEWAY_COMMAND_QUEUE_TIMEOUT", 30*time.Second), "deprecated, no-op (kept for startup-script compatibility)")
 	flag.Parse()
 
-	cfg.Token = strings.TrimSpace(cfg.Token)
+	cfg.OperatorToken = strings.TrimSpace(cfg.OperatorToken)
+	cfg.Token = cfg.OperatorToken
+	cfg.USAZeroOrigin = strings.TrimRight(strings.TrimSpace(cfg.USAZeroOrigin), "/")
+	cfg.DatabaseURL = strings.TrimSpace(cfg.DatabaseURL)
+	cfg.RedisURL = strings.TrimSpace(cfg.RedisURL)
 	cfg.TLSCert = strings.TrimSpace(cfg.TLSCert)
 	cfg.TLSKey = strings.TrimSpace(cfg.TLSKey)
 
-	if cfg.Token == "" {
-		flag.Usage()
-		panic("gateway token is required")
-	}
 	if cfg.GRPCMaxMessageBytes <= 0 {
 		cfg.GRPCMaxMessageBytes = DefaultGRPCMaxMessageBytes
 	}
@@ -100,6 +115,15 @@ func Load() *Config {
 	if cfg.RelayBufferSeconds <= 0 {
 		cfg.RelayBufferSeconds = 30
 	}
+	if cfg.WebSessionTTL <= 0 {
+		cfg.WebSessionTTL = 30 * 24 * time.Hour
+	}
+	if cfg.SelectionLeaseTTL <= 0 {
+		cfg.SelectionLeaseTTL = 8 * time.Hour
+	}
+	if cfg.USAZeroOrigin == "" {
+		cfg.USAZeroOrigin = "http://127.0.0.1:8080"
+	}
 	if cfg.CommandQueueTimeout <= 0 {
 		cfg.CommandQueueTimeout = 30 * time.Second
 	}
@@ -117,12 +141,20 @@ func getenv(key, fallback string) string {
 func defaultHTTPAddr() string {
 	port := strings.TrimSpace(os.Getenv("PORT"))
 	if port == "" {
-		return ":443"
+		return ":3001"
 	}
 	if strings.HasPrefix(port, ":") {
 		return port
 	}
 	return ":" + port
+}
+
+func defaultCookieSecure() bool {
+	if strings.TrimSpace(os.Getenv("PORT")) != "" {
+		return true
+	}
+	return strings.TrimSpace(os.Getenv("LIVEAGENT_GATEWAY_TLS_CERT")) != "" &&
+		strings.TrimSpace(os.Getenv("LIVEAGENT_GATEWAY_TLS_KEY")) != ""
 }
 
 func getenvDuration(key string, fallback time.Duration) time.Duration {
@@ -144,6 +176,18 @@ func getenvInt(key string, fallback int) int {
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func getenvBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
 		return fallback
 	}
 	return parsed

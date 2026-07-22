@@ -64,7 +64,7 @@ export function SharedHistoryPage({ token }: SharedHistoryPageProps) {
           <header className="history-share-header">
             <div className="flex min-w-0 items-center gap-3">
               <img
-                src="/icon-simple.png"
+                src="/zerobox-logo.png"
                 alt=""
                 aria-hidden="true"
                 draggable={false}

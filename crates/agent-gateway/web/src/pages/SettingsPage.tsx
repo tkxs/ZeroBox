@@ -8,11 +8,13 @@ import {
   Cpu,
   Key,
   Settings2,
+  Shield,
   Wrench,
   Zap,
 } from "../components/icons";
 
 import { useLocale } from "../i18n";
+import { AccountSection } from "./settings/AccountSection";
 import { AgentsSection } from "./settings/AgentsSection";
 import { CronSection } from "./settings/CronSection";
 import { HooksSection } from "./settings/HooksSection";
@@ -92,6 +94,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: "settings.groupGeneral",
     items: [
+      { id: "account", icon: <Shield className="h-4 w-4" /> },
       { id: "system", icon: <Settings2 className="h-4 w-4" /> },
       { id: "providers", icon: <Cpu className="h-4 w-4" /> },
       { id: "agents", icon: <BookOpen className="h-4 w-4" /> },
@@ -128,11 +131,17 @@ export function SettingsPage(props: SettingsPageProps) {
     onBack,
     initialSection = "system",
     hiddenSections = [],
+    relayUser,
+    relayStats,
+    onRelayUserChange,
+    onRelayStatsChange,
+    runtimeKind = "device_agent",
   } = props;
   const { t } = useLocale();
   const [section, setSection] = useState<SectionId>(initialSection);
 
   const sectionLabels: Record<SectionId, string> = {
+    account: t("settings.navAccount"),
     system: t("settings.navSystem"),
     systemTools: t("settings.navSystemTools"),
     providers: t("settings.navProviders"),
@@ -171,10 +180,25 @@ export function SettingsPage(props: SettingsPageProps) {
   const saveIndicator = getSaveIndicator(saveState, t);
   const sectionContent = (() => {
     switch (section) {
+      case "account":
+        return (
+          <AccountSection
+            user={relayUser}
+            stats={relayStats}
+            onUserChange={onRelayUserChange}
+            onStatsChange={onRelayStatsChange}
+          />
+        );
       case "providers":
         return <RelayProvidersSection settings={settings} setSettings={setSettings} />;
       case "system":
-        return <SystemSettingsForm settings={settings} setSettings={setSettings} />;
+        return (
+          <SystemSettingsForm
+            settings={settings}
+            setSettings={setSettings}
+            runtimeKind={runtimeKind}
+          />
+        );
       case "systemTools":
         return <SystemToolsSection settings={settings} setSettings={setSettings} />;
       case "hooks":

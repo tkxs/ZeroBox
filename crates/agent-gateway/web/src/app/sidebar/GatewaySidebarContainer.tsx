@@ -3,7 +3,7 @@
 // list updates, per-row mutations) re-render this subtree only — never
 // GatewayApp. Renders the per-end <ChatHistorySidebar/> view.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatHistorySidebar } from "@/components/chat/ChatHistorySidebar";
 import { useLocale } from "@/i18n";
 import type { ChatHistorySummary } from "@/lib/chat/chatHistory";
@@ -76,6 +76,7 @@ export type GatewaySidebarContainerProps = {
   fontScale?: number;
   activeView: "chat" | "skills-hub" | "mcp-hub";
   showProjects: boolean;
+  workspaceSectionLabel?: string;
   // Merged (settings + history workdirs), unsorted: sorting happens here on
   // the store's activity snapshot so project reordering never re-renders
   // GatewayApp.
@@ -124,7 +125,7 @@ export type GatewaySidebarContainerProps = {
   // migrates the selection when the displayed conversation vanished.
   onConversationsRemoved: (ids: readonly string[]) => void;
   onCloseSidebar: () => void;
-  onOpenSettings: () => void;
+  accountMenu: ReactNode;
   onOpenSkillsHub: () => void;
   onOpenMcpHub: () => void;
 };
@@ -315,6 +316,7 @@ export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
       fontScale={props.fontScale}
       activeView={props.activeView}
       showProjects={props.showProjects}
+      workspaceSectionLabel={props.workspaceSectionLabel}
       projects={sortedProjects}
       activeProjectId={props.activeProjectId}
       missingProjectPathKeys={props.missingProjectPathKeys}
@@ -352,7 +354,7 @@ export function GatewaySidebarContainer(props: GatewaySidebarContainerProps) {
       onDeleteConversation={handleDeleteConversation}
       onLoadMore={handleLoadMore}
       onCloseSidebar={props.onCloseSidebar}
-      onOpenSettings={props.onOpenSettings}
+      accountMenu={props.accountMenu}
       onOpenSkillsHub={props.onOpenSkillsHub}
       onOpenMcpHub={props.onOpenMcpHub}
     />
