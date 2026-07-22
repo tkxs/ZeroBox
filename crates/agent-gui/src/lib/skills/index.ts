@@ -24,6 +24,8 @@ export type SkillSummary = {
   baseDir: string;
   /** true only when the backend verified LiveAgent ownership metadata */
   builtIn?: boolean;
+  /** skill directory creation/modification time in epoch milliseconds */
+  installedAt?: number | null;
   /** full README.md content for fallback skills that do not declare metadata */
   inlineContent?: string;
   inlineContentTruncated?: boolean;
@@ -123,6 +125,7 @@ type SystemManageSkillResponse = {
     skillFile: string;
     baseDir: string;
     builtIn?: boolean;
+    installedAt?: number | null;
     source?: SkillSourceMetadata | null;
   }> | null;
   invalid?: Array<{ path: string; error: string }> | null;
@@ -213,7 +216,7 @@ export function extractSkillMentionNamesFromText(text: string): string[] {
   const seen = new Set<string>();
 
   for (let index = 0; index < text.length; index += 1) {
-    if (text[index] !== "$") continue;
+    if (text[index] !== "/") continue;
 
     const before = index > 0 ? text[index - 1] : "";
     if (before && !/\s/.test(before)) continue;
@@ -226,6 +229,8 @@ export function extractSkillMentionNamesFromText(text: string): string[] {
     while (nameEnd < text.length && isSkillMentionNameChar(text[nameEnd])) {
       nameEnd += 1;
     }
+    // A slash right after the name means a filesystem path (/usr/bin), not a skill.
+    if (text[nameEnd] === "/") continue;
 
     const name = text.slice(nameStart, nameEnd);
     if (isCommonSkillMentionEnvVar(name)) continue;
@@ -443,6 +448,10 @@ async function managedSkillListToDiscovery(
         skillFile,
         baseDir,
         builtIn: raw.builtIn === true,
+        installedAt:
+          typeof raw.installedAt === "number" && Number.isFinite(raw.installedAt)
+            ? raw.installedAt
+            : null,
         source: normalizeSkillSourceMetadata(raw.source),
       }),
     );
@@ -609,9 +618,9 @@ export function buildSkillsSystemPrompt(params: {
       ? [
           "",
           "Explicitly mentioned this turn:",
-          "- The user explicitly mentioned the following enabled Skills with `$skill-name` in this turn.",
+          "- The user explicitly mentioned the following enabled Skills with `/skill-name` in this turn.",
           "- Treat these mentions as user intent to prioritize those Skills. Read and follow the mentioned Skill instructions before acting when they are relevant.",
-          "- `$` mentions never grant access to disabled Skills; only the enabled Skills listed in this prompt are available.",
+          "- `/` mentions never grant access to disabled Skills; only the enabled Skills listed in this prompt are available.",
           ...explicit.map(
             (skill) => `- ${skill.name} (skillFile: ${skill.skillFile}, baseDir: ${skill.baseDir})`,
           ),

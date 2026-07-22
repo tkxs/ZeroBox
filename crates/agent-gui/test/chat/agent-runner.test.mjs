@@ -242,16 +242,19 @@ const llmMock = {
   buildProviderRequestMetadata(_providerId, sessionId) {
     return sessionId ? { sessionId } : undefined;
   },
-  buildDualAuthHeaders(apiKey) {
+  buildAnthropicAuthHeaders(apiKey) {
     return {
-      Authorization: `Bearer ${apiKey}`,
       "x-api-key": apiKey,
     };
   },
-  buildProviderAuthHeaders(_providerId, apiKey) {
+  buildOpenAIAuthHeaders(apiKey) {
     return {
       Authorization: `Bearer ${apiKey}`,
-      "x-api-key": apiKey,
+    };
+  },
+  buildProviderRequestHeaders(_providerId, apiKey, _sessionId) {
+    return {
+      Authorization: `Bearer ${apiKey}`,
     };
   },
   createModelFromConfig(providerId, modelId, baseUrl) {

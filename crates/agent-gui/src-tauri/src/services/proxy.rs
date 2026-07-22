@@ -37,8 +37,10 @@ const TRAILER: &str = "trailer";
 const TRANSFER_ENCODING: &str = "transfer-encoding";
 const UPGRADE: &str = "upgrade";
 const UPSTREAM_ORIGIN_HEADER: &str = "x-liveagent-upstream-origin";
+const UPSTREAM_USER_AGENT_HEADER: &str = "x-liveagent-upstream-user-agent";
+const UPSTREAM_CONTENT_TYPE_HEADER: &str = "x-liveagent-upstream-content-type";
 const USE_SYSTEM_PROXY_HEADER: &str = "x-liveagent-use-system-proxy";
-const DEFAULT_ALLOW_HEADERS: &str = "authorization,content-type,x-api-key,x-goog-api-key,anthropic-version,x-liveagent-upstream-origin,x-liveagent-proxy-token,x-liveagent-use-system-proxy";
+const DEFAULT_ALLOW_HEADERS: &str = "authorization,content-type,x-api-key,x-goog-api-key,anthropic-version,x-liveagent-upstream-origin,x-liveagent-upstream-user-agent,x-liveagent-upstream-content-type,x-liveagent-proxy-token,x-liveagent-use-system-proxy";
 const ALLOW_METHODS_VALUE: &str = "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD";
 const VARY_VALUE: &str = "Origin, Access-Control-Request-Method, Access-Control-Request-Headers";
 const IMAGE_PROXY_MAX_BYTES: usize = 25 * 1024 * 1024;
@@ -119,18 +121,25 @@ pub fn start_proxy_server() -> Result<Arc<ProxyServerState>, String> {
     Ok(state)
 }
 
-async fn handle_image_proxy(
-    State(state): State<Arc<ProxyServerState>>,
-    Query(query): Query<ImageProxyQuery>,
-    headers: HeaderMap,
-) -> Response {
+async fn handle_image_proxy(Query(query): Query<ImageProxyQuery>, headers: HeaderMap) -> Response {
     let target_url = match validate_image_proxy_url(&query.url) {
         Ok(url) => url,
         Err(message) => return error_response(StatusCode::BAD_REQUEST, &message, &headers),
     };
 
-    let image_request = state
-        .client
+    // 图片外链与商店链路同语义：恒随应用代理出网（未启用=直连，配置异常
+    // 502 fail fast）。<img> 请求无法携带自定义头，因此不走 per-request 开关。
+    let client = match crate::services::system_proxy::cached_client() {
+        Ok(client) => client,
+        Err(error) => {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                &format!("App proxy unavailable: {error}"),
+                &headers,
+            );
+        }
+    };
+    let image_request = client
         .get(target_url.clone())
         .timeout(Duration::from_secs(IMAGE_PROXY_TIMEOUT_SECS));
 
@@ -373,12 +382,9 @@ async fn handle_proxy(
     } else {
         state.client.clone()
     };
-    let mut request = client.request(method, target_url);
-    for (name, value) in &headers {
-        if should_forward_request_header(name) {
-            request = request.header(name, value);
-        }
-    }
+    let mut request = client
+        .request(method, target_url)
+        .headers(build_upstream_request_headers(&headers));
     if !body_bytes.is_empty() {
         request = request.body(body_bytes);
     }
@@ -437,6 +443,11 @@ fn build_target_url(
         .strip_prefix(&prefix)
         .ok_or_else(|| "Invalid proxy path prefix".to_string())?;
     let resolved = if suffix.is_empty() { "/" } else { suffix };
+    // “//” 开头的后缀会被 Url::join 当作 scheme-relative 引用改写目标主机，
+    // 显式拒绝，防止请求被重定向到 upstream origin 之外的主机。
+    if resolved.starts_with("//") {
+        return Err("Proxy request path must not begin with //".to_string());
+    }
 
     origin
         .join(resolved)
@@ -537,6 +548,22 @@ fn should_forward_request_header(name: &HeaderName) -> bool {
         && !lowered.starts_with(PROXY_PREFIX)
 }
 
+fn build_upstream_request_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut upstream_headers = HeaderMap::new();
+    for (name, value) in headers {
+        if should_forward_request_header(name) {
+            upstream_headers.append(name, value.clone());
+        }
+    }
+    if let Some(value) = headers.get(UPSTREAM_USER_AGENT_HEADER) {
+        upstream_headers.insert(HeaderName::from_static("user-agent"), value.clone());
+    }
+    if let Some(value) = headers.get(UPSTREAM_CONTENT_TYPE_HEADER) {
+        upstream_headers.insert(HeaderName::from_static(CONTENT_TYPE), value.clone());
+    }
+    upstream_headers
+}
+
 fn should_forward_response_header(name: &HeaderName) -> bool {
     let lowered = name.as_str();
     !matches!(
@@ -584,6 +611,22 @@ mod tests {
             target.as_str(),
             "https://ark.cn-beijing.volces.com/api/coding/v1/messages?stream=true"
         );
+    }
+
+    #[test]
+    fn rejects_scheme_relative_proxy_suffix() {
+        let err = build_target_url("hub", "/proxy/hub//servers/foo", "https://api.smithery.ai")
+            .expect_err("scheme-relative suffix must be rejected");
+
+        assert!(err.contains("//"));
+    }
+
+    #[test]
+    fn builds_target_url_for_origin_root_with_query() {
+        let target = build_target_url("hub", "/proxy/hub?probe=1", "https://clawhub.ai")
+            .expect("root query target url should be built");
+
+        assert_eq!(target.as_str(), "https://clawhub.ai/?probe=1");
     }
 
     #[test]
@@ -693,5 +736,43 @@ mod tests {
         assert!(should_forward_request_header(&HeaderName::from_static(
             "anthropic-version"
         )));
+    }
+
+    #[test]
+    fn applies_explicit_upstream_header_overrides_last() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("user-agent"),
+            HeaderValue::from_static("WebView/1.0"),
+        );
+        headers.insert(
+            HeaderName::from_static(CONTENT_TYPE),
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert(
+            HeaderName::from_static(UPSTREAM_USER_AGENT_HEADER),
+            HeaderValue::from_static("codex_cli_rs/0.72.0"),
+        );
+        headers.insert(
+            HeaderName::from_static(UPSTREAM_CONTENT_TYPE_HEADER),
+            HeaderValue::from_static("application/custom+json"),
+        );
+
+        let upstream_headers = build_upstream_request_headers(&headers);
+
+        assert_eq!(
+            upstream_headers
+                .get("user-agent")
+                .and_then(|value| value.to_str().ok()),
+            Some("codex_cli_rs/0.72.0")
+        );
+        assert_eq!(
+            upstream_headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/custom+json")
+        );
+        assert!(!upstream_headers.contains_key(UPSTREAM_USER_AGENT_HEADER));
+        assert!(!upstream_headers.contains_key(UPSTREAM_CONTENT_TYPE_HEADER));
     }
 }

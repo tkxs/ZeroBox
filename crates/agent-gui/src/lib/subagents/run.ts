@@ -12,6 +12,7 @@ import { runAssistantWithTools } from "../chat/runner/agentRunner";
 import type { RuntimePlatform } from "../runtimePlatform";
 import type {
   CodexRequestFormat,
+  CustomProvider,
   ProviderId,
   ProviderModelConfig,
   ReasoningLevel,
@@ -51,10 +52,13 @@ import {
 export type SubagentProviderRuntime = {
   baseUrl: string;
   apiKey: string;
+  customHeaders?: CustomProvider["customHeaders"];
   requestFormat?: CodexRequestFormat;
   reasoning?: ReasoningLevel;
   promptCachingEnabled?: boolean;
+  promptCacheRetention?: "short" | "long";
   nativeWebSearchEnabled?: boolean;
+  useSystemProxy?: boolean;
   modelConfig?: ProviderModelConfig;
 };
 
@@ -615,7 +619,7 @@ export async function executeSubagentRun(
 
         // controller 内部消化非中止失败（含 prune 降级）；用户中止会原样抛出。
         compactionAppliedState = null;
-        const compactedContext = await compaction.compactDuringRun({
+        const { context: compactedContext } = await compaction.compactDuringRun({
           trigger: "post-tool",
           state: view,
         });

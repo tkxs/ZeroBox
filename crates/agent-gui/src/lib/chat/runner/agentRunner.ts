@@ -17,7 +17,7 @@ import {
   withHostedSearchProbeHeader,
 } from "../../providers/hostedSearchEvents";
 import {
-  buildProviderAuthHeaders,
+  buildProviderRequestHeaders,
   buildProviderRequestMetadata,
   createModelFromConfig,
   createStreamingTextReconciler,
@@ -34,6 +34,7 @@ import {
   isProviderNativeWebSearchToolName,
 } from "../../providers/nativeWebSearch";
 import { prepareProxyRequest } from "../../providers/proxy";
+import type { RetryAttemptRecord } from "../../providers/runtime/streamRetry";
 import {
   inferRuntimePlatform,
   normalizeRuntimePlatform,
@@ -223,7 +224,7 @@ export function buildToolsSuffix(
     }
     if (has("Edit")) {
       lines.push(
-        "- Edit performs exact-string replacement. If `old_string` matches multiple places, either narrow it until it is unique or pass `replace_all=true` explicitly.",
+        "- Edit performs exact-string replacement, with automatic fallbacks for line-ending (CRLF/LF), trailing-whitespace, and uniform-indentation drift — copy old_string from Read output as-is and do not pad it with guessed whitespace. If `old_string` matches multiple places, either narrow it until it is unique or pass `replace_all=true` explicitly.",
       );
     }
     if (has("Delete")) {
@@ -294,10 +295,10 @@ export function buildToolsSuffix(
     const bashPlatformLines =
       runtimePlatform === "windows"
         ? [
-            `- Current platform: ${platformLabel}. Bash runs through Windows-native shells: pwsh, then Windows PowerShell, then cmd.`,
-            '- Use PowerShell syntax by default: `Write-Output`, `$env:NAME = "value"`, semicolon separators, and PowerShell quoting.',
-            "- Do not assume Git Bash or POSIX syntax on Windows: avoid `export`, `nohup`, `/dev/null`, and POSIX background detachment.",
-            "- For long-running Windows commands, dev servers, watchers, or detached processes, use ManagedProcess instead of background shell syntax.",
+            `- Current platform: ${platformLabel}. Bash runs through Git Bash with POSIX semantics; pwsh, Windows PowerShell, and cmd are fallbacks used only when Git Bash is not installed.`,
+            "- Write POSIX/bash-compatible commands by default: `export`, `&&`, `/dev/null`, forward-slash paths.",
+            "- Background commands using `&` must redirect stdout and stderr before detaching, for example `nohup command > /tmp/liveagent-task.log 2>&1 < /dev/null &`.",
+            "- If a Bash result header reports `shell_family: powershell` or `shell_family: cmd`, Git Bash is missing: switch to PowerShell syntax and suggest installing Git for Windows or setting `LIVEAGENT_GIT_BASH_PATH`.",
           ]
         : [
             `- Current platform: ${platformLabel}. Bash runs through POSIX shells.`,
@@ -348,9 +349,7 @@ export function buildToolsSuffix(
 
   if (has("ManagedProcess")) {
     const managedProcessPreference =
-      runtimePlatform === "windows"
-        ? "- Prefer ManagedProcess over Bash for `pnpm dev`, `deno run main.ts`, `vite`, file watchers, local web servers, or commands that otherwise require detached Windows process syntax."
-        : "- Prefer ManagedProcess over Bash for `pnpm dev`, `deno run main.ts`, `vite`, file watchers, local web servers, or commands that otherwise require `nohup` and log redirection.";
+      "- Prefer ManagedProcess over Bash for `pnpm dev`, `deno run main.ts`, `vite`, file watchers, local web servers, or commands that otherwise require `nohup` and log redirection.";
     sections.push(
       [
         "## ManagedProcess",
@@ -651,6 +650,7 @@ export async function runAssistantWithTools(params: {
     requestFormat?: CodexRequestFormat;
     reasoning?: ReasoningLevel;
     promptCachingEnabled?: boolean;
+    promptCacheRetention?: "short" | "long";
     nativeWebSearchEnabled?: boolean;
     useSystemProxy?: boolean;
     modelConfig?: ProviderModelConfig;
@@ -687,6 +687,7 @@ export async function runAssistantWithTools(params: {
     emittedMessages: Message[];
   } | null>;
   onToolStatus?: (status: string | null) => void;
+  onRetryAttempts?: (round: number, attempts: RetryAttemptRecord[]) => void;
   signal?: AbortSignal;
   debugLogger?: StreamDebugLogger;
   subagentScheduler?: SubagentScheduler;
@@ -708,7 +709,12 @@ export async function runAssistantWithTools(params: {
       params.providerId,
       params.runtime.baseUrl.trim(),
       mergeCustomHeaders(
-        buildProviderAuthHeaders(params.providerId, params.runtime.apiKey),
+        buildProviderRequestHeaders(
+          params.providerId,
+          params.runtime.apiKey,
+          params.sessionId,
+          params.runtime.requestFormat,
+        ),
         params.runtime.customHeaders,
       ),
       { useSystemProxy: params.runtime.useSystemProxy === true },
@@ -1165,6 +1171,8 @@ export async function runAssistantWithTools(params: {
     let streamRound = 0;
     const streamFn = (streamModel: typeof model, streamContext: Context, options?: any) => {
       const round = ++streamRound;
+      const retryAttemptsForRound: RetryAttemptRecord[] = [];
+      params.onRetryAttempts?.(round, retryAttemptsForRound);
       const streamTools =
         streamContext.tools ?? (agent?.state.tools as Context["tools"] | undefined) ?? llmTools;
       const effectiveContext = sanitizeContextForModelRequest({
@@ -1200,10 +1208,27 @@ export async function runAssistantWithTools(params: {
         sessionId: options?.sessionId ?? params.sessionId,
         cacheRetention:
           options?.cacheRetention ??
-          resolveProviderCacheRetention(params.providerId, params.runtime.promptCachingEnabled),
+          resolveProviderCacheRetention(
+            params.providerId,
+            params.runtime.promptCachingEnabled,
+            undefined,
+            params.runtime.promptCacheRetention,
+          ),
         metadata: buildProviderRequestMetadata(params.providerId, params.sessionId),
         toolChoice: options?.toolChoice ?? (effectiveContext.tools?.length ? "auto" : undefined),
         reasoning: normalizeStreamReasoning(options?.reasoning) ?? fallbackReasoning,
+        streamRetry: {
+          onRetry: (attempt, maxAttempts, errorMessage) => {
+            params.onToolStatus?.(
+              `第 ${round} 轮：连接已断开，正在重试 (${attempt}/${maxAttempts})...`,
+            );
+            retryAttemptsForRound.push({ attempt, maxAttempts, errorMessage });
+            params.onRetryAttempts?.(round, retryAttemptsForRound.slice());
+          },
+          onRetryRecovered: () => {
+            params.onToolStatus?.(`第 ${round} 轮：模型生成中...`);
+          },
+        },
       };
 
       streamOptions = finalizeProviderStreamOptions({

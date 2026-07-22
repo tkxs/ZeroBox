@@ -16,6 +16,7 @@ import {
   Trash2,
   Waypoints,
   X,
+  Zap,
 } from "../../components/icons";
 
 import { Button } from "../../components/ui/button";
@@ -31,6 +32,7 @@ import {
 import { useLocale } from "../../i18n";
 import { buildModelOptions } from "../../lib/chat/chatPageHelpers";
 import {
+  getCustomHeaderKeyPresets,
   isReservedCustomHeaderKey,
   isValidCustomHeaderKey,
 } from "../../lib/providers/customHeaders";
@@ -39,7 +41,6 @@ import {
   CODEX_REQUEST_FORMAT_LABELS,
   type CodexRequestFormat,
   type CustomProvider,
-  type ModelCapability,
   type ProviderId,
   type ProviderModelConfig,
   updateCustomProviders,
@@ -48,6 +49,7 @@ import {
 import { createUuid } from "../../lib/shared/id";
 import { useModalMotion } from "../../lib/shared/modalMotion";
 import { cn } from "../../lib/shared/utils";
+import { ModelPicker } from "./modelPicker";
 import {
   buildProviderModelsFetchKey,
   createDraftModelConfig,
@@ -67,25 +69,18 @@ type ModalProps = {
   onClose: () => void;
 };
 
-type ProviderDialogPanel = "general" | "network" | "headers";
+type ProviderDialogPanel = "general" | "request";
 
 type ModelEditDraft = {
   model: ProviderModelConfig;
   contextWindow: string;
   maxOutputToken: string;
-  capabilities: ModelCapability[];
+  costInput: string;
+  costOutput: string;
+  costCacheRead: string;
+  costCacheWrite: string;
 };
 const PROVIDER_TABS: ProviderId[] = ["claude_code", "codex", "gemini"];
-const TITLE_MODEL_FOLLOW_CURRENT_VALUE = "__conversation_title_follow_current__";
-const CUSTOM_HEADER_KEY_PRESETS = [
-  "anthropic-beta",
-  "X-Request-ID",
-  "X-User-ID",
-  "X-Environment",
-  "HTTP-Referer",
-  "X-Title",
-] as const;
-const MODEL_CAPABILITIES: ModelCapability[] = ["reasoning", "vision", "tools"];
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   claude_code: "Anthropic",
   codex: "OpenAI",
@@ -109,6 +104,19 @@ function parsePositiveInteger(input: string): number | null {
   if (!Number.isFinite(value)) return null;
   const normalized = Math.floor(value);
   return normalized > 0 ? normalized : null;
+}
+
+// 单价输入：留空视为未配置（0），负数与非数字视为非法。
+function parseCostRate(input: string): number | null {
+  const trimmed = input.trim();
+  if (!trimmed) return 0;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value < 0) return null;
+  return value;
+}
+
+function formatCostRate(value: number | undefined): string {
+  return typeof value === "number" && value > 0 ? String(value) : "";
 }
 
 type CustomHeaderKeyIssue = "reserved" | "invalid";
@@ -178,6 +186,12 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
     initialData?.requestFormat ?? "openai-responses",
   );
   const [useSystemProxy, setUseSystemProxy] = useState(initialData?.useSystemProxy ?? false);
+  const [promptCachingEnabled, setPromptCachingEnabled] = useState(
+    initialData?.promptCachingEnabled ?? providerType !== "gemini",
+  );
+  const [promptCacheRetention, setPromptCacheRetention] = useState<"short" | "long">(
+    initialData?.promptCacheRetention === "long" ? "long" : "short",
+  );
   const [fetchingModels, setFetchingModels] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [addingModel, setAddingModel] = useState(false);
@@ -188,6 +202,11 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
   const [activePanel, setActivePanel] = useState<ProviderDialogPanel>("general");
   const [visibleHeaderValues, setVisibleHeaderValues] = useState<Set<number>>(new Set());
   const [headerValidationSubmitted, setHeaderValidationSubmitted] = useState(false);
+  const [headerSuggest, setHeaderSuggest] = useState<{
+    index: number;
+    rect: { left: number; top: number; width: number };
+  } | null>(null);
+  const [headerSuggestActive, setHeaderSuggestActive] = useState(0);
   const { isClosing, modalState, requestClose } = useModalMotion(onClose);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -283,19 +302,12 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
             model: target,
             contextWindow: String(target.contextWindow),
             maxOutputToken: String(target.maxOutputToken),
-            capabilities: [...(target.capabilities ?? [])],
+            costInput: formatCostRate(target.cost?.input),
+            costOutput: formatCostRate(target.cost?.output),
+            costCacheRead: formatCostRate(target.cost?.cacheRead),
+            costCacheWrite: formatCostRate(target.cost?.cacheWrite),
           },
     );
-  }
-
-  function toggleModelCapability(capability: ModelCapability) {
-    setEditingModel((prev) => {
-      if (!prev) return prev;
-      const capabilities = prev.capabilities.includes(capability)
-        ? prev.capabilities.filter((item) => item !== capability)
-        : [...prev.capabilities, capability];
-      return { ...prev, capabilities };
-    });
   }
 
   const editingModelContextWindow = editingModel
@@ -304,22 +316,50 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
   const editingModelMaxOutputToken = editingModel
     ? parsePositiveInteger(editingModel.maxOutputToken)
     : null;
+  const editingModelCost = editingModel
+    ? {
+        input: parseCostRate(editingModel.costInput),
+        output: parseCostRate(editingModel.costOutput),
+        cacheRead: parseCostRate(editingModel.costCacheRead),
+        cacheWrite: parseCostRate(editingModel.costCacheWrite),
+      }
+    : null;
+  const editingModelCostValid =
+    editingModelCost === null ||
+    (editingModelCost.input !== null &&
+      editingModelCost.output !== null &&
+      editingModelCost.cacheRead !== null &&
+      editingModelCost.cacheWrite !== null);
   const canSaveEditingModel =
-    editingModelContextWindow !== null && editingModelMaxOutputToken !== null;
+    editingModelContextWindow !== null &&
+    editingModelMaxOutputToken !== null &&
+    editingModelCostValid;
 
   function saveInlineModelSettings() {
     if (
       !editingModel ||
       editingModelContextWindow === null ||
-      editingModelMaxOutputToken === null
+      editingModelMaxOutputToken === null ||
+      !editingModelCostValid
     ) {
       return;
     }
+    const cost = editingModelCost
+      ? {
+          input: editingModelCost.input ?? 0,
+          output: editingModelCost.output ?? 0,
+          cacheRead: editingModelCost.cacheRead ?? 0,
+          cacheWrite: editingModelCost.cacheWrite ?? 0,
+        }
+      : undefined;
+    const hasCost =
+      cost !== undefined &&
+      (cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0);
     const nextModel: ProviderModelConfig = {
       ...editingModel.model,
       contextWindow: editingModelContextWindow,
       maxOutputToken: editingModelMaxOutputToken,
-      capabilities: editingModel.capabilities,
+      cost: hasCost ? cost : undefined,
     };
     setModels((prev) => prev.map((item) => (item.id === nextModel.id ? nextModel : item)));
     setEditingModel(null);
@@ -370,6 +410,24 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
     });
   }
 
+  function openHeaderSuggest(index: number) {
+    const input = headerKeyRefs.current[index];
+    if (!input) return;
+    const rect = input.getBoundingClientRect();
+    setHeaderSuggest({
+      index,
+      rect: { left: rect.left, top: rect.bottom + 4, width: rect.width },
+    });
+    setHeaderSuggestActive(0);
+  }
+
+  function applyHeaderSuggestion(preset: string) {
+    if (!headerSuggest) return;
+    updateCustomHeader(headerSuggest.index, "key", preset);
+    setHeaderSuggest(null);
+    focusCustomHeader(headerSuggest.index, "value");
+  }
+
   function handleSave() {
     if (!name.trim()) return;
     const invalidHeaderIndex = customHeaders.findIndex(
@@ -377,7 +435,7 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
     );
     if (invalidHeaderIndex >= 0) {
       setHeaderValidationSubmitted(true);
-      setActivePanel("headers");
+      setActivePanel("request");
       focusCustomHeader(invalidHeaderIndex, "key");
       return;
     }
@@ -399,7 +457,11 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
         providerType === "gemini" && initialData?.reasoning === "xhigh"
           ? "high"
           : (initialData?.reasoning ?? "off"),
-      promptCachingEnabled: initialData?.promptCachingEnabled ?? providerType === "claude_code",
+      promptCachingEnabled: providerType === "gemini" ? false : promptCachingEnabled,
+      promptCacheRetention:
+        providerType === "claude_code" && promptCachingEnabled && promptCacheRetention === "long"
+          ? "long"
+          : undefined,
       nativeWebSearchEnabled: initialData?.nativeWebSearchEnabled ?? true,
       useSystemProxy,
     });
@@ -420,6 +482,40 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
         : orderedModels,
     [orderedModels, modelSearchQuery],
   );
+  const headerSuggestQuery = headerSuggest
+    ? (customHeaders[headerSuggest.index]?.key ?? "").trim().toLowerCase()
+    : "";
+  const headerSuggestUsed = new Set(
+    headerSuggest
+      ? customHeaders
+          .filter((_, index) => index !== headerSuggest.index)
+          .map((header) => header.key.trim().toLowerCase())
+          .filter(Boolean)
+      : [],
+  );
+  const headerSuggestItems = headerSuggest
+    ? headerSuggestQuery
+      ? getCustomHeaderKeyPresets(providerType).filter((preset) => {
+          const lower = preset.toLowerCase();
+          if (headerSuggestUsed.has(lower)) return false;
+          return lower.includes(headerSuggestQuery) && lower !== headerSuggestQuery;
+        })
+      : []
+    : [];
+  const headerSuggestActiveIndex = Math.min(
+    headerSuggestActive,
+    Math.max(0, headerSuggestItems.length - 1),
+  );
+  const firstHeaderIssue =
+    customHeaders
+      .map((header) => getCustomHeaderKeyIssue(header.key, headerValidationSubmitted))
+      .find((issue) => issue !== null) ?? null;
+  const headerIssueMessage =
+    firstHeaderIssue === "reserved"
+      ? t("settings.customHeaderReservedTitle")
+      : firstHeaderIssue === "invalid"
+        ? t("settings.invalidCustomHeaderKey")
+        : null;
 
   return createPortal(
     <div
@@ -477,32 +573,20 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
               type="button"
               className={cn(
                 "flex h-10 items-center gap-2 rounded-lg px-3 text-left text-sm text-muted-foreground max-[720px]:min-w-max max-[720px]:flex-1 max-[720px]:justify-center max-[720px]:px-2 max-[720px]:text-xs transition-colors hover:bg-accent/50 hover:text-foreground",
-                activePanel === "network" && "bg-primary/10 font-medium text-primary",
+                activePanel === "request" && "bg-primary/10 font-medium text-primary",
               )}
-              onClick={() => setActivePanel("network")}
-              aria-current={activePanel === "network" ? "page" : undefined}
+              onClick={() => setActivePanel("request")}
+              aria-current={activePanel === "request" ? "page" : undefined}
             >
               <Globe className="h-4 w-4 shrink-0 max-[720px]:h-3.5 max-[720px]:w-3.5" />
-              {t("settings.providerDialogNetwork")}
-            </button>
-            <button
-              type="button"
-              className={cn(
-                "flex h-10 items-center gap-2 rounded-lg px-3 text-left text-sm text-muted-foreground max-[720px]:min-w-max max-[720px]:flex-1 max-[720px]:justify-center max-[720px]:px-2 max-[720px]:text-xs transition-colors hover:bg-accent/50 hover:text-foreground",
-                activePanel === "headers" && "bg-primary/10 font-medium text-primary",
-              )}
-              onClick={() => setActivePanel("headers")}
-              aria-current={activePanel === "headers" ? "page" : undefined}
-            >
-              <List className="h-4 w-4 shrink-0 max-[720px]:h-3.5 max-[720px]:w-3.5" />
               <span className="min-w-0 flex-1 max-[720px]:basis-[calc(100%-3rem)]">
-                {t("settings.providerDialogHeaders")}
+                {t("settings.providerDialogRequest")}
               </span>
               {customHeaders.length > 0 ? (
                 <span
                   className={cn(
                     "min-w-5 rounded-full bg-muted px-1.5 py-0.5 text-center text-[10px] tabular-nums text-muted-foreground",
-                    activePanel === "headers" && "bg-primary text-primary-foreground",
+                    activePanel === "request" && "bg-primary text-primary-foreground",
                   )}
                 >
                   {customHeaders.length}
@@ -511,7 +595,10 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
             </button>
           </nav>
 
-          <div className="settings-modal-body min-w-0 flex-1 overflow-y-auto px-6 py-5 max-[720px]:px-3.5 max-[720px]:pb-[calc(0.875rem+env(safe-area-inset-bottom))] max-[720px]:pt-3.5">
+          <div
+            className="settings-modal-body min-w-0 flex-1 overflow-y-auto px-6 py-5 max-[720px]:px-3.5 max-[720px]:pb-[calc(0.875rem+env(safe-area-inset-bottom))] max-[720px]:pt-3.5"
+            onScroll={() => setHeaderSuggest(null)}
+          >
             {activePanel === "general" ? (
               <section key="general" className="provider-panel-enter">
                 <div className="text-sm font-semibold">{t("settings.basicInformation")}</div>
@@ -698,18 +785,6 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
                               <div className="min-w-0 flex-1 max-[720px]:basis-[calc(100%-3rem)]">
                                 <div className="flex min-w-0 items-center gap-2">
                                   <span className="truncate text-sm font-medium">{model.id}</span>
-                                  {model.capabilities?.length ? (
-                                    <span className="flex shrink-0 items-center gap-1">
-                                      {model.capabilities.map((capability) => (
-                                        <span
-                                          key={capability}
-                                          className="rounded border bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                                        >
-                                          {t("settings.capability." + capability)}
-                                        </span>
-                                      ))}
-                                    </span>
-                                  ) : null}
                                 </div>
                               </div>
                               <div className="shrink-0 text-[11px] tabular-nums text-muted-foreground max-[720px]:order-3 max-[720px]:ml-12 max-[720px]:basis-full">
@@ -758,16 +833,12 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
                                           "ring-1 ring-inset ring-destructive focus-visible:ring-destructive",
                                       )}
                                       value={editingModel.contextWindow}
-                                      onChange={(event) =>
+                                      onChange={(event) => {
+                                        const value = event.currentTarget.value;
                                         setEditingModel((prev) =>
-                                          prev
-                                            ? {
-                                                ...prev,
-                                                contextWindow: event.currentTarget.value,
-                                              }
-                                            : prev,
-                                        )
-                                      }
+                                          prev ? { ...prev, contextWindow: value } : prev,
+                                        );
+                                      }}
                                     />
                                   </div>
                                   <div className="space-y-1.5">
@@ -782,41 +853,55 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
                                           "ring-1 ring-inset ring-destructive focus-visible:ring-destructive",
                                       )}
                                       value={editingModel.maxOutputToken}
-                                      onChange={(event) =>
+                                      onChange={(event) => {
+                                        const value = event.currentTarget.value;
                                         setEditingModel((prev) =>
-                                          prev
-                                            ? {
-                                                ...prev,
-                                                maxOutputToken: event.currentTarget.value,
-                                              }
-                                            : prev,
-                                        )
-                                      }
+                                          prev ? { ...prev, maxOutputToken: value } : prev,
+                                        );
+                                      }}
                                     />
                                   </div>
                                 </div>
 
                                 <div className="mt-3 text-xs font-medium text-muted-foreground">
-                                  {t("settings.capabilityTypes")}
+                                  {t("settings.modelCost")}
                                 </div>
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  {MODEL_CAPABILITIES.map((capability) => {
-                                    const selected = editingModel.capabilities.includes(capability);
-                                    return (
-                                      <button
-                                        key={capability}
-                                        type="button"
+                                <div className="mt-1 text-[11px] text-muted-foreground/80">
+                                  {t("settings.modelCostHint")}
+                                </div>
+                                <div className="mt-2 grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
+                                  {(
+                                    [
+                                      ["costInput", "settings.modelCostInput"],
+                                      ["costOutput", "settings.modelCostOutput"],
+                                      ["costCacheRead", "settings.modelCostCacheRead"],
+                                      ["costCacheWrite", "settings.modelCostCacheWrite"],
+                                    ] as const
+                                  ).map(([field, labelKey]) => (
+                                    <div key={field} className="space-y-1.5">
+                                      <Label>{t(labelKey)}</Label>
+                                      <Input
+                                        inputMode="decimal"
+                                        placeholder="0"
+                                        aria-invalid={
+                                          parseCostRate(editingModel[field]) === null
+                                            ? true
+                                            : undefined
+                                        }
                                         className={cn(
-                                          "min-h-9 rounded-full border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary",
-                                          selected && "border-primary bg-primary/10 text-primary",
+                                          parseCostRate(editingModel[field]) === null &&
+                                            "ring-1 ring-inset ring-destructive focus-visible:ring-destructive",
                                         )}
-                                        aria-pressed={selected}
-                                        onClick={() => toggleModelCapability(capability)}
-                                      >
-                                        {t("settings.capability." + capability)}
-                                      </button>
-                                    );
-                                  })}
+                                        value={editingModel[field]}
+                                        onChange={(event) => {
+                                          const value = event.currentTarget.value;
+                                          setEditingModel((prev) =>
+                                            prev ? { ...prev, [field]: value } : prev,
+                                          );
+                                        }}
+                                      />
+                                    </div>
+                                  ))}
                                 </div>
 
                                 {!canSaveEditingModel ? (
@@ -852,10 +937,24 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
                   </div>
                 </div>
               </section>
-            ) : activePanel === "network" ? (
-              <section key="network" className="provider-panel-enter">
-                <div className="text-sm font-semibold">{t("settings.providerDialogNetwork")}</div>
-                <div className="mt-3 flex items-center gap-3 rounded-xl border bg-card px-4 py-3">
+            ) : (
+              <section key="request" className="provider-panel-enter">
+                <div className="text-sm font-semibold">{t("settings.providerDialogRequest")}</div>
+
+                <div
+                  className={cn(
+                    "mt-3 flex items-center gap-3 rounded-xl border bg-card px-4 py-3 transition-colors",
+                    useSystemProxy && "border-primary/35 bg-primary/[0.04]",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors",
+                      useSystemProxy && "bg-primary/15 text-primary",
+                    )}
+                  >
+                    <Waypoints className="h-4 w-4" />
+                  </span>
                   <div className="min-w-0 flex-1 text-sm font-medium">
                     {t("settings.providerUseSystemProxy")}
                   </div>
@@ -865,141 +964,298 @@ function ProviderModal({ providerType, initialData, onSave, onClose }: ModalProp
                     ariaLabel={t("settings.providerUseSystemProxy")}
                   />
                 </div>
-              </section>
-            ) : (
-              <section key="headers" className="provider-panel-enter">
-                <div className="text-sm font-semibold">{t("settings.customHeaders")}</div>
 
-                <div className="mt-3 overflow-hidden rounded-xl border max-[720px]:border-0 max-[720px]:overflow-visible">
-                  <div className="grid grid-cols-[220px_minmax(0,1fr)_40px_40px] items-center border-b bg-muted/40 max-[720px]:hidden text-[11px] font-medium uppercase tracking-[0.05em] text-muted-foreground">
-                    <div className="px-3 py-2">{t("settings.customHeaderName")}</div>
-                    <div className="px-3 py-2">{t("settings.customHeaderValue")}</div>
-                    <div />
-                    <div />
-                  </div>
-
-                  {customHeaders.length === 0 ? (
-                    <div className="px-4 py-10 text-center text-xs text-muted-foreground">
-                      {t("settings.noCustomHeaders")}
-                    </div>
-                  ) : (
-                    customHeaders.map((header, index) => {
-                      const issue = getCustomHeaderKeyIssue(header.key, headerValidationSubmitted);
-                      const issueTitle =
-                        issue === "reserved"
-                          ? t("settings.customHeaderReservedTitle")
-                          : issue === "invalid"
-                            ? t("settings.invalidCustomHeaderKey")
-                            : undefined;
-                      const valueVisible = visibleHeaderValues.has(index);
-
-                      return (
-                        <div
-                          key={index}
-                          className="grid grid-cols-[220px_minmax(0,1fr)_40px_40px] items-center border-b last:border-b-0 max-[720px]:mb-2 max-[720px]:grid-cols-[minmax(0,1fr)_40px_40px] max-[720px]:grid-rows-[auto_auto] max-[720px]:overflow-hidden max-[720px]:rounded-xl max-[720px]:border max-[720px]:bg-muted/20"
-                        >
-                          <Input
-                            ref={(element) => {
-                              headerKeyRefs.current[index] = element;
-                            }}
-                            value={header.key}
-                            className={cn(
-                              "h-10 rounded-none border-0 border-r bg-transparent px-3 font-mono text-xs shadow-none focus-visible:ring-1 focus-visible:ring-inset max-[720px]:col-span-3 max-[720px]:border-b max-[720px]:border-r-0 max-[720px]:bg-muted/40",
-                              issue &&
-                                "ring-1 ring-inset ring-destructive focus-visible:ring-destructive",
-                            )}
-                            placeholder={t("settings.customHeaderKeyPlaceholder")}
-                            aria-label={t("settings.customHeaderName")}
-                            aria-invalid={issue ? true : undefined}
-                            title={issueTitle}
-                            autoComplete="off"
-                            spellCheck={false}
-                            onChange={(event) =>
-                              updateCustomHeader(index, "key", event.currentTarget.value)
-                            }
-                          />
-                          <Input
-                            ref={(element) => {
-                              headerValueRefs.current[index] = element;
-                            }}
-                            type={valueVisible ? "text" : "password"}
-                            value={header.value}
-                            className="h-10 rounded-none border-0 bg-transparent px-3 font-mono text-xs shadow-none focus-visible:ring-1 focus-visible:ring-inset max-[720px]:col-start-1 max-[720px]:row-start-2"
-                            placeholder={t("settings.customHeaderValue")}
-                            aria-label={t("settings.customHeaderValue")}
-                            autoComplete="off"
-                            spellCheck={false}
-                            onChange={(event) =>
-                              updateCustomHeader(index, "value", event.currentTarget.value)
-                            }
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-10 w-10 rounded-none text-muted-foreground hover:text-foreground max-[720px]:row-start-2"
-                            onClick={() => toggleCustomHeaderValue(index)}
-                            title={
-                              valueVisible
-                                ? t("settings.hideCustomHeaderValue")
-                                : t("settings.showCustomHeaderValue")
-                            }
-                            aria-label={
-                              valueVisible
-                                ? t("settings.hideCustomHeaderValue")
-                                : t("settings.showCustomHeaderValue")
-                            }
-                          >
-                            {valueVisible ? (
-                              <EyeOff className="h-4 w-4" />
-                            ) : (
-                              <Eye className="h-4 w-4" />
-                            )}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-10 w-10 rounded-none text-muted-foreground hover:bg-destructive/10 hover:text-destructive max-[720px]:row-start-2"
-                            onClick={() => removeCustomHeader(index)}
-                            title={t("settings.removeCustomHeader")}
-                            aria-label={t("settings.removeCustomHeader")}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                {providerType !== "gemini" ? (
+                  <div
+                    className={cn(
+                      "mt-3 rounded-xl border bg-card px-4 py-3 transition-colors",
+                      promptCachingEnabled && "border-primary/35 bg-primary/[0.04]",
+                    )}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={cn(
+                          "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors",
+                          promptCachingEnabled && "bg-primary/15 text-primary",
+                        )}
+                      >
+                        <Zap className="h-4 w-4" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium">{t("settings.promptCaching")}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {providerType === "claude_code"
+                            ? t("settings.promptCachingDescClaude")
+                            : t("settings.promptCachingDescCodex")}
                         </div>
-                      );
-                    })
-                  )}
+                      </div>
+                      <DialogSwitch
+                        checked={promptCachingEnabled}
+                        onCheckedChange={setPromptCachingEnabled}
+                        ariaLabel={t("settings.promptCaching")}
+                      />
+                    </div>
+                    {providerType === "claude_code" && promptCachingEnabled ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3">
+                        <span className="text-xs text-muted-foreground">
+                          {t("settings.promptCacheRetention")}
+                        </span>
+                        {(
+                          [
+                            ["short", "settings.promptCacheRetentionShort"],
+                            ["long", "settings.promptCacheRetentionLong"],
+                          ] as const
+                        ).map(([value, labelKey]) => (
+                          <button
+                            key={value}
+                            type="button"
+                            className={cn(
+                              "rounded-full border px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary",
+                              promptCacheRetention === value &&
+                                "border-primary bg-primary/10 text-primary",
+                            )}
+                            aria-pressed={promptCacheRetention === value}
+                            onClick={() => setPromptCacheRetention(value)}
+                          >
+                            {t(labelKey)}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <div className="mt-6 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="text-sm font-semibold">{t("settings.customHeaders")}</span>
+                    {customHeaders.length > 0 ? (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                        {customHeaders.length}
+                      </span>
+                    ) : null}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 gap-1.5 max-[720px]:h-10"
+                    onClick={() => addCustomHeader()}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    {t("settings.addCustomHeader")}
+                  </Button>
                 </div>
 
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="mt-3 h-9 gap-1.5"
-                  onClick={() => addCustomHeader()}
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  {t("settings.addCustomHeader")}
-                </Button>
-
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {CUSTOM_HEADER_KEY_PRESETS.map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      className="min-h-9 rounded-full border border-dashed px-3 py-1.5 font-mono max-[720px]:min-h-10 max-[720px]:px-4 text-[11px] text-muted-foreground transition-colors hover:border-primary hover:text-primary"
-                      onClick={() => addCustomHeader(preset, "value")}
+                {customHeaders.length === 0 ? (
+                  <button
+                    type="button"
+                    className="mt-3 flex w-full flex-col items-center gap-1 rounded-xl border border-dashed px-4 py-8 text-center transition-colors hover:border-primary/50 hover:bg-accent/20"
+                    onClick={() => addCustomHeader()}
+                  >
+                    <List className="h-5 w-5 text-muted-foreground/60" />
+                    <span className="mt-1 text-xs font-medium text-muted-foreground">
+                      {t("settings.noCustomHeaders")}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground/75">
+                      {t("settings.noCustomHeadersHint")}
+                    </span>
+                  </button>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    <div
+                      className="-m-0.5 max-h-[196px] space-y-2 overflow-y-auto p-0.5 max-[720px]:max-h-[360px]"
+                      onScroll={() => setHeaderSuggest(null)}
                     >
-                      + {preset}
-                    </button>
-                  ))}
-                </div>
+                      {customHeaders.map((header, index) => {
+                        const issue = getCustomHeaderKeyIssue(
+                          header.key,
+                          headerValidationSubmitted,
+                        );
+                        const issueTitle =
+                          issue === "reserved"
+                            ? t("settings.customHeaderReservedTitle")
+                            : issue === "invalid"
+                              ? t("settings.invalidCustomHeaderKey")
+                              : undefined;
+                        const valueVisible = visibleHeaderValues.has(index);
+                        const suggestOpen =
+                          headerSuggest?.index === index && headerSuggestItems.length > 0;
 
-                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-                  {t("settings.customHeaderReservedHint")}
-                </p>
+                        return (
+                          <div
+                            key={index}
+                            className={cn(
+                              "provider-panel-enter group relative flex items-stretch overflow-hidden rounded-lg border bg-card transition-all focus-within:border-primary/45 focus-within:ring-2 focus-within:ring-primary/10 hover:border-muted-foreground/30 max-[720px]:flex-wrap",
+                              issue &&
+                                "border-destructive/60 focus-within:border-destructive focus-within:ring-destructive/10",
+                            )}
+                          >
+                            <Input
+                              ref={(element) => {
+                                headerKeyRefs.current[index] = element;
+                              }}
+                              value={header.key}
+                              className={cn(
+                                "h-10 w-[210px] shrink-0 rounded-none border-0 border-r bg-muted/30 px-3 font-mono text-xs shadow-none focus-visible:ring-0 max-[720px]:w-full max-[720px]:border-b max-[720px]:border-r-0 max-[720px]:bg-muted/40",
+                                issue && "text-destructive",
+                              )}
+                              placeholder={t("settings.customHeaderKeyPlaceholder")}
+                              aria-label={t("settings.customHeaderName")}
+                              aria-invalid={issue ? true : undefined}
+                              role="combobox"
+                              aria-expanded={suggestOpen}
+                              aria-controls={suggestOpen ? "provider-header-suggest" : undefined}
+                              aria-autocomplete="list"
+                              title={issueTitle}
+                              autoComplete="off"
+                              spellCheck={false}
+                              onChange={(event) => {
+                                updateCustomHeader(index, "key", event.currentTarget.value);
+                                openHeaderSuggest(index);
+                              }}
+                              onFocus={() => openHeaderSuggest(index)}
+                              onBlur={() => setHeaderSuggest(null)}
+                              onKeyDown={(event) => {
+                                if (event.key === "ArrowDown") {
+                                  event.preventDefault();
+                                  if (suggestOpen) {
+                                    setHeaderSuggestActive(
+                                      (headerSuggestActiveIndex + 1) % headerSuggestItems.length,
+                                    );
+                                  } else {
+                                    openHeaderSuggest(index);
+                                  }
+                                  return;
+                                }
+                                if (event.key === "ArrowUp" && suggestOpen) {
+                                  event.preventDefault();
+                                  setHeaderSuggestActive(
+                                    (headerSuggestActiveIndex - 1 + headerSuggestItems.length) %
+                                      headerSuggestItems.length,
+                                  );
+                                  return;
+                                }
+                                if (event.key === "Escape" && headerSuggest) {
+                                  event.preventDefault();
+                                  setHeaderSuggest(null);
+                                  return;
+                                }
+                                if (event.key !== "Enter") return;
+                                event.preventDefault();
+                                if (suggestOpen) {
+                                  applyHeaderSuggestion(
+                                    headerSuggestItems[headerSuggestActiveIndex],
+                                  );
+                                  return;
+                                }
+                                focusCustomHeader(index, "value");
+                              }}
+                            />
+                            <div className="relative min-w-0 flex-1 max-[720px]:basis-full">
+                              <Input
+                                ref={(element) => {
+                                  headerValueRefs.current[index] = element;
+                                }}
+                                type={valueVisible ? "text" : "password"}
+                                value={header.value}
+                                className="h-10 w-full rounded-none border-0 bg-transparent pl-3 pr-[4.5rem] font-mono text-xs shadow-none focus-visible:ring-0"
+                                placeholder={t("settings.customHeaderValue")}
+                                aria-label={t("settings.customHeaderValue")}
+                                autoComplete="off"
+                                spellCheck={false}
+                                onChange={(event) =>
+                                  updateCustomHeader(index, "value", event.currentTarget.value)
+                                }
+                                onKeyDown={(event) => {
+                                  if (event.key !== "Enter") return;
+                                  event.preventDefault();
+                                  if (index === customHeaders.length - 1) addCustomHeader();
+                                  else focusCustomHeader(index + 1, "key");
+                                }}
+                              />
+                              <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 max-[720px]:opacity-100">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+                                  onClick={() => toggleCustomHeaderValue(index)}
+                                  title={
+                                    valueVisible
+                                      ? t("settings.hideCustomHeaderValue")
+                                      : t("settings.showCustomHeaderValue")
+                                  }
+                                  aria-label={
+                                    valueVisible
+                                      ? t("settings.hideCustomHeaderValue")
+                                      : t("settings.showCustomHeaderValue")
+                                  }
+                                >
+                                  {valueVisible ? (
+                                    <EyeOff className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Eye className="h-3.5 w-3.5" />
+                                  )}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                  onClick={() => removeCustomHeader(index)}
+                                  title={t("settings.removeCustomHeader")}
+                                  aria-label={t("settings.removeCustomHeader")}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {headerIssueMessage ? (
+                  <p className="mt-2 text-xs leading-relaxed text-destructive" role="alert">
+                    {headerIssueMessage}
+                  </p>
+                ) : null}
+
+                {headerSuggest && headerSuggestItems.length > 0
+                  ? createPortal(
+                      <div
+                        id="provider-header-suggest"
+                        role="listbox"
+                        className="fixed z-[70] overflow-hidden rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg"
+                        style={{
+                          left: headerSuggest.rect.left,
+                          top: headerSuggest.rect.top,
+                          width: headerSuggest.rect.width,
+                        }}
+                      >
+                        {headerSuggestItems.map((preset, itemIndex) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            role="option"
+                            aria-selected={itemIndex === headerSuggestActiveIndex}
+                            className={cn(
+                              "flex w-full items-center rounded-md px-2.5 py-2 text-left font-mono text-xs text-muted-foreground transition-colors",
+                              itemIndex === headerSuggestActiveIndex && "bg-accent text-foreground",
+                            )}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onMouseEnter={() => setHeaderSuggestActive(itemIndex)}
+                            onClick={() => applyHeaderSuggestion(preset)}
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                      </div>,
+                      document.body,
+                    )
+                  : null}
               </section>
             )}
           </div>
@@ -1036,13 +1292,20 @@ function CustomSettingsDrawer(props: SettingsSectionProps & { onClose: () => voi
   const conversationTitleModel = settings.customSettings.conversationTitleModel;
   const selectedValue = conversationTitleModel
     ? toModelValue(conversationTitleModel.customProviderId, conversationTitleModel.model)
-    : TITLE_MODEL_FOLLOW_CURRENT_VALUE;
-  const selectedOption = modelOptions.find((option) => option.value === selectedValue);
-  const selectedLabel = conversationTitleModel
-    ? selectedOption
-      ? `${selectedOption.providerName} / ${selectedOption.label}`
-      : conversationTitleModel.model
-    : t("settings.conversationTitleModelFollowCurrent");
+    : "";
+  // A stored model that is no longer among the active options still shows as
+  // selected (same fallback-entry approach as the cron prompt form).
+  const titleModelOptions =
+    conversationTitleModel && !modelOptions.some((option) => option.value === selectedValue)
+      ? [
+          ...modelOptions,
+          {
+            value: selectedValue,
+            label: conversationTitleModel.model,
+            providerName: conversationTitleModel.customProviderId,
+          },
+        ]
+      : modelOptions;
 
   useEffect(
     () => () => {
@@ -1062,12 +1325,10 @@ function CustomSettingsDrawer(props: SettingsSectionProps & { onClose: () => voi
   }
 
   function handleTitleModelChange(value: string) {
+    // "" comes from the picker's follow-current entry and parses to undefined.
     setSettings((prev) =>
       updateCustomSettings(prev, {
-        conversationTitleModel:
-          value === TITLE_MODEL_FOLLOW_CURRENT_VALUE
-            ? undefined
-            : (parseModelValue(value) ?? undefined),
+        conversationTitleModel: parseModelValue(value) ?? undefined,
       }),
     );
   }
@@ -1133,21 +1394,15 @@ function CustomSettingsDrawer(props: SettingsSectionProps & { onClose: () => voi
                 <Label className="text-[12.5px] font-medium text-foreground/85">
                   {t("settings.conversationTitleModel")}
                 </Label>
-                <Select value={selectedValue} onValueChange={handleTitleModelChange}>
-                  <SelectTrigger className="h-9 rounded-lg border-foreground/10 bg-white/70 shadow-sm dark:bg-background/40">
-                    <SelectValue>{selectedLabel}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent className="max-h-72">
-                    <SelectItem value={TITLE_MODEL_FOLLOW_CURRENT_VALUE}>
-                      {t("settings.conversationTitleModelFollowCurrent")}
-                    </SelectItem>
-                    {modelOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.providerName} / {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <ModelPicker
+                  options={titleModelOptions}
+                  value={selectedValue}
+                  onChange={handleTitleModelChange}
+                  placeholder={t("settings.conversationTitleModelFollowCurrent")}
+                  noneLabel={t("settings.conversationTitleModelFollowCurrent")}
+                  ariaLabel={t("settings.conversationTitleModel")}
+                  triggerClassName="h-9 rounded-lg border-foreground/10 bg-white/70 text-[13px] shadow-sm dark:bg-background/40"
+                />
                 {modelOptions.length === 0 ? (
                   <div className="mt-1 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2 text-[11.5px] leading-relaxed text-amber-700 dark:text-amber-300">
                     {t("settings.customSettingsModelEmpty")}

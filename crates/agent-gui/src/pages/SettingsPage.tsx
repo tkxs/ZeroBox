@@ -8,6 +8,7 @@ import {
   Cpu,
   Info,
   Key,
+  Keyboard,
   Settings2,
   Shield,
   Wrench,
@@ -20,6 +21,7 @@ import { AboutSection } from "./settings/AboutSection";
 import { AccountSection } from "./settings/AccountSection";
 import { AgentsSection } from "./settings/AgentsSection";
 import { CronSection } from "./settings/CronSection";
+import { GlobalShortcutsSection } from "./settings/GlobalShortcutsSection";
 import { HooksSection } from "./settings/HooksSection";
 import { MemoryPanel } from "./settings/memory/MemoryPanel";
 import { RelayProvidersSection } from "./settings/RelayProvidersSection";
@@ -124,7 +126,10 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     labelKey: "settings.groupOther",
-    items: [{ id: "about", icon: <Info className="h-3.5 w-3.5" /> }],
+    items: [
+      { id: "shortcuts", icon: <Keyboard className="h-3.5 w-3.5" /> },
+      { id: "about", icon: <Info className="h-3.5 w-3.5" /> },
+    ],
   },
 ];
 
@@ -148,6 +153,7 @@ export function SettingsPage(props: SettingsPageProps) {
   const sectionLabels: Record<SectionId, string> = {
     account: t("settings.navAccount"),
     system: t("settings.navSystem"),
+    shortcuts: t("settings.navShortcuts"),
     systemTools: t("settings.navSystemTools"),
     providers: t("settings.navProviders"),
     agents: t("settings.navAgents"),
@@ -200,6 +206,8 @@ export function SettingsPage(props: SettingsPageProps) {
         return <RelayProvidersSection settings={settings} setSettings={setSettings} />;
       case "system":
         return <SystemSettingsForm settings={settings} setSettings={setSettings} />;
+      case "shortcuts":
+        return <GlobalShortcutsSection />;
       case "systemTools":
         return <SystemToolsSection settings={settings} setSettings={setSettings} />;
       case "hooks":

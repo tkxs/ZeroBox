@@ -22,7 +22,7 @@ import { createStreamingTextReconciler } from "./messageUtils";
 import { createModelFromConfig } from "./modelFactory";
 import { finalizeProviderStreamOptions } from "./payloadPipeline";
 import {
-  buildProviderAuthHeaders,
+  buildProviderRequestHeaders,
   buildProviderRequestMetadata,
   mergeCustomHeaders,
   resolveProviderCacheRetention,
@@ -71,6 +71,8 @@ function buildTextOnlyStreamOptions(params: {
   cacheRetention?: CacheRetention;
   nativeWebSearch?: boolean;
   debugLogger?: StreamDebugLogger;
+  onRetryStatus?: (attempt: number, maxAttempts: number, errorMessage: string) => void;
+  onRetryRecovered?: () => void;
 }): StreamOptionsEx {
   const sessionId = normalizeSessionId(params.sessionId);
   const nativeWebSearch =
@@ -89,6 +91,7 @@ function buildTextOnlyStreamOptions(params: {
       params.providerId,
       params.runtime.promptCachingEnabled,
       params.cacheRetention,
+      params.runtime.promptCacheRetention,
     ),
     metadata: buildProviderRequestMetadata(params.providerId, sessionId),
     reasoning:
@@ -101,6 +104,10 @@ function buildTextOnlyStreamOptions(params: {
     // Text-only mode cannot execute local tools. Provider-native web search is
     // hosted by the upstream provider, so it can stay on auto when explicitly enabled.
     toolChoice: usesOpenAIChatNativeWebSearch ? undefined : nativeWebSearch ? "auto" : "none",
+    streamRetry: {
+      onRetry: params.onRetryStatus,
+      onRetryRecovered: params.onRetryRecovered,
+    },
   };
   return finalizeProviderStreamOptions({
     providerId: params.providerId,
@@ -129,6 +136,8 @@ export async function streamAssistantMessage(params: {
   allowJsonOutput?: boolean;
   nativeWebSearch?: boolean;
   onHostedSearch?: (block: HostedSearchBlock) => void;
+  onRetryStatus?: (attempt: number, maxAttempts: number, errorMessage: string) => void;
+  onRetryRecovered?: () => void;
 }) {
   const modelId = params.model.trim();
   if (!modelId) throw new Error("No model selected");
@@ -139,7 +148,12 @@ export async function streamAssistantMessage(params: {
     params.providerId,
     params.runtime.baseUrl.trim(),
     mergeCustomHeaders(
-      buildProviderAuthHeaders(params.providerId, params.runtime.apiKey),
+      buildProviderRequestHeaders(
+        params.providerId,
+        params.runtime.apiKey,
+        params.sessionId,
+        params.runtime.requestFormat,
+      ),
       params.runtime.customHeaders,
     ),
     { useSystemProxy: params.runtime.useSystemProxy === true },
@@ -179,6 +193,8 @@ export async function streamAssistantMessage(params: {
     cacheRetention: params.cacheRetention,
     nativeWebSearch: params.nativeWebSearch,
     debugLogger: params.debugLogger,
+    onRetryStatus: params.onRetryStatus,
+    onRetryRecovered: params.onRetryRecovered,
   });
 
   params.debugLogger?.logRequest(
@@ -332,7 +348,12 @@ export async function completeAssistantMessage(params: {
     params.providerId,
     params.runtime.baseUrl.trim(),
     mergeCustomHeaders(
-      buildProviderAuthHeaders(params.providerId, params.runtime.apiKey),
+      buildProviderRequestHeaders(
+        params.providerId,
+        params.runtime.apiKey,
+        params.sessionId,
+        params.runtime.requestFormat,
+      ),
       params.runtime.customHeaders,
     ),
     { useSystemProxy: params.runtime.useSystemProxy === true },

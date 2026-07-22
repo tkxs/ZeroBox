@@ -5,6 +5,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { CronPromptRunner } from "./components/cron/CronPromptRunner";
 import { DesktopExecutionSwitcher } from "./components/DesktopExecutionSwitcher";
+import { Pin } from "./components/icons";
 import { useNativeInputContextMenu } from "./components/input-context-menu/NativeInputContextMenu";
 import { MemoryOrganizerHost } from "./components/memory/useMemoryOrganizer";
 import { RelayAccessGate } from "./components/relay/RelayAccessGate";
@@ -47,6 +48,7 @@ import {
   buildGatewaySettingsSyncPayload,
   type GatewaySettingsSyncPayload,
 } from "./lib/settings/sync";
+import { applyStoredGlobalShortcuts } from "./lib/shortcuts/globalShortcuts";
 import { ChatPage } from "./pages/ChatPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import type { SectionId } from "./pages/settings/types";
@@ -325,6 +327,45 @@ export default function App() {
     });
   }, [settingsReady, settings.closeWindowBehavior]);
 
+  // 启动时恢复本机保存的全局快捷键（桌面端专属，非 Tauri 环境内部自动忽略）。
+  useEffect(() => {
+    void applyStoredGlobalShortcuts().catch(() => {});
+  }, []);
+
+  // 窗口置顶状态：Rust 侧是唯一事实源（快捷键或指示器切换都经它广播），
+  // 挂载时查询一次以覆盖 webview 重载后指示器丢失的情况。
+  const [windowPinned, setWindowPinned] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    invoke<boolean>("app_window_pinned")
+      .then((pinned) => {
+        if (!cancelled) setWindowPinned(Boolean(pinned));
+      })
+      .catch(() => {
+        // 非 Tauri 环境或旧版桌面壳：忽略。
+      });
+    listen<boolean>("global-shortcut:pin-changed", (event) => {
+      setWindowPinned(Boolean(event.payload));
+    })
+      .then((nextUnlisten) => {
+        if (cancelled) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
+      })
+      .catch(() => {
+        // 非 Tauri 环境忽略。
+      });
+    return () => {
+      cancelled = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
+
   useEffect(() => {
     const handleSessionChanged = () => {
       setRelayReady(false);
@@ -502,6 +543,37 @@ export default function App() {
 
   const closeSettings = useCallback(() => {
     setOverlay("leaving");
+  }, []);
+
+  // 全局快捷键「新建对话」触发时，若设置覆盖层开着则先收起，露出对话页。
+  const closeSettingsRef = useRef(closeSettings);
+  closeSettingsRef.current = closeSettings;
+  const settingsOpenRef = useRef(settingsOpen);
+  settingsOpenRef.current = settingsOpen;
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    listen("global-shortcut:new-chat", () => {
+      if (settingsOpenRef.current) {
+        closeSettingsRef.current();
+      }
+    })
+      .then((nextUnlisten) => {
+        if (cancelled) {
+          nextUnlisten();
+          return;
+        }
+        unlisten = nextUnlisten;
+      })
+      .catch(() => {
+        // 非 Tauri 环境忽略。
+      });
+    return () => {
+      cancelled = true;
+      if (unlisten) {
+        unlisten();
+      }
+    };
   }, []);
 
   const handleTransitionEnd = useCallback(() => {
@@ -727,6 +799,19 @@ export default function App() {
               />
             </AppErrorBoundary>
           </div>
+        )}
+        {windowPinned && (
+          <button
+            type="button"
+            onClick={() => {
+              void invoke("app_toggle_window_pin").catch(() => {});
+            }}
+            title={translate("app.windowPinnedHint", settings.locale)}
+            className="absolute top-3 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary shadow-sm backdrop-blur transition-colors hover:bg-primary/20"
+          >
+            <Pin className="h-3 w-3" />
+            {translate("app.windowPinned", settings.locale)}
+          </button>
         )}
       </AppChrome>
     </LocaleContext.Provider>

@@ -5,6 +5,7 @@ import { createTsModuleLoader } from "../helpers/load-ts-module.mjs";
 const loader = createTsModuleLoader();
 const providers = loader.loadModule("src/lib/providers/llm.ts");
 const proxy = loader.loadModule("src/lib/providers/proxy.ts");
+const customHeaderHelpers = loader.loadModule("src/lib/providers/customHeaders.ts");
 const providerUtils = loader.loadModule("src/pages/settings/providerUtils.ts");
 
 function createMockAssistantStream() {
@@ -65,9 +66,10 @@ test("llm facade preserves provider runtime exports", () => {
     "attachCodexResponsesStorage",
     "attachPayloadDebugLogging",
     "attachProviderNativeWebSearch",
-    "buildDualAuthHeaders",
+    "buildAnthropicAuthHeaders",
     "buildGeminiAuthHeaders",
-    "buildProviderAuthHeaders",
+    "buildOpenAIAuthHeaders",
+    "buildProviderRequestHeaders",
     "buildProviderRequestMetadata",
     "isValidCustomHeaderKey",
     "mergeCustomHeaders",
@@ -130,20 +132,73 @@ test("image proxy URL builder encodes the source URL", () => {
 });
 
 test("provider request helpers normalize auth, metadata, errors, and model values", () => {
-  assert.deepEqual(providers.buildDualAuthHeaders("secret"), {
-    Authorization: "Bearer secret",
+  assert.deepEqual(providers.buildAnthropicAuthHeaders("secret"), {
     "x-api-key": "secret",
+  });
+  assert.deepEqual(providers.buildOpenAIAuthHeaders("secret"), {
+    Authorization: "Bearer secret",
   });
   assert.deepEqual(providers.buildGeminiAuthHeaders("secret"), {
     "x-goog-api-key": "secret",
   });
-  assert.deepEqual(providers.buildProviderAuthHeaders("gemini", "secret"), {
+  assert.deepEqual(
+    providers.buildProviderRequestHeaders("claude_code", "secret", "conversation-1"),
+    {
+      "x-api-key": "secret",
+      "x-app": "cli",
+      "User-Agent": "claude-cli/2.1.71 (external, cli)",
+      "Content-Type": "application/json",
+      "X-Stainless-OS": "MacOS",
+      "X-Stainless-Arch": "arm64",
+      "X-Stainless-Lang": "js",
+      "anthropic-version": "2023-06-01",
+      "X-Stainless-Runtime": "node",
+      "X-Stainless-Timeout": "600",
+      "x-stainless-retry-count": "0",
+      "X-Stainless-Package-Version": "0.74.0",
+      "X-Stainless-Runtime-Version": "v22.19.0",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+  );
+  assert.deepEqual(
+    providers.buildProviderRequestHeaders("claude_code", "sk-ant-oat01-test", "conversation-1"),
+    {},
+  );
+  assert.deepEqual(providers.buildProviderRequestHeaders("codex", "secret", "conversation-1"), {
+    Authorization: "Bearer secret",
+    "User-Agent": "codex_cli_rs/0.72.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal",
+    session_id: "conversation-1",
+    conversation_id: "conversation-1",
+  });
+  // Responses 格式显式指定时保持 Codex CLI 身份头。
+  assert.deepEqual(
+    providers.buildProviderRequestHeaders("codex", "secret", "conversation-1", "openai-responses"),
+    {
+      Authorization: "Bearer secret",
+      "User-Agent": "codex_cli_rs/0.72.0 (Ubuntu 24.4.0; x86_64) WindowsTerminal",
+      session_id: "conversation-1",
+      conversation_id: "conversation-1",
+    },
+  );
+  // 标准 Chat Completions 是无状态协议：只带 Authorization，
+  // 不带 codex_cli_rs UA 与 session_id/conversation_id。
+  assert.deepEqual(
+    providers.buildProviderRequestHeaders(
+      "codex",
+      "secret",
+      "conversation-1",
+      "openai-completions",
+    ),
+    {
+      Authorization: "Bearer secret",
+    },
+  );
+  assert.deepEqual(providers.buildProviderRequestHeaders("gemini", "secret", "conversation-1"), {
     "x-goog-api-key": "secret",
   });
-  assert.deepEqual(providers.buildProviderAuthHeaders("codex", "secret"), {
-    Authorization: "Bearer secret",
-    "x-api-key": "secret",
-  });
+  const generatedCodexHeaders = providers.buildProviderRequestHeaders("codex", "secret");
+  assert.match(generatedCodexHeaders.session_id, /^[0-9a-f-]{36}$/i);
+  assert.equal(generatedCodexHeaders.conversation_id, generatedCodexHeaders.session_id);
   assert.equal(providers.toSimpleStreamReasoning("off"), undefined);
   assert.equal(providers.toSimpleStreamReasoning("high"), "high");
   assert.equal(providers.toSimpleStreamReasoning("max"), "max");
@@ -197,6 +252,36 @@ test("provider request helpers normalize auth, metadata, errors, and model value
   assert.equal(
     providers.normalizeErrorMessage('prefix {"error":{"message":"nested failure"}}'),
     "nested failure",
+  );
+});
+
+test("provider-specific custom header suggestions include standard model headers", () => {
+  const anthropicPresets = customHeaderHelpers.getCustomHeaderKeyPresets("claude_code");
+  assert.ok(anthropicPresets.includes("User-Agent"));
+  assert.ok(anthropicPresets.includes("Content-Type"));
+  assert.ok(anthropicPresets.includes("anthropic-version"));
+  assert.ok(anthropicPresets.includes("X-Stainless-Runtime-Version"));
+  assert.ok(anthropicPresets.includes("anthropic-dangerous-direct-browser-access"));
+  assert.ok(!anthropicPresets.includes("anthropic-beta"));
+  assert.ok(!anthropicPresets.includes("session_id"));
+
+  const codexPresets = customHeaderHelpers.getCustomHeaderKeyPresets("codex");
+  assert.ok(codexPresets.includes("User-Agent"));
+  assert.ok(codexPresets.includes("session_id"));
+  assert.ok(codexPresets.includes("conversation_id"));
+  assert.ok(!codexPresets.includes("anthropic-version"));
+});
+
+test("local proxy preserves explicit user-agent and content-type values for the upstream hop", () => {
+  assert.deepEqual(
+    proxy.buildUpstreamHeaderOverrideHeaders({
+      "user-agent": "custom-agent/1.0",
+      "CONTENT-TYPE": "application/custom+json",
+    }),
+    {
+      "x-liveagent-upstream-user-agent": "custom-agent/1.0",
+      "x-liveagent-upstream-content-type": "application/custom+json",
+    },
   );
 });
 
@@ -1174,11 +1259,12 @@ test("custom provider headers merge without mutating the base headers", () => {
   assert.deepEqual(base, { Accept: "application/json", "X-Tenant": "old" });
 });
 
-test("custom provider headers cannot override reserved headers case-insensitively", () => {
+test("custom provider headers override model defaults but not credential or protocol headers", () => {
   const base = {
     Authorization: "Bearer real",
     "x-api-key": "real-api-key",
     "x-goog-api-key": "real-google-key",
+    "anthropic-beta": "context-1m-2025-08-07",
     "anthropic-version": "2023-06-01",
     "Content-Type": "application/json",
     Host: "api.example.com",
@@ -1189,12 +1275,22 @@ test("custom provider headers cannot override reserved headers case-insensitivel
       { key: "authorization", value: "Bearer attacker" },
       { key: "X-API-KEY", value: "attacker" },
       { key: "X-GOOG-API-KEY", value: "attacker" },
+      { key: "Anthropic-Beta", value: "custom-beta" },
       { key: "Anthropic-Version", value: "attacker" },
       { key: "content-type", value: "text/plain" },
       { key: "host", value: "attacker.example" },
       { key: "content-length", value: "0" },
     ]),
-    base,
+    {
+      Authorization: "Bearer real",
+      "x-api-key": "real-api-key",
+      "x-goog-api-key": "real-google-key",
+      "anthropic-beta": "context-1m-2025-08-07",
+      "Anthropic-Version": "attacker",
+      "content-type": "text/plain",
+      Host: "api.example.com",
+      "Content-Length": "42",
+    },
   );
 });
 
@@ -1210,6 +1306,7 @@ test("custom provider headers filter invalid HTTP token keys", () => {
     { "X.Valid-Header_1": "kept" },
   );
   assert.equal(providers.isValidCustomHeaderKey("anthropic-beta"), true);
+  assert.equal(customHeaderHelpers.isReservedCustomHeaderKey("Anthropic-Beta"), true);
   assert.equal(providers.isValidCustomHeaderKey("X-Request-ID"), true);
   assert.equal(providers.isValidCustomHeaderKey("Bad Header"), false);
 });
@@ -1220,3 +1317,127 @@ test("custom provider headers accept undefined and empty arrays", () => {
   assert.deepEqual(providers.mergeCustomHeaders(base, []), base);
 });
 
+test("resolveProviderCacheRetention maps provider settings and per-request overrides", () => {
+  const resolve = providers.resolveProviderCacheRetention;
+  assert.equal(resolve("claude_code", true), "short");
+  assert.equal(resolve("claude_code", undefined), "short");
+  assert.equal(resolve("claude_code", true, undefined, "long"), "long");
+  assert.equal(resolve("claude_code", false, undefined, "long"), "none");
+  // 请求级 override（压缩/标题等辅助请求）永远优先于供应商偏好。
+  assert.equal(resolve("claude_code", true, "none", "long"), "none");
+  assert.equal(resolve("codex", undefined), "short");
+  assert.equal(resolve("codex", false), "none");
+  assert.equal(resolve("codex", true, "none"), "none");
+  // long 档位仅对 Anthropic 生效。
+  assert.equal(resolve("codex", true, undefined, "long"), "short");
+  assert.equal(resolve("gemini", true), undefined);
+});
+
+test("codex payloads get a stable prompt_cache_key on relay hosts", async () => {
+  const options = providers.finalizeProviderStreamOptions({
+    providerId: "codex",
+    baseUrl: "https://relay.example/v1",
+    options: { sessionId: "conv-1234", cacheRetention: "short" },
+  });
+
+  const completionsPayload = await options.onPayload(
+    { messages: [] },
+    { api: "openai-completions", provider: "openai", id: "relay-model" },
+  );
+  assert.equal(completionsPayload.prompt_cache_key, "conv-1234");
+
+  const responsesPayload = await options.onPayload(
+    { input: "hello" },
+    { api: "openai-responses", provider: "openai", id: "relay-model" },
+  );
+  assert.equal(responsesPayload.prompt_cache_key, "conv-1234");
+});
+
+test("codex prompt_cache_key injection respects retention, existing keys, and length", async () => {
+  const disabled = providers.finalizeProviderStreamOptions({
+    providerId: "codex",
+    baseUrl: "https://relay.example/v1",
+    options: { sessionId: "conv-1234", cacheRetention: "none" },
+  });
+  const disabledPayload = await disabled.onPayload(
+    { messages: [] },
+    { api: "openai-completions", provider: "openai", id: "relay-model" },
+  );
+  assert.equal(disabledPayload.prompt_cache_key, undefined);
+
+  const preset = providers.finalizeProviderStreamOptions({
+    providerId: "codex",
+    baseUrl: "https://relay.example/v1",
+    options: {
+      sessionId: "conv-1234",
+      cacheRetention: "short",
+      onPayload: async (payload) => ({ ...payload, prompt_cache_key: "explicit-key" }),
+    },
+  });
+  const presetPayload = await preset.onPayload(
+    { messages: [] },
+    { api: "openai-completions", provider: "openai", id: "relay-model" },
+  );
+  assert.equal(presetPayload.prompt_cache_key, "explicit-key");
+
+  const clamped = providers.finalizeProviderStreamOptions({
+    providerId: "codex",
+    baseUrl: "https://relay.example/v1",
+    options: { sessionId: "k".repeat(80), cacheRetention: "short" },
+  });
+  const clampedPayload = await clamped.onPayload(
+    { messages: [] },
+    { api: "openai-completions", provider: "openai", id: "relay-model" },
+  );
+  assert.equal(clampedPayload.prompt_cache_key, "k".repeat(64));
+});
+
+test("custom model pricing from settings reaches the runtime model", () => {
+  const cost = { input: 2, output: 8, cacheRead: 0.2, cacheWrite: 2.5 };
+
+  const codexModel = providers.createModelFromConfig(
+    "codex",
+    "relay-gpt",
+    "https://relay.example/v1",
+    undefined,
+    { id: "relay-gpt", contextWindow: 128_000, maxOutputToken: 8_192, cost },
+  );
+  assert.deepEqual(codexModel.cost, cost);
+
+  const claudeModel = providers.createModelFromConfig(
+    "claude_code",
+    "relay-claude",
+    "https://relay.example/v1",
+    undefined,
+    { id: "relay-claude", contextWindow: 200_000, maxOutputToken: 32_000, cost },
+  );
+  assert.deepEqual(claudeModel.cost, cost);
+
+  const geminiModel = providers.createModelFromConfig(
+    "gemini",
+    "relay-gemini",
+    "https://relay.example/v1",
+    undefined,
+    { id: "relay-gemini", contextWindow: 1_000_000, maxOutputToken: 65_536, cost },
+  );
+  assert.deepEqual(geminiModel.cost, cost);
+
+  // 目录内模型同样允许用户覆盖单价：中转计费经常与官方定价不同。
+  const catalogOverride = providers.createModelFromConfig(
+    "codex",
+    "gpt-5",
+    "https://api.openai.com/v1",
+    undefined,
+    { id: "gpt-5", contextWindow: 400_000, maxOutputToken: 128_000, cost },
+  );
+  assert.deepEqual(catalogOverride.cost, cost);
+
+  const uncosted = providers.createModelFromConfig(
+    "codex",
+    "relay-gpt",
+    "https://relay.example/v1",
+    undefined,
+    { id: "relay-gpt", contextWindow: 128_000, maxOutputToken: 8_192 },
+  );
+  assert.deepEqual(uncosted.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+});

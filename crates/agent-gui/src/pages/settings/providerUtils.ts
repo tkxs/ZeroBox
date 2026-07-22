@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { prepareProxyRequest } from "../../lib/providers/proxy";
+import { isGatewayWebuiRuntime } from "../../lib/runtimeEnv";
 import {
   createProviderModelConfig,
   normalizeProviderModelConfigs,
@@ -8,17 +9,12 @@ import {
 } from "../../lib/settings";
 import { normalizeBaseUrl } from "../../lib/settings/normalize";
 
-const GATEWAY_WEBUI_MARKER = "gateway";
 const CODEX_MODELS_SUFFIXES = ["/chat/completions", "/responses", "/response"];
 const GEMINI_GENERATE_SUFFIXES = [":streamGenerateContent", ":generateContent"];
 const ANTHROPIC_API_VERSION = "2023-06-01";
 
-export function isGatewayWebuiRuntime() {
-  return (
-    typeof document !== "undefined" &&
-    document.documentElement.dataset.liveagentWebui === GATEWAY_WEBUI_MARKER
-  );
-}
+// Gateway WebUI 判定移至 lib/runtimeEnv 单一真源；此处再导出保持既有调用方不变。
+export { isGatewayWebuiRuntime };
 
 function normalizeModelBaseUrl(type: ProviderId, baseUrl: string) {
   let normalizedUrl = normalizeBaseUrl(baseUrl);
@@ -86,23 +82,11 @@ export function buildProviderModelsUrl(
   return baseUrl.endsWith("/v1") ? `${baseUrl}/models` : `${baseUrl}/v1/models`;
 }
 
-function buildDefaultModelsHeaders(type: ProviderId, apiKey: string): Record<string, string> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-  };
-  if (type === "gemini") {
-    headers["x-goog-api-key"] = apiKey;
-    return headers;
-  }
-  headers["x-api-key"] = apiKey;
-  if (type === "claude_code") {
-    headers["anthropic-version"] = ANTHROPIC_API_VERSION;
-  }
-  return headers;
-}
-
-function buildOfficialModelsHeaders(type: ProviderId, apiKey: string): Record<string, string> {
+// 每个供应商只带自家标准的 API Key 请求头：claude_code 用 x-api-key、
+// codex 用 Authorization Bearer、gemini 用 x-goog-api-key，绝不双头齐发。
+// default/official 两次尝试仅在 URL 上有差异（gemini v1 vs v1beta），
+// 请求头完全一致，重复的尝试由签名去重收敛。
+function buildModelsHeaders(type: ProviderId, apiKey: string): Record<string, string> {
   if (type === "gemini") {
     return {
       "Content-Type": "application/json",
@@ -138,8 +122,8 @@ export function buildProviderModelsAttempts(
   apiKey: string,
 ): ProviderModelsAttempt[] {
   const candidates: ProviderModelsAttempt[] = [
-    { kind: "default", headers: buildDefaultModelsHeaders(type, apiKey) },
-    { kind: "official", headers: buildOfficialModelsHeaders(type, apiKey) },
+    { kind: "default", headers: buildModelsHeaders(type, apiKey) },
+    { kind: "official", headers: buildModelsHeaders(type, apiKey) },
   ];
 
   const attempts: ProviderModelsAttempt[] = [];

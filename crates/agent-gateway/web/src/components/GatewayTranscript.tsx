@@ -50,20 +50,20 @@ import {
   AssistantBubble,
   AssistantStatus,
   CompactingText,
+  RetryDetailsBlock,
   VibingText,
 } from "@/pages/chat/AssistantBubble";
-import type { TranscriptRow } from "../lib/chat/transcript/types";
+import type { RetryAttemptRecord, TranscriptRow } from "../lib/chat/transcript/types";
 
 import type { GatewayTranscriptRound } from "../lib/chatUi";
 import type { SectionId } from "../pages/settings/types";
 import { ChatEmptyState } from "./chat/ChatEmptyState";
+import { getUploadedFileTypeIcon } from "./chat/fileTypeIcons";
 import {
   Check,
   CheckCircle2,
   ChevronDown,
   Copy,
-  File,
-  FileText,
   GitBranch,
   Loader2,
   Pencil,
@@ -93,6 +93,9 @@ type GatewayTranscriptProps = {
   error?: string | null;
   toolStatus?: string | null;
   toolStatusIsCompaction?: boolean;
+  // Live run's stream-retry history; renders as an expandable details block
+  // under the live status (mirrors the desktop app).
+  retryAttempts?: readonly RetryAttemptRecord[];
   isStreaming?: boolean;
   isLoading?: boolean;
   loadingTitle?: string;
@@ -296,7 +299,6 @@ function useGatewayUploadedImagePreview(
 ) {
   const normalizedWorkspaceRoot = typeof workspaceRoot === "string" ? workspaceRoot.trim() : "";
   const absolutePath = typeof file?.absolutePath === "string" ? file.absolutePath.trim() : "";
-  const relativePath = typeof file?.relativePath === "string" ? file.relativePath.trim() : "";
   const cacheKey = file ? getUploadedImagePreviewCacheKey(normalizedWorkspaceRoot, file) : "";
   const [imageSrc, setImageSrc] = useState<string | null | undefined>(() => {
     if (!file || !normalizedWorkspaceRoot) return null;
@@ -333,7 +335,7 @@ function useGatewayUploadedImagePreview(
     return () => {
       cancelled = true;
     };
-  }, [absolutePath, cacheKey, file, loader, normalizedWorkspaceRoot, relativePath]);
+  }, [absolutePath, cacheKey, file, loader, normalizedWorkspaceRoot]);
 
   return {
     imageSrc: imageSrc ?? null,
@@ -363,6 +365,7 @@ function GatewayUserImageAttachmentCard(props: {
   } = props;
   const [previewOpen, setPreviewOpen] = useState(false);
   const labeledPreview = `${previewLabel}: ${file.fileName}`;
+  const FallbackIcon = getUploadedFileTypeIcon(file);
   const previewSlides = useMemo<ImagePreviewSlide[]>(
     () =>
       imageSrc
@@ -436,7 +439,7 @@ function GatewayUserImageAttachmentCard(props: {
                 : "flex h-10 w-10 items-center justify-center rounded-xl bg-black/[0.03] dark:bg-white/10"
             }
           >
-            {isLoading ? null : <File className="h-5 w-5 opacity-40" />}
+            {isLoading ? null : <FallbackIcon className="h-5 w-5" />}
           </div>
         </div>
       )}
@@ -461,6 +464,7 @@ function GatewayUserFileAttachmentCard(props: {
   compact: boolean;
 }) {
   const { file, onRemove, removeLabel, compact } = props;
+  const TypeIcon = getUploadedFileTypeIcon(file);
   return (
     <div
       title={file.relativePath}
@@ -470,7 +474,7 @@ function GatewayUserFileAttachmentCard(props: {
       )}
     >
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-b from-black/[0.03] to-black/[0.06] dark:from-white/[0.06] dark:to-white/[0.1]">
-        <FileText className="h-4 w-4 text-[hsl(var(--chat-user-fg)/0.45)]" />
+        <TypeIcon className="h-4.5 w-4.5" />
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[calc(11px*var(--zone-font-scale,1))] font-medium leading-tight text-[hsl(var(--chat-user-fg)/0.85)]">
@@ -1021,7 +1025,7 @@ const GatewayAssistantMessageActions = memo(function GatewayAssistantMessageActi
           {formatMessageTimestamp(row.timestamp)}
         </span>
         <div
-          className={`flex gap-0.5 transition-opacity group-focus-within/assistant:opacity-100 group-hover/assistant:opacity-100 ${isRowBranchPending ? "opacity-100" : "opacity-0"}`}
+          className={`flex gap-0.5 transition-opacity group-focus-within/assistant:opacity-100 group-hover/assistant:opacity-100 [@media(hover:none)]:opacity-100 ${isRowBranchPending ? "opacity-100" : "opacity-0"}`}
         >
           <button
             type="button"
@@ -1183,6 +1187,7 @@ const GatewayTranscriptListRegion = memo(function GatewayTranscriptListRegion(pr
   branchPendingMessageId?: string | null;
   toolStatus?: string | null;
   toolStatusIsCompaction: boolean;
+  retryAttempts?: readonly RetryAttemptRecord[];
   readOnly?: boolean;
   redactToolContent?: boolean;
 }) {
@@ -1210,6 +1215,7 @@ const GatewayTranscriptListRegion = memo(function GatewayTranscriptListRegion(pr
     branchPendingMessageId,
     toolStatus,
     toolStatusIsCompaction,
+    retryAttempts,
     readOnly = false,
     redactToolContent = false,
   } = props;
@@ -1552,7 +1558,7 @@ const GatewayTranscriptListRegion = memo(function GatewayTranscriptListRegion(pr
             >
               <div className="flex w-full max-w-full items-start gap-3">
                 <AssistantAvatar />
-                <div className="min-w-0 flex-1 pt-1">
+                <div className="min-w-0 flex-1 space-y-2 pt-1">
                   {displayedToolStatusIsCompaction ? (
                     <div className="flex items-center py-1">
                       <CompactingText />
@@ -1584,6 +1590,9 @@ const GatewayTranscriptListRegion = memo(function GatewayTranscriptListRegion(pr
                       <VibingText />
                     </div>
                   )}
+                  {retryAttempts && retryAttempts.length > 0 ? (
+                    <RetryDetailsBlock attempts={retryAttempts} />
+                  ) : null}
                 </div>
               </div>
             </article>
@@ -1647,6 +1656,14 @@ const GatewayTranscriptListRegion = memo(function GatewayTranscriptListRegion(pr
                   redactToolContent={redactToolContent}
                 />
                 {shouldShowLiveStatus ? <LiveStatusFooter status={liveStatusText} /> : null}
+                {isLatestLiveStreaming &&
+                !shouldShowPendingLiveBubble &&
+                retryAttempts &&
+                retryAttempts.length > 0 ? (
+                  <div className="ml-9 pt-1">
+                    <RetryDetailsBlock attempts={retryAttempts} />
+                  </div>
+                ) : null}
                 {!readOnly && !isLatestLiveStreaming ? (
                   <GatewayAssistantMessageActions
                     row={row}
@@ -1710,6 +1727,7 @@ export function GatewayTranscript({
   error,
   toolStatus,
   toolStatusIsCompaction = false,
+  retryAttempts,
   isStreaming = false,
   isLoading = false,
   loadingTitle,
@@ -1807,6 +1825,7 @@ export function GatewayTranscript({
           branchPendingMessageId={branchPendingMessageId}
           toolStatus={toolStatus}
           toolStatusIsCompaction={toolStatusIsCompaction}
+          retryAttempts={retryAttempts}
           readOnly={readOnly}
           redactToolContent={redactToolContent}
         />
