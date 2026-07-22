@@ -10,6 +10,15 @@
     "moduleResolution": "bundler",
     "paths": {
       "@/*": ["../agent-gateway/web/src/*"],
+      "@bufbuild/protobuf": ["./node_modules/@bufbuild/protobuf/dist/esm/index.d.ts"],
+      "@bufbuild/protobuf/codegenv2": [
+        "./node_modules/@bufbuild/protobuf/dist/esm/codegenv2/index.d.ts"
+      ],
+      "@earendil-works/pi-ai": ["./node_modules/@earendil-works/pi-ai/dist/index.d.ts"],
+      "@earendil-works/pi-ai/providers/*": [
+        "./node_modules/@earendil-works/pi-ai/dist/providers/*.d.ts"
+      ],
+      "@sinclair/typebox": ["./node_modules/@sinclair/typebox/build/esm/index.d.mts"],
       "@tauri-apps/api/core": ["./node_modules/@tauri-apps/api/core"],
       "@tauri-apps/api/event": ["./node_modules/@tauri-apps/api/event"],
       "@tauri-apps/plugin-opener": ["./node_modules/@tauri-apps/plugin-opener"]

@@ -18,8 +18,23 @@ const host = env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react(), Icons({ compiler: "jsx", jsx: "react" })],
   resolve: {
-    dedupe: ["react", "react-dom"],
+    dedupe: [
+      "react",
+      "react-dom",
+      "@bufbuild/protobuf",
+      "@earendil-works/pi-ai",
+      "@sinclair/typebox",
+    ],
     alias: {
+      "@bufbuild/protobuf/codegenv2": fileURLToPath(
+        new URL("./node_modules/@bufbuild/protobuf/dist/esm/codegenv2/index.js", import.meta.url),
+      ),
+      "@bufbuild/protobuf": fileURLToPath(
+        new URL("./node_modules/@bufbuild/protobuf/dist/esm/index.js", import.meta.url),
+      ),
+      "@sinclair/typebox": fileURLToPath(
+        new URL("./node_modules/@sinclair/typebox/build/esm/index.mjs", import.meta.url),
+      ),
       "@": fileURLToPath(new URL("../agent-gateway/web/src", import.meta.url)),
     },
   },
