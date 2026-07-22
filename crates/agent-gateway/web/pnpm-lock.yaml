@@ -147,6 +147,9 @@ importers:
       typescript:
         specifier: ~6.0.2
         version: 6.0.2
+      typescript-transpile:
+        specifier: npm:typescript@~6.0.2
+        version: typescript@6.0.2
       unplugin-icons:
         specifier: ^23.0.1
         version: 23.0.1(@svgr/core@8.1.0(typescript@6.0.2))

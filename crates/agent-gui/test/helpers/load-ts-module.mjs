@@ -2,28 +2,43 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 // typescript 7 (native tsc) no longer ships the JS compiler API the loader
 // needs (transpileModule/ModuleKind), so the transpile step stays on the
 // aliased typescript 6 package.
-import ts from "typescript-transpile";
+const workspaceRequire = createRequire(path.join(process.cwd(), "package.json"));
+const helperRequire = createRequire(import.meta.url);
+
+function resolveTestDependency(id) {
+  try {
+    return workspaceRequire.resolve(id);
+  } catch {
+    return helperRequire.resolve(id);
+  }
+}
+
+const ts = workspaceRequire(resolveTestDependency("typescript-transpile"));
 
 const DEFAULT_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json"];
 
 // Real json-parse/validation implementations from pi-ai (imported by file URL
 // to bypass the package exports map) so argument-integrity and schema-check
 // code paths behave exactly like runtime.
+const workspacePiAiDistDir = path.join(
+  process.cwd(),
+  "node_modules/@earendil-works/pi-ai/dist",
+);
+const helperPiAiDistDir = fileURLToPath(
+  new URL("../../node_modules/@earendil-works/pi-ai/dist/", import.meta.url),
+);
+const piAiDistDir = fs.existsSync(workspacePiAiDistDir)
+  ? workspacePiAiDistDir
+  : helperPiAiDistDir;
 const piAiJsonParse = await import(
-  new URL(
-    "../../node_modules/@earendil-works/pi-ai/dist/utils/json-parse.js",
-    import.meta.url,
-  ).href
+  pathToFileURL(path.join(piAiDistDir, "utils/json-parse.js")).href
 );
 const piAiValidation = await import(
-  new URL(
-    "../../node_modules/@earendil-works/pi-ai/dist/utils/validation.js",
-    import.meta.url,
-  ).href
+  pathToFileURL(path.join(piAiDistDir, "utils/validation.js")).href
 );
 const piAiEventStream = await import(
   new URL(
