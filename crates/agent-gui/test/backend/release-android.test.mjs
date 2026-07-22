@@ -59,3 +59,26 @@ test("Android uses the packaged Gateway WebUI wrapper", () => {
     assert.match(readme, /127\.0\.0\.1:3001/);
   }
 });
+
+test("Android excludes desktop-only global shortcut commands", () => {
+  const appCommands = readRepoFile(
+    "crates/agent-gui/src-tauri/src/commands/app/app.rs",
+  );
+
+  assert.match(
+    appCommands,
+    /#\[cfg\(desktop\)\]\s*use tauri_plugin_global_shortcut/,
+  );
+  for (const command of [
+    "app_window_pinned",
+    "app_toggle_window_pin",
+    "app_set_global_shortcuts",
+  ]) {
+    assert.match(
+      appCommands,
+      new RegExp(
+        `#\\[tauri::command\\]\\s*#\\[cfg\\(desktop\\)\\]\\s*pub fn ${command}`,
+      ),
+    );
+  }
+});

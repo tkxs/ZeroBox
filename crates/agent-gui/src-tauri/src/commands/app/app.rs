@@ -1,7 +1,10 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(desktop)]
+use std::sync::Mutex;
 
 use tauri::{AppHandle, State};
+#[cfg(desktop)]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 use crate::runtime::terminal::TerminalSessionRegistry;
@@ -13,16 +16,19 @@ pub const CLOSE_WINDOW_BEHAVIOR_EXIT: u8 = 1;
 
 /// 已注册全局快捷键 -> 动作 的映射，供插件回调反查动作。
 #[derive(Default)]
+#[cfg(desktop)]
 pub struct GlobalShortcutRegistry {
     entries: Mutex<Vec<(Shortcut, String)>>,
 }
 
 /// 主窗口置顶状态（快捷键切换用；独立 newtype 避免与其他 AtomicBool 状态类型冲突）。
 #[derive(Default)]
+#[cfg(desktop)]
 pub struct WindowPinState(pub AtomicBool);
 
 /// 前端查询当前置顶状态（webview 重载后恢复置顶指示器）。
 #[tauri::command]
+#[cfg(desktop)]
 pub fn app_window_pinned(pin_state: State<'_, Arc<WindowPinState>>) -> bool {
     pin_state.0.load(Ordering::SeqCst)
 }
@@ -30,10 +36,12 @@ pub fn app_window_pinned(pin_state: State<'_, Arc<WindowPinState>>) -> bool {
 /// 前端主动切换置顶（置顶指示器点击取消）；状态变更仍经
 /// `global-shortcut:pin-changed` 事件广播回前端。
 #[tauri::command]
+#[cfg(desktop)]
 pub fn app_toggle_window_pin(app: AppHandle) {
     crate::toggle_main_window_pin(&app);
 }
 
+#[cfg(desktop)]
 impl GlobalShortcutRegistry {
     pub fn lookup_action(&self, shortcut: &Shortcut) -> Option<String> {
         let entries = self.entries.lock().ok()?;
@@ -52,6 +60,7 @@ impl GlobalShortcutRegistry {
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(desktop)]
 pub struct GlobalShortcutBinding {
     pub action: String,
     pub accelerator: String,
@@ -59,6 +68,7 @@ pub struct GlobalShortcutBinding {
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(desktop)]
 pub struct GlobalShortcutFailure {
     pub action: String,
     pub accelerator: String,
@@ -69,6 +79,7 @@ pub struct GlobalShortcutFailure {
 /// 插件上的所有快捷键。日后若有其他模块要注册全局快捷键，必须并入本命令
 /// 的 bindings 走同一条替换路径，不能自行调用插件 register。
 #[tauri::command]
+#[cfg(desktop)]
 pub fn app_set_global_shortcuts(
     app: AppHandle,
     bindings: Vec<GlobalShortcutBinding>,
