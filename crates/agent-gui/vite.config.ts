@@ -11,7 +11,7 @@ const packageJson = JSON.parse(
 // @ts-expect-error process is a nodejs global
 const env = process.env as Record<string, string | undefined>;
 const appVersion = env.LIVEAGENT_APP_VERSION?.trim() || packageJson.version || "0.0.0";
-const usaZeroOrigin = env.VITE_USA_ZERO_ORIGIN?.trim() || "";
+const usaZeroOrigin = env.VITE_USA_ZERO_ORIGIN?.trim() || "https://usa0.top";
 const host = env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/

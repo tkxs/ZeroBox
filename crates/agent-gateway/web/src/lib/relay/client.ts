@@ -1,4 +1,4 @@
-export const RELAY_ORIGIN = "http://127.0.0.1:8080";
+export const RELAY_ORIGIN = "https://usa0.top";
 export const RELAY_SESSION_CHANGED_EVENT = "zerobox:relay-session-changed";
 
 const RELAY_PROXY_BASE = "/api/usa-zero";

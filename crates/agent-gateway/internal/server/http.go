@@ -26,7 +26,7 @@ import (
 func NewHTTPServer(cfg *config.Config, sm *session.Manager) http.Handler {
 	origin := strings.TrimSpace(cfg.USAZeroOrigin)
 	if origin == "" {
-		origin = "http://127.0.0.1:8080"
+		origin = config.DefaultUSAZeroOrigin
 	}
 	usaClient, err := account.NewUSAClient(origin, cfg.RequestTimeout)
 	if err != nil {

@@ -193,7 +193,7 @@ docker run -d \
   --restart unless-stopped \
   -p 3000:8080 \
   -e LIVEAGENT_GATEWAY_OPERATOR_TOKEN=your-operator-token \
-  -e USA_ZERO_ORIGIN=https://accounts.example.com \
+  -e USA_ZERO_ORIGIN=https://usa0.top \
   ghcr.io/tkxs/zeroagent-gateway:latest
 ```
 
@@ -207,7 +207,7 @@ docker pull ghcr.io/tkxs/zeroagent-gateway:latest \
     --restart unless-stopped \
     -p 3000:8080 \
     -e LIVEAGENT_GATEWAY_OPERATOR_TOKEN=your-operator-token \
-    -e USA_ZERO_ORIGIN=https://accounts.example.com \
+    -e USA_ZERO_ORIGIN=https://usa0.top \
     ghcr.io/tkxs/zeroagent-gateway:latest \
   && docker image prune -f
 ```
@@ -253,7 +253,7 @@ location / {
 
 ### 从源码构建
 
-前置条件：Node.js 22、pnpm 10、Rust stable、Go 1.25 和 `protoc`。本地开发可启动 USA-零（约定后端地址为 `http://127.0.0.1:8080`），也可以在登录时配置其他部署地址。
+前置条件：Node.js 22、pnpm 10、Rust stable、Go 1.25 和 `protoc`。USA-零默认后端地址为 `https://usa0.top`；本地开发时仍可通过登录页或环境变量覆盖。
 
 ```powershell
 cd crates/agent-gui
@@ -261,7 +261,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-桌面开发页面由 Tauri 加载 `http://localhost:2120`。本地启动 Gateway 时设置 `PORT=3001` 和 `USA_ZERO_ORIGIN=<USA-零地址>`，然后访问 ZeroAgent WebUI：`http://127.0.0.1:3001`。浏览器账户请求通过 Gateway BFF 和 HttpOnly 会话 Cookie 完成。
+桌面开发页面由 Tauri 加载 `http://localhost:2120`。本地启动 Gateway 时设置 `PORT=3001` 和 `USA_ZERO_ORIGIN=https://usa0.top`，然后访问 ZeroAgent WebUI：`http://127.0.0.1:3001`。浏览器账户请求通过 Gateway BFF 和 HttpOnly 会话 Cookie 完成。
 
 展开下方「开发指南」查看完整 Make 命令。
 

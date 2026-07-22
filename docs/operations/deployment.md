@@ -24,7 +24,7 @@
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
-| `USA_ZERO_ORIGIN` | 是 | USA-零账户与模型服务地址，例如 `https://accounts.example.com`。 |
+| `USA_ZERO_ORIGIN` | 是 | USA-零账户与模型服务地址，默认 `https://usa0.top`。 |
 | `DATABASE_URL` | 是（生产） | PostgreSQL 连接地址，保存设备、工作区快照、对话路由与网页对话历史。 |
 | `REDIS_URL` | 是（生产） | Redis 连接地址，保存 Web 会话、step-up proof 消费状态与设备在线 TTL。 |
 | `LIVEAGENT_GATEWAY_OPERATOR_TOKEN` | 否 | 仅用于运维状态页和内部诊断；普通用户、浏览器和设备不使用此 token。未配置时关闭 operator 诊断认证。 |

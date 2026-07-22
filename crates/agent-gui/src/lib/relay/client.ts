@@ -1,7 +1,7 @@
 import { prepareProxyRequest } from "../providers/proxy";
 
 const RELAY_ORIGIN_KEY = "zerobox.usa-zero-origin";
-const DEFAULT_RELAY_ORIGIN = "http://127.0.0.1:8080";
+const DEFAULT_RELAY_ORIGIN = "https://usa0.top";
 
 function normalizeRelayOrigin(value: string) {
   const url = new URL(value.trim());

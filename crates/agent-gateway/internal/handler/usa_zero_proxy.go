@@ -13,14 +13,14 @@ import (
 )
 
 const (
-	defaultUSAZeroupstreamOrigin = "http://127.0.0.1:8080"
+	defaultUSAZeroupstreamOrigin = "https://usa0.top"
 	usaZeroRoutePrefix           = "/api/usa-zero/"
 	usaZeroAPIPathPrefix         = "/api/v1/"
 	usaZeroAuthHeader            = "X-USA-Zero-Authorization"
 	usaZeroMaxBodyBytes          = 2 << 20
 )
 
-// USAZeroProxy exposes only the local USA-零 API through the authenticated
+// USAZeroProxy exposes only the configured USA-零 API through the authenticated
 // Gateway. The upstream is deliberately fixed and cannot be supplied by WebUI.
 func USAZeroProxy(timeout time.Duration, upstreamOrigin ...string) http.HandlerFunc {
 	origin := defaultUSAZeroupstreamOrigin

@@ -192,7 +192,7 @@ docker run -d \
   --restart unless-stopped \
   -p 3000:8080 \
   -e LIVEAGENT_GATEWAY_OPERATOR_TOKEN=your-operator-token \
-  -e USA_ZERO_ORIGIN=https://accounts.example.com \
+  -e USA_ZERO_ORIGIN=https://usa0.top \
   ghcr.io/tkxs/zeroagent-gateway:latest
 ```
 
@@ -206,7 +206,7 @@ docker pull ghcr.io/tkxs/zeroagent-gateway:latest \
     --restart unless-stopped \
     -p 3000:8080 \
     -e LIVEAGENT_GATEWAY_OPERATOR_TOKEN=your-operator-token \
-    -e USA_ZERO_ORIGIN=https://accounts.example.com \
+    -e USA_ZERO_ORIGIN=https://usa0.top \
     ghcr.io/tkxs/zeroagent-gateway:latest \
   && docker image prune -f
 ```
@@ -253,7 +253,7 @@ location / {
 
 ### Build from Source
 
-Prerequisites: Node.js 22, pnpm 10, Rust stable, Go 1.25, and `protoc`. For local development, start USA-Zero (the conventional backend address is `http://127.0.0.1:8080`) or configure another deployment at login.
+Prerequisites: Node.js 22, pnpm 10, Rust stable, Go 1.25, and `protoc`. The default USA-Zero backend is `https://usa0.top`; use the login screen or environment variables to override it for local development.
 
 ```powershell
 cd crates/agent-gui
@@ -261,7 +261,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-Tauri loads the desktop development page from `http://localhost:2120`. Run Gateway with `PORT=3001` and `USA_ZERO_ORIGIN=<your-USA-Zero-origin>`, then open ZeroAgent WebUI at `http://127.0.0.1:3001`. Browser account requests use Gateway's BFF and HttpOnly session cookie.
+Tauri loads the desktop development page from `http://localhost:2120`. Run Gateway with `PORT=3001` and `USA_ZERO_ORIGIN=https://usa0.top`, then open ZeroAgent WebUI at `http://127.0.0.1:3001`. Browser account requests use Gateway's BFF and HttpOnly session cookie.
 
 Expand the Development Guide below for the full set of Make commands.
 

@@ -17,7 +17,7 @@ func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func TestUSAZeroProxyUsesFixedUpstreamAndRelayAuthorization(t *testing.T) {
 	handler := usaZeroProxyWithTransport(time.Second, roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if got, want := req.URL.String(), "http://127.0.0.1:8080/api/v1/keys?page=1"; got != want {
+		if got, want := req.URL.String(), "https://usa0.top/api/v1/keys?page=1"; got != want {
 			t.Fatalf("upstream URL = %q, want %q", got, want)
 		}
 		if got := req.Header.Get("Authorization"); got != "Bearer relay-token" {

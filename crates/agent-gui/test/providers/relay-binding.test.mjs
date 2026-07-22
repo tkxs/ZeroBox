@@ -13,9 +13,9 @@ test("relay platform mapping and endpoints are fixed", () => {
   assert.equal(relay.relayProviderTypeForPlatform("gemini"), "gemini");
   assert.equal(relay.relayProviderTypeForPlatform("antigravity"), "gemini");
   assert.equal(relay.relayProviderTypeForPlatform("unsupported"), null);
-  assert.equal(relay.relayProviderBaseUrl("claude_code"), "http://127.0.0.1:8080/v1");
-  assert.equal(relay.relayProviderBaseUrl("codex"), "http://127.0.0.1:8080");
-  assert.equal(relay.relayProviderBaseUrl("gemini"), "http://127.0.0.1:8080");
+  assert.equal(relay.relayProviderBaseUrl("claude_code"), "https://usa0.top/v1");
+  assert.equal(relay.relayProviderBaseUrl("codex"), "https://usa0.top");
+  assert.equal(relay.relayProviderBaseUrl("gemini"), "https://usa0.top");
 });
 
 test("built-in provider defaults cannot point to third-party endpoints", () => {
@@ -23,9 +23,9 @@ test("built-in provider defaults cannot point to third-party endpoints", () => {
   assert.deepEqual(
     Array.from(providers, (provider) => provider.baseUrl),
     [
-      "http://127.0.0.1:8080/v1",
-      "http://127.0.0.1:8080",
-      "http://127.0.0.1:8080",
+      "https://usa0.top/v1",
+      "https://usa0.top",
+      "https://usa0.top",
     ],
   );
 });
@@ -78,7 +78,7 @@ test("binding relay keys removes third-party providers and selects an available 
 
   assert.equal(bound.customProviders.length, 1);
   assert.equal(bound.customProviders[0].id, "relay-key-42");
-  assert.equal(bound.customProviders[0].baseUrl, "http://127.0.0.1:8080");
+  assert.equal(bound.customProviders[0].baseUrl, "https://usa0.top");
   assert.equal(bound.customProviders[0].apiKey, "sk-relay-key");
   assert.equal(bound.customProviders[0].requestFormat, "openai-responses");
   assert.equal(bound.selectedModel.customProviderId, "relay-key-42");
@@ -106,6 +106,6 @@ test("runtime constraint rejects injected providers and restores relay URLs", ()
 
   assert.equal(constrained.customProviders.length, 1);
   assert.equal(constrained.customProviders[0].id, "relay-key-9");
-  assert.equal(constrained.customProviders[0].baseUrl, "http://127.0.0.1:8080/v1");
+  assert.equal(constrained.customProviders[0].baseUrl, "https://usa0.top/v1");
   assert.equal(constrained.selectedModel, undefined);
 });
