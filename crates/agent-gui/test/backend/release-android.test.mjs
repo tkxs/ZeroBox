@@ -43,7 +43,7 @@ test("Android uses the packaged Gateway WebUI wrapper", () => {
   const viteConfig = readRepoFile("crates/agent-gui/vite.config.ts");
 
   assert.match(androidConfig, /"url": "mobile\.html"/);
-  assert.match(tauriLib, /#\[cfg\(mobile\)\][\s\S]*ZeroBox mobile WebView/);
+  assert.match(tauriLib, /#\[cfg\(mobile\)\][\s\S]*ZeroAgent mobile WebView/);
   assert.match(tauriLib, /#\[cfg\(desktop\)\]\s*pub fn run\(\)/);
   assert.match(mobileHtml, /Gateway 地址/);
   assert.match(mobileHtml, /id="code-flow"/);

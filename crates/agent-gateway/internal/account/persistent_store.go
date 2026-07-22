@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS zerobox_web_settings (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
-		return fmt.Errorf("migrate ZeroBox account schema: %w", err)
+		return fmt.Errorf("migrate ZeroAgent account schema: %w", err)
 	}
 	return nil
 }

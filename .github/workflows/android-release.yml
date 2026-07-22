@@ -176,9 +176,9 @@ jobs:
 
           build_tools="${ANDROID_HOME}/build-tools/35.0.0"
           mkdir -p dist
-          keystore="$RUNNER_TEMP/zerobox-android.p12"
-          aligned_apk="$RUNNER_TEMP/zerobox-aligned.apk"
-          output_apk="dist/ZeroBox-${{ steps.version.outputs.build_tag }}-Android-arm64.apk"
+          keystore="$RUNNER_TEMP/zeroagent-android.p12"
+          aligned_apk="$RUNNER_TEMP/zeroagent-aligned.apk"
+          output_apk="dist/ZeroAgent-${{ steps.version.outputs.build_tag }}-Android-arm64.apk"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
           "$build_tools/zipalign" -p -f 4 "$unsigned_apk" "$aligned_apk"
           "$build_tools/apksigner" sign \
@@ -196,7 +196,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ZeroBox-${{ steps.version.outputs.build_tag }}-Android-arm64
+          name: ZeroAgent-${{ steps.version.outputs.build_tag }}-Android-arm64
           path: ${{ steps.package.outputs.apk }}
           if-no-files-found: error
 

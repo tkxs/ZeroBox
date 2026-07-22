@@ -25,7 +25,7 @@ function isWindowsTauriRuntime() {
 }
 
 function reportWindowChromeError(action: string, error: unknown) {
-  console.error(`failed to ${action} ZeroBox window`, error);
+  console.error(`failed to ${action} ZeroAgent window`, error);
 }
 
 export function WindowsTitleBar() {
@@ -184,7 +184,7 @@ export function WindowsTitleBar() {
         onMouseDown={startDragging}
       >
         <img
-          src="/zerobox-logo.png"
+          src="/zeroagent-logo.png"
           alt=""
           className="h-[15px] w-[15px] shrink-0 rounded-[3.5px]"
           draggable={false}

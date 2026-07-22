@@ -256,7 +256,7 @@ export function SettingsPage(props: SettingsPageProps) {
             </div>
             <div>
               <div className="text-sm font-semibold tracking-tight">{t("settings.title")}</div>
-              <div className="text-[11px] text-muted-foreground">ZeroBox</div>
+              <div className="text-[11px] text-muted-foreground">ZeroAgent</div>
             </div>
           </div>
         </div>

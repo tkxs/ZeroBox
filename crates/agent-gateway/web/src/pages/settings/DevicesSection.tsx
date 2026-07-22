@@ -97,7 +97,7 @@ export function DevicesSection() {
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {!loading && devices.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          尚未注册设备。登录 ZeroBox 桌面客户端后，设备会自动出现在这里。
+          尚未注册设备。登录 ZeroAgent 桌面客户端后，设备会自动出现在这里。
         </p>
       ) : null}
 

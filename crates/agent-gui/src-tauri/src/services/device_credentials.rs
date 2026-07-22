@@ -51,11 +51,11 @@ pub fn device_default_name() -> String {
         .ok()
         .or_else(|| std::env::var("HOSTNAME").ok())
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "ZeroBox device".to_string())
+        .unwrap_or_else(|| "ZeroAgent device".to_string())
 }
 
 #[tauri::command]
-pub fn zerobox_app_version() -> String {
+pub fn zeroagent_app_version() -> String {
     crate::app_version().to_string()
 }
 
@@ -201,7 +201,7 @@ fn platform_save(value: &str) -> Result<(), String> {
     let mut child = std::process::Command::new("secret-tool")
         .args([
             "store",
-            "--label=ZeroBox device credential",
+            "--label=ZeroAgent device credential",
             "service",
             CREDENTIAL_TARGET,
             "account",

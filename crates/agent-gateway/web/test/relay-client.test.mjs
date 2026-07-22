@@ -61,14 +61,14 @@ test("multi-group key creation is sequential and preserves group names", async (
       { id: 2, name: "Codex 组", platform: "openai", rate_multiplier: 1, status: "active" },
     ];
 
-    const created = await relay.createRelayApiKeys("ZeroBox", [1, 2], groups);
+    const created = await relay.createRelayApiKeys("ZeroAgent", [1, 2], groups);
 
     assert.equal(maximumActiveRequests, 1);
     assert.deepEqual(
       requests.map((request) => request.body),
       [
-        { name: "ZeroBox / Claude 组", group_id: 1 },
-        { name: "ZeroBox / Codex 组", group_id: 2 },
+        { name: "ZeroAgent / Claude 组", group_id: 1 },
+        { name: "ZeroAgent / Codex 组", group_id: 2 },
       ],
     );
     assert.deepEqual(

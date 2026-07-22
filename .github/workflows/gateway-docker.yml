@@ -15,7 +15,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/zerobox-gateway
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/zeroagent-gateway
 
 jobs:
   build-and-push:

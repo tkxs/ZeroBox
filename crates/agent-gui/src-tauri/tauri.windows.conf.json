@@ -3,7 +3,7 @@
   "app": {
     "windows": [
       {
-        "title": "ZeroBox",
+        "title": "ZeroAgent",
         "width": 1400,
         "height": 800,
         "minWidth": 1200,

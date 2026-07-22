@@ -34,7 +34,7 @@ export function DevicesSection({ settings }: { settings: AppSettings }) {
       const result = await getDesktopEnvironments(settings);
       if (!result) {
         setDevices([]);
-        setError("请先在远程设置中配置并启用 ZeroBox Gateway。此电脑注册成功后可管理账号设备。");
+        setError("请先在远程设置中配置并启用 ZeroAgent Gateway。此电脑注册成功后可管理账号设备。");
         return;
       }
       setDevices(result.environments);

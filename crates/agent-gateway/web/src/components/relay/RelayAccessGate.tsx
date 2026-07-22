@@ -22,7 +22,7 @@ import {
 import { bindRelayKeysToSettings, relayProviderTypeForPlatform } from "@/lib/relay/providers";
 import type { AppSettings } from "@/lib/settings";
 import { GroupMultiSelect } from "./GroupMultiSelect";
-import { ZeroBoxLogo } from "./ZeroBoxLogo";
+import { ZeroAgentLogo } from "./ZeroAgentLogo";
 
 type Props = {
   settings: AppSettings;
@@ -174,7 +174,7 @@ export function RelayAccessGate({ settings, setSettings, onReady }: Props) {
     setBusy(true);
     setError("");
     try {
-      await createRelayApiKeys("ZeroBox", selectedGroupIds, groups);
+      await createRelayApiKeys("ZeroAgent", selectedGroupIds, groups);
       const keys = await listRelayApiKeys();
       const next = await bindRelayKeysToSettings(settings, keys, groups, true);
       setSettings(() => next);
@@ -200,10 +200,10 @@ export function RelayAccessGate({ settings, setSettings, onReady }: Props) {
       <div className="w-full max-w-[420px]">
         <div className="mb-6 flex items-center gap-3">
           <div className="h-11 w-11 overflow-hidden rounded-md border bg-white">
-            <ZeroBoxLogo className="h-full w-full object-contain" />
+            <ZeroAgentLogo className="h-full w-full object-contain" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold">ZeroBox</h1>
+            <h1 className="text-lg font-semibold">ZeroAgent</h1>
             <p className="text-xs text-muted-foreground">USA-零 {RELAY_ORIGIN}</p>
           </div>
         </div>

@@ -144,7 +144,7 @@ func (c *USAClient) EnsureWebAPIKey(ctx context.Context, accessToken string) (st
 		return "", err
 	}
 	for _, key := range page.Items {
-		if key.Name == "ZeroBox Web" && key.Status == "active" && strings.TrimSpace(key.Key) != "" {
+		if key.Name == "ZeroAgent Web" && key.Status == "active" && strings.TrimSpace(key.Key) != "" {
 			return strings.TrimSpace(key.Key), nil
 		}
 	}
@@ -180,7 +180,7 @@ func (c *USAClient) EnsureWebAPIKey(ctx context.Context, accessToken string) (st
 		return "", &APIError{Status: http.StatusConflict, Message: "account has no active model group"}
 	}
 	created, err := c.request(ctx, http.MethodPost, "/api/v1/keys", map[string]any{
-		"name": "ZeroBox Web", "group_id": groupID,
+		"name": "ZeroAgent Web", "group_id": groupID,
 	}, accessToken)
 	if err != nil {
 		return "", err

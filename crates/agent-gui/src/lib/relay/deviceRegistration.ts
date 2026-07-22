@@ -38,7 +38,7 @@ export async function registerDesktopDevice(settings: AppSettings) {
       installation_id: installationID(),
       name: existing ? "" : defaultName,
       platform: navigator.platform || "desktop",
-      version: await invoke<string>("zerobox_app_version"),
+      version: await invoke<string>("zeroagent_app_version"),
       device_id: existing?.deviceId ?? "",
       device_credential: existing?.credential ?? "",
       workspaces: settings.system.workspaceProjects.map((workspace) => ({

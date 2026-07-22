@@ -3940,9 +3940,9 @@ export default function GatewayApp() {
   const transcriptBusy = displayedConversationBusy;
   useEffect(() => {
     if (!desktopEmbedded || window.parent === window) return;
-    window.parent.postMessage({ type: "zerobox:execution-busy", busy: transcriptBusy }, "*");
+    window.parent.postMessage({ type: "zeroagent:execution-busy", busy: transcriptBusy }, "*");
     return () => {
-      window.parent.postMessage({ type: "zerobox:execution-busy", busy: false }, "*");
+      window.parent.postMessage({ type: "zeroagent:execution-busy", busy: false }, "*");
     };
   }, [desktopEmbedded, transcriptBusy]);
   // Pipeline pending (pre-first-token) shows the preparing status until the

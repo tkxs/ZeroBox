@@ -64,7 +64,7 @@ export function SharedHistoryPage({ token }: SharedHistoryPageProps) {
           <header className="history-share-header">
             <div className="flex min-w-0 items-center gap-3">
               <img
-                src="/zerobox-logo.png"
+                src="/zeroagent-logo.png"
                 alt=""
                 aria-hidden="true"
                 draggable={false}
@@ -72,7 +72,7 @@ export function SharedHistoryPage({ token }: SharedHistoryPageProps) {
               />
               <div className="min-w-0">
                 <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                  ZeroBox Shared Conversation
+                  ZeroAgent Shared Conversation
                 </div>
                 <h1 className="mt-1 truncate text-lg font-semibold text-foreground" title={title}>
                   {title}

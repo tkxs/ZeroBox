@@ -51,9 +51,9 @@ function releaseAssetUrl(filename) {
 }
 
 function releaseNotes() {
-  if (!notesPath) return `ZeroBox ${releaseTag}`;
+  if (!notesPath) return `ZeroAgent ${releaseTag}`;
   const notes = readFileSync(notesPath, "utf8").trim();
-  return notes || `ZeroBox ${releaseTag}`;
+  return notes || `ZeroAgent ${releaseTag}`;
 }
 
 for (const file of files) {

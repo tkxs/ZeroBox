@@ -1,8 +1,8 @@
 [package]
-name = "zerobox"
+name = "zeroagent"
 # Release builds override this dev placeholder from the Git tag workflow.
 version = "0.1.0"
-description = "ZeroBox USA-零 desktop terminal"
+description = "ZeroAgent USA-零 desktop terminal"
 authors = ["tkxs"]
 edition = "2021"
 

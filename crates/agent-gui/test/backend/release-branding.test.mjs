@@ -11,14 +11,14 @@ function readRepoFile(relativePath) {
   return readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
 
-test("release and Gateway documentation use the ZeroBox repository and image", () => {
+test("release and Gateway documentation use the ZeroAgent repository and image", () => {
   const workflow = readRepoFile(".github/workflows/gateway-docker.yml");
   const readmes = [readRepoFile("README.md"), readRepoFile("README.zh-CN.md")];
 
-  assert.match(workflow, /IMAGE_NAME: ghcr\.io\/\$\{\{ github\.repository_owner \}\}\/zerobox-gateway/);
+  assert.match(workflow, /IMAGE_NAME: ghcr\.io\/\$\{\{ github\.repository_owner \}\}\/zeroagent-gateway/);
   for (const readme of readmes) {
-    assert.match(readme, /https:\/\/github\.com\/tkxs\/ZeroBox\/releases\/latest/);
-    assert.match(readme, /ghcr\.io\/tkxs\/zerobox-gateway:latest/);
+    assert.match(readme, /https:\/\/github\.com\/tkxs\/ZeroAgent\/releases\/latest/);
+    assert.match(readme, /ghcr\.io\/tkxs\/zeroagent-gateway:latest/);
     assert.doesNotMatch(readme, /Stack-Cairn|stack-cairn|LiveAgent-Updater/);
   }
 });

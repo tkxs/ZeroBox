@@ -65,7 +65,7 @@ test("binding relay keys removes third-party providers and selects an available 
   const key = {
     id: 42,
     key: "sk-relay-key",
-    name: "ZeroBox",
+    name: "ZeroAgent",
     group_id: 7,
     status: "active",
     quota: 0,

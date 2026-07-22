@@ -19,7 +19,7 @@ export default defineConfig(async () => ({
   plugins: [react(), Icons({ compiler: "jsx", jsx: "react" })],
   define: {
     __LIVEAGENT_APP_VERSION__: JSON.stringify(appVersion),
-    __ZEROBOX_USA_ZERO_ORIGIN__: JSON.stringify(usaZeroOrigin),
+    __ZEROAGENT_USA_ZERO_ORIGIN__: JSON.stringify(usaZeroOrigin),
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

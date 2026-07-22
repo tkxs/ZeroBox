@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="docs/images/zerobox-logo.png" alt="ZeroBox" width="180" />
+  <img src="docs/images/zeroagent-logo.png" alt="ZeroAgent" width="180" />
 </p>
 
-<h1 align="center">ZeroBox</h1>
+<h1 align="center">ZeroAgent</h1>
 
 <p align="center">
   <strong>The local AI agent terminal for USA-Zero</strong><br/>
@@ -65,20 +65,20 @@
 ## 🤝 Come Build With Us!
 
 <p align="center">
-  <img src="docs/images/QQ.png" alt="ZeroBox QQ Group" width="300" />
+  <img src="docs/images/QQ.png" alt="ZeroAgent QQ Group" width="300" />
 </p>
 
 <p align="center">
-  Scan the QR code to join our QQ group and help drive ZeroBox development!<br/>
+  Scan the QR code to join our QQ group and help drive ZeroAgent development!<br/>
   (Why a QQ group? It just packs a few more features than a WeChat group~)
 </p>
 
 
 ---
 
-## Why ZeroBox?
+## Why ZeroAgent?
 
-ZeroBox is a local-first AI agent client dedicated to **USA-Zero**. Accounts, groups, and API keys are managed by USA-Zero; arbitrary third-party provider URLs are intentionally rejected.
+ZeroAgent is a local-first AI agent client dedicated to **USA-Zero**. Accounts, groups, and API keys are managed by USA-Zero; arbitrary third-party provider URLs are intentionally rejected.
 
 - Runtime-configurable USA-Zero backend (desktop login screen or `VITE_USA_ZERO_ORIGIN`; Gateway `USA_ZERO_ORIGIN`)
 - Groups and models sync after login; users without a key are guided through multi-group creation
@@ -127,7 +127,7 @@ ZeroBox is a local-first AI agent client dedicated to **USA-Zero**. Accounts, gr
 
 ## Download & Deployment
 
-Installers are automatically built and published by GitHub Actions — grab the latest version from [**GitHub Releases**](https://github.com/tkxs/ZeroBox/releases/latest).
+Installers are automatically built and published by GitHub Actions — grab the latest version from [**GitHub Releases**](https://github.com/tkxs/ZeroAgent/releases/latest).
 
 ### System Requirements
 
@@ -139,38 +139,38 @@ Installers are automatically built and published by GitHub Actions — grab the 
 
 ### macOS
 
-Download the DMG matching your chip from [Releases](https://github.com/tkxs/ZeroBox/releases/latest), open it, and drag ZeroBox into Applications:
+Download the DMG matching your chip from [Releases](https://github.com/tkxs/ZeroAgent/releases/latest), open it, and drag ZeroAgent into Applications:
 
-- Apple Silicon (M-series): `ZeroBox-<version>-macOS-aarch64.dmg`
-- Intel: `ZeroBox-<version>-macOS-x64.dmg`
+- Apple Silicon (M-series): `ZeroAgent-<version>-macOS-aarch64.dmg`
+- Intel: `ZeroAgent-<version>-macOS-x64.dmg`
 
 > The installer is signed and notarized by Apple — no manual security override is needed on first launch.
 
 ### Windows
 
-Pick an installation method from [Releases](https://github.com/tkxs/ZeroBox/releases/latest):
+Pick an installation method from [Releases](https://github.com/tkxs/ZeroAgent/releases/latest):
 
 | Method | File | Best for |
 |---|---|---|
-| Setup wizard | `ZeroBox-<version>-Windows-x64-Setup.exe` | Most users |
-| MSI package | `ZeroBox-<version>-Windows-x64.msi` | Enterprise distribution / silent install |
-| Portable | `ZeroBox-<version>-Windows-x64-portable.zip` | No install — unzip and run |
+| Setup wizard | `ZeroAgent-<version>-Windows-x64-Setup.exe` | Most users |
+| MSI package | `ZeroAgent-<version>-Windows-x64.msi` | Enterprise distribution / silent install |
+| Portable | `ZeroAgent-<version>-Windows-x64-portable.zip` | No install — unzip and run |
 
 ### Linux
 
-Choose by distribution from [Releases](https://github.com/tkxs/ZeroBox/releases/latest):
+Choose by distribution from [Releases](https://github.com/tkxs/ZeroAgent/releases/latest):
 
 | Format | Distributions | Install |
 |---|---|---|
 | AppImage | Any distribution | `chmod +x`, then run directly |
-| DEB | Debian / Ubuntu family | `sudo dpkg -i ZeroBox-<version>-Linux-x86_64.deb` |
-| RPM | Fedora / openSUSE family | `sudo rpm -i ZeroBox-<version>-Linux-x86_64.rpm` |
+| DEB | Debian / Ubuntu family | `sudo dpkg -i ZeroAgent-<version>-Linux-x86_64.deb` |
+| RPM | Fedora / openSUSE family | `sudo rpm -i ZeroAgent-<version>-Linux-x86_64.rpm` |
 
 ### Android (arm64)
 
-Download `ZeroBox-<version>-Android-arm64.apk` from [Releases](https://github.com/tkxs/ZeroBox/releases/latest) and allow installation from your browser or file manager when Android prompts for permission.
+Download `ZeroAgent-<version>-Android-arm64.apk` from [Releases](https://github.com/tkxs/ZeroAgent/releases/latest) and allow installation from your browser or file manager when Android prompts for permission.
 
-The Android app is a lightweight wrapper for the ZeroBox Gateway WebUI. On launch, enter the HTTPS address of your deployed Gateway. To test against a Gateway running locally on port `3001` from an emulator or USB-connected device, enable port reverse forwarding and enter `http://127.0.0.1:3001` in the app:
+The Android app is a lightweight wrapper for the ZeroAgent Gateway WebUI. On launch, enter the HTTPS address of your deployed Gateway. To test against a Gateway running locally on port `3001` from an emulator or USB-connected device, enable port reverse forwarding and enter `http://127.0.0.1:3001` in the app:
 
 ```bash
 adb reverse tcp:3001 tcp:3001
@@ -184,30 +184,30 @@ The desktop app connects directly to the USA-Zero address configured on its logi
 
 ```bash
 # Pull the image (built by GitHub Actions, multi-arch: amd64 / arm64)
-docker pull ghcr.io/tkxs/zerobox-gateway:latest
+docker pull ghcr.io/tkxs/zeroagent-gateway:latest
 
 # Run in the background (HTTP/WebSocket → host 3000)
 docker run -d \
-  --name zerobox-gateway \
+  --name zeroagent-gateway \
   --restart unless-stopped \
   -p 3000:8080 \
   -e LIVEAGENT_GATEWAY_OPERATOR_TOKEN=your-operator-token \
   -e USA_ZERO_ORIGIN=https://accounts.example.com \
-  ghcr.io/tkxs/zerobox-gateway:latest
+  ghcr.io/tkxs/zeroagent-gateway:latest
 ```
 
 **One-command upgrade to the latest version** — pull the new image → remove the old container → recreate it with the same arguments (if you changed the port mappings or token, adjust the arguments below accordingly):
 
 ```bash
-docker pull ghcr.io/tkxs/zerobox-gateway:latest \
-  && docker rm -f zerobox-gateway \
+docker pull ghcr.io/tkxs/zeroagent-gateway:latest \
+  && docker rm -f zeroagent-gateway \
   && docker run -d \
-    --name zerobox-gateway \
+    --name zeroagent-gateway \
     --restart unless-stopped \
     -p 3000:8080 \
     -e LIVEAGENT_GATEWAY_OPERATOR_TOKEN=your-operator-token \
     -e USA_ZERO_ORIGIN=https://accounts.example.com \
-    ghcr.io/tkxs/zerobox-gateway:latest \
+    ghcr.io/tkxs/zeroagent-gateway:latest \
   && docker image prune -f
 ```
 
@@ -261,7 +261,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-Tauri loads the desktop development page from `http://localhost:2120`. Run Gateway with `PORT=3001` and `USA_ZERO_ORIGIN=<your-USA-Zero-origin>`, then open ZeroBox WebUI at `http://127.0.0.1:3001`. Browser account requests use Gateway's BFF and HttpOnly session cookie.
+Tauri loads the desktop development page from `http://localhost:2120`. Run Gateway with `PORT=3001` and `USA_ZERO_ORIGIN=<your-USA-Zero-origin>`, then open ZeroAgent WebUI at `http://127.0.0.1:3001`. Browser account requests use Gateway's BFF and HttpOnly session cookie.
 
 Expand the Development Guide below for the full set of Make commands.
 
@@ -333,7 +333,7 @@ Expand the Development Guide below for the full set of Make commands.
 <summary><b>Project Structure</b> — directory tree</summary>
 
 ```
-ZeroBox/
+ZeroAgent/
 ├── crates/
 │   ├── agent-gui/                # Desktop client
 │   │   ├── src/                  # React frontend
@@ -426,17 +426,17 @@ Before submitting a PR, make sure all of the following checks pass (they match t
 
 ## 👥 Contributors
 
-Thanks to everyone who has contributed to ZeroBox!
+Thanks to everyone who has contributed to ZeroAgent!
 
-<a href="https://github.com/tkxs/ZeroBox/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=tkxs/ZeroBox" alt="Contributors" />
+<a href="https://github.com/tkxs/ZeroAgent/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=tkxs/ZeroAgent" alt="Contributors" />
 </a>
 
 ---
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=tkxs%2FZeroBox&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=tkxs%2FZeroAgent&type=date&legend=top-left">
 
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="docs/images/star-history-dark.svg" />

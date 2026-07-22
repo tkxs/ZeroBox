@@ -125,11 +125,11 @@ export function AccountLoginPage({
         <div className="mb-6 flex items-center gap-3">
           <img
             className="h-11 w-11 shrink-0 rounded-xl border border-border/60 bg-white object-contain p-1"
-            src="/zerobox-logo.png"
-            alt="ZeroBox"
+            src="/zeroagent-logo.png"
+            alt="ZeroAgent"
           />
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold tracking-tight">ZeroBox</h1>
+            <h1 className="text-xl font-semibold tracking-tight">ZeroAgent</h1>
             <p className="text-xs text-muted-foreground">登录 USA-零账户</p>
           </div>
         </div>

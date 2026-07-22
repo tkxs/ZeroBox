@@ -11,7 +11,7 @@ import {
 } from "../../components/icons";
 import { GroupMultiSelect } from "../../components/relay/GroupMultiSelect";
 import { RelayKeyCopyDialog } from "../../components/relay/RelayKeyCopyDialog";
-import { ZeroBoxLogo } from "../../components/relay/ZeroBoxLogo";
+import { ZeroAgentLogo } from "../../components/relay/ZeroAgentLogo";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -58,7 +58,7 @@ export function RelayProvidersSection({ settings, setSettings }: SettingsSection
   const [user, setUser] = useState<RelayUser | null>(null);
   const [keys, setKeys] = useState<RelayApiKey[]>([]);
   const [groups, setGroups] = useState<RelayGroup[]>([]);
-  const [keyName, setKeyName] = useState("ZeroBox");
+  const [keyName, setKeyName] = useState("ZeroAgent");
   const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
   const [copyTarget, setCopyTarget] = useState<RelayApiKey | null>(null);
   const [loading, setLoading] = useState(true);
@@ -142,7 +142,7 @@ export function RelayProvidersSection({ settings, setSettings }: SettingsSection
       const currentKeys = await listRelayApiKeys();
       setKeys(currentKeys);
       await syncProviders(true, currentKeys);
-      setSuccess(`已创建 ${selectedGroupIds.length} 个密钥并绑定到 ZeroBox。`);
+      setSuccess(`已创建 ${selectedGroupIds.length} 个密钥并绑定到 ZeroAgent。`);
     } catch (cause) {
       setError(errorMessage(cause, "创建 Key 失败。"));
     } finally {
@@ -166,7 +166,7 @@ export function RelayProvidersSection({ settings, setSettings }: SettingsSection
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 items-start gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border/60 bg-white">
-            <ZeroBoxLogo className="h-full w-full object-contain" />
+            <ZeroAgentLogo className="h-full w-full object-contain" />
           </div>
           <div className="min-w-0">
             <h3 className="text-sm font-semibold">USA-零</h3>
@@ -322,7 +322,7 @@ export function RelayProvidersSection({ settings, setSettings }: SettingsSection
               value={keyName}
               onChange={(event) => setKeyName(event.target.value)}
               maxLength={80}
-              placeholder="例如：ZeroBox 客户端"
+              placeholder="例如：ZeroAgent 客户端"
             />
             <p className="text-[11px] text-muted-foreground">用于在密钥列表中识别用途。</p>
           </div>

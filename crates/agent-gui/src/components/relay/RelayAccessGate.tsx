@@ -25,7 +25,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { GroupMultiSelect } from "./GroupMultiSelect";
-import { ZeroBoxLogo } from "./ZeroBoxLogo";
+import { ZeroAgentLogo } from "./ZeroAgentLogo";
 
 type RelayAccessGateProps = {
   settings: AppSettings;
@@ -100,7 +100,7 @@ export function RelayAccessGate({ settings, setSettings, onReady }: RelayAccessG
       const nextSettings = await bindRelayKeysToSettings(settings, keys, availableGroups);
       setSettings(() => nextSettings);
       await registerDesktopDevice(nextSettings).catch((error) => {
-        console.warn("automatic ZeroBox device registration failed", error);
+        console.warn("automatic ZeroAgent device registration failed", error);
       });
       onReady(currentUser);
     },
@@ -201,12 +201,12 @@ export function RelayAccessGate({ settings, setSettings, onReady }: RelayAccessG
     setBusy(true);
     setError("");
     try {
-      await createRelayApiKeys("ZeroBox", selectedGroupIds, groups);
+      await createRelayApiKeys("ZeroAgent", selectedGroupIds, groups);
       const keys = await listRelayApiKeys();
       const nextSettings = await bindRelayKeysToSettings(settings, keys, groups, true);
       setSettings(() => nextSettings);
       await registerDesktopDevice(nextSettings).catch((error) => {
-        console.warn("automatic ZeroBox device registration failed", error);
+        console.warn("automatic ZeroAgent device registration failed", error);
       });
       if (user) onReady(user);
     } catch (cause) {
@@ -245,10 +245,10 @@ export function RelayAccessGate({ settings, setSettings, onReady }: RelayAccessG
       <div className="relative z-10 w-full max-w-[420px]">
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/60 bg-white">
-            <ZeroBoxLogo className="h-full w-full object-contain" />
+            <ZeroAgentLogo className="h-full w-full object-contain" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-lg font-semibold text-foreground">ZeroBox</h1>
+            <h1 className="text-lg font-semibold text-foreground">ZeroAgent</h1>
             <p className="truncate text-xs text-muted-foreground">USA-零账户服务</p>
           </div>
         </div>

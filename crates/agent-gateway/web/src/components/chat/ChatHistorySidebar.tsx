@@ -1913,7 +1913,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 -translate-y-0.5 items-center gap-2">
               <img
-                src="/zerobox-logo.png"
+                src="/zeroagent-logo.png"
                 alt=""
                 aria-hidden="true"
                 draggable={false}

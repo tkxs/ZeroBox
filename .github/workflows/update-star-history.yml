@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   update:
-    if: github.repository == 'tkxs/ZeroBox'
+    if: github.repository == 'tkxs/ZeroAgent'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository

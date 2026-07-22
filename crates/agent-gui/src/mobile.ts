@@ -9,7 +9,7 @@ const submit = document.querySelector<HTMLButtonElement>("#gateway-submit");
 const codeFlow = document.querySelector<HTMLCanvasElement>("#code-flow");
 
 if (!form || !input || !status || !submit) {
-  throw new Error("ZeroBox mobile shell failed to initialize");
+  throw new Error("ZeroAgent mobile shell failed to initialize");
 }
 
 type CodeStream = {

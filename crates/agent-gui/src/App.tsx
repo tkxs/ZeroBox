@@ -251,7 +251,7 @@ export default function App() {
         setSelectedExecutionWorkspaceId((current) => current || local?.workspaces[0]?.id || "");
       })
       .catch((error) => {
-        console.warn("refresh ZeroBox device registration failed", error);
+        console.warn("refresh ZeroAgent device registration failed", error);
       });
     return () => {
       cancelled = true;
@@ -276,7 +276,7 @@ export default function App() {
         event.source !== remoteControllerRef.current?.contentWindow ||
         !event.data ||
         typeof event.data !== "object" ||
-        event.data.type !== "zerobox:execution-busy" ||
+        event.data.type !== "zeroagent:execution-busy" ||
         typeof event.data.busy !== "boolean"
       ) {
         return;
@@ -662,7 +662,7 @@ export default function App() {
               ref={remoteControllerRef}
               className="h-full w-full border-0 bg-background"
               src={remoteControllerURL}
-              title="ZeroBox remote execution"
+              title="ZeroAgent remote execution"
             />
           ) : (
             <ChatPage

@@ -106,7 +106,7 @@ func TestSPAFallbackServesIndexWithoutAuthorization(t *testing.T) {
 	if location := rec.Header().Get("Location"); location != "" {
 		t.Fatalf("expected no redirect, got Location=%q", location)
 	}
-	if !strings.Contains(rec.Body.String(), "<title>ZeroBox</title>") {
+	if !strings.Contains(rec.Body.String(), "<title>ZeroAgent</title>") {
 		t.Fatalf("expected embedded WebUI index.html, got %q", rec.Body.String())
 	}
 }

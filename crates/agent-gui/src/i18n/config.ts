@@ -17,7 +17,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "app.errorBoundaryReload": "重新加载",
     "app.errorBoundaryTitle": "页面出现异常",
     "app.loading": "正在加载设置...",
-    "app.name": "ZeroBox",
+    "app.name": "ZeroAgent",
     "window.controls": "窗口控制",
     "window.minimize": "最小化",
     "window.maximize": "最大化",
@@ -67,7 +67,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.workspaceRemoveRunning": "后台任务运行中，暂时不能移除。",
     "chat.workspaceRemoveDescription": "会删除此工作空间下的历史对话，不会删除文件夹。",
     "chat.workspaceOpenSystemFileManagerFailed": "打开资源管理器失败",
-    "chat.exitConfirmTitle": "退出 ZeroBox？",
+    "chat.exitConfirmTitle": "退出 ZeroAgent？",
     "chat.exitConfirmSubtitle": "当前仍有终端任务在运行。",
     "chat.exitConfirmRunningLabel": "正在运行的 Terminal",
     "chat.exitConfirmDescription": "继续退出会关闭这些终端进程。取消后可返回项目工具栏处理。",
@@ -106,7 +106,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.resizeSidebarSections": "调整工作空间与最近对话占比",
     "chat.emptyChatHistory": "暂无历史对话",
     "chat.clickNewConversation": "点击上方「新对话」开始聊天",
-    "chat.welcome": "欢迎使用 ZeroBox",
+    "chat.welcome": "欢迎使用 ZeroAgent",
     "chat.greetingMorning": "早上好",
     "chat.greetingNoon": "中午好",
     "chat.greetingAfternoon": "下午好",
@@ -1034,7 +1034,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.savedDesc": "设置已写入本地存储",
 
     /* ── Settings About ── */
-    "settings.aboutTitle": "关于 ZeroBox",
+    "settings.aboutTitle": "关于 ZeroAgent",
     "settings.aboutDescription": "查看当前版本、发布说明和桌面端更新状态。",
     "settings.aboutCurrentVersion": "当前版本",
     "settings.aboutOpenRelease": "发布页",
@@ -1048,7 +1048,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.aboutInstalled": "更新已安装",
     "settings.aboutInstalledDesc": "更新包已安装，点击重启应用后生效。",
     "settings.aboutRestarting": "正在重启应用",
-    "settings.aboutRestartingDesc": "ZeroBox 正在退出并重新打开。",
+    "settings.aboutRestartingDesc": "ZeroAgent 正在退出并重新打开。",
     "settings.aboutUpdateAvailable": "发现新版本",
     "settings.aboutUpdateAvailableDesc": "该版本已通过 updater 签名清单校验，可以安装。",
     "settings.aboutUpToDate": "已是最新版本",
@@ -1139,7 +1139,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.noSystemTools": "暂无可用的系统工具",
     "settings.systemToolsTabBuiltin": "内置工具",
     "settings.systemToolsTabCustom": "自定义工具",
-    "settings.systemToolsBuiltinDesc": "ZeroBox 在 Agent 模式下自动注册的内置工具，此处仅供查阅。",
+    "settings.systemToolsBuiltinDesc": "ZeroAgent 在 Agent 模式下自动注册的内置工具，此处仅供查阅。",
     "settings.systemToolsCustomDesc":
       "可按需启用的自定义系统工具；启用后会在 Agent 模式下注册，供模型在对话中调用。",
     "settings.systemToolsViewDetail": "查看详情",
@@ -1549,7 +1549,7 @@ export const translations: Record<Locale, Record<string, string>> = {
 
     /* ── Settings Remote ── */
     "settings.remoteTitle": "远程访问",
-    "settings.remoteDesc": "通过云端 Gateway 远程控制本地 ZeroBox",
+    "settings.remoteDesc": "通过云端 Gateway 远程控制本地 ZeroAgent",
     "settings.remoteConnected": "已连接",
     "settings.remoteConnectedProtocol": "已连接 ({protocol})",
     "settings.remoteDisconnected": "未连接",
@@ -1722,7 +1722,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.skillsHubStoreTab": "技能商店",
     "settings.skillsHubImportTab": "本地导入",
     "settings.skillsImportDesc":
-      "扫描本机 Claude Code、Codex、CodeBuddy 的技能目录，勾选后导入到 ZeroBox。",
+      "扫描本机 Claude Code、Codex、CodeBuddy 的技能目录，勾选后导入到 ZeroAgent。",
     "settings.skillsImportOverwriteHint": "同名技能将自动备份后覆盖。",
     "settings.skillsImportScanning": "正在扫描本地技能...",
     "settings.skillsImportRescan": "重新扫描",
@@ -1936,7 +1936,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "app.errorBoundaryReload": "Reload",
     "app.errorBoundaryTitle": "Something went wrong",
     "app.loading": "Loading settings...",
-    "app.name": "ZeroBox",
+    "app.name": "ZeroAgent",
     "window.controls": "Window controls",
     "window.minimize": "Minimize",
     "window.maximize": "Maximize",
@@ -1989,7 +1989,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.workspaceRemoveDescription":
       "This deletes conversations under the workspace, but it does not delete the folder.",
     "chat.workspaceOpenSystemFileManagerFailed": "Failed to open the file manager",
-    "chat.exitConfirmTitle": "Exit ZeroBox?",
+    "chat.exitConfirmTitle": "Exit ZeroAgent?",
     "chat.exitConfirmSubtitle": "Terminal tasks are still running.",
     "chat.exitConfirmRunningLabel": "Running Terminal sessions",
     "chat.exitConfirmDescription":
@@ -2033,7 +2033,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "chat.resizeSidebarSections": "Resize workspaces and recent conversations",
     "chat.emptyChatHistory": "No conversation history",
     "chat.clickNewConversation": "Click 'New Conversation' above to start chatting",
-    "chat.welcome": "Welcome to ZeroBox",
+    "chat.welcome": "Welcome to ZeroAgent",
     "chat.greetingMorning": "Good morning",
     "chat.greetingNoon": "Good afternoon",
     "chat.greetingAfternoon": "Good afternoon",
@@ -2997,7 +2997,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.savedDesc": "Settings written to local storage",
 
     /* ── Settings About ── */
-    "settings.aboutTitle": "About ZeroBox",
+    "settings.aboutTitle": "About ZeroAgent",
     "settings.aboutDescription":
       "View the current version, release notes, and desktop update status.",
     "settings.aboutCurrentVersion": "Current Version",
@@ -3012,9 +3012,9 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.aboutInstallingDesc": "Downloading and verifying the update package.",
     "settings.aboutInstalled": "Update installed",
     "settings.aboutInstalledDesc":
-      "The update package has been installed. Restart ZeroBox to use it.",
+      "The update package has been installed. Restart ZeroAgent to use it.",
     "settings.aboutRestarting": "Restarting app",
-    "settings.aboutRestartingDesc": "ZeroBox is quitting and opening again.",
+    "settings.aboutRestartingDesc": "ZeroAgent is quitting and opening again.",
     "settings.aboutUpdateAvailable": "New version available",
     "settings.aboutUpdateAvailableDesc":
       "This version passed updater manifest validation and can be installed.",
@@ -3113,7 +3113,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.systemToolsTabBuiltin": "Built-in",
     "settings.systemToolsTabCustom": "Custom",
     "settings.systemToolsBuiltinDesc":
-      "Built-in tools that ZeroBox registers automatically in Agent mode. Read-only list; click the eye icon for details.",
+      "Built-in tools that ZeroAgent registers automatically in Agent mode. Read-only list; click the eye icon for details.",
     "settings.systemToolsCustomDesc":
       "Optional custom system tools. Enabled tools are registered in Agent mode for the model to call during conversations.",
     "settings.systemToolsViewDetail": "View details",
@@ -3539,7 +3539,7 @@ export const translations: Record<Locale, Record<string, string>> = {
 
     /* ── Settings Remote ── */
     "settings.remoteTitle": "Remote Access",
-    "settings.remoteDesc": "Control your local ZeroBox remotely via cloud Gateway",
+    "settings.remoteDesc": "Control your local ZeroAgent remotely via cloud Gateway",
     "settings.remoteConnected": "Connected",
     "settings.remoteConnectedProtocol": "Connected ({protocol})",
     "settings.remoteDisconnected": "Disconnected",
@@ -3717,7 +3717,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.skillsHubStoreTab": "Skills Store",
     "settings.skillsHubImportTab": "Local Import",
     "settings.skillsImportDesc":
-      "Scan local Claude Code, Codex, and CodeBuddy skill directories, then pick skills to import into ZeroBox.",
+      "Scan local Claude Code, Codex, and CodeBuddy skill directories, then pick skills to import into ZeroAgent.",
     "settings.skillsImportOverwriteHint":
       "Skills with the same name are backed up, then overwritten.",
     "settings.skillsImportScanning": "Scanning local skills...",

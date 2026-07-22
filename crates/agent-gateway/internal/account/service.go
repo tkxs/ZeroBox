@@ -187,7 +187,7 @@ func (s *Service) RegisterDevice(ctx context.Context, userID int64, input Regist
 	}
 	device := &Device{
 		ID: uuid.NewString(), UserID: userID, InstallationID: input.InstallationID,
-		Name: normalizeDeviceName(input.Name, "ZeroBox device"), Platform: strings.TrimSpace(input.Platform),
+		Name: normalizeDeviceName(input.Name, "ZeroAgent device"), Platform: strings.TrimSpace(input.Platform),
 		Version: strings.TrimSpace(input.Version), CredentialHash: hashToken(credential), Workspaces: workspaces,
 		CreatedAt: now, LastSeenAt: now, Online: false,
 	}

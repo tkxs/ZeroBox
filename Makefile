@@ -16,7 +16,7 @@ endif
 DESKTOP_WINDOWS_TARGET ?= x86_64-pc-windows-msvc
 DESKTOP_LINUX_TARGET ?= x86_64-unknown-linux-gnu
 DESKTOP_LINUX_BUNDLES ?= appimage deb rpm
-DESKTOP_MACOS_APP_NAME ?= ZeroBox
+DESKTOP_MACOS_APP_NAME ?= ZeroAgent
 DESKTOP_MACOS_NOTARY_PROFILE ?= liveagent-notary
 DESKTOP_MACOS_TAURI_CONFIG ?= src-tauri/tauri.macos.conf.json
 DESKTOP_WINDOWS_TAURI_CONFIG ?= src-tauri/tauri.windows.conf.json
@@ -98,7 +98,7 @@ github-release-main: check-github-release-tag
 	pnpm --dir $(AGENT_GUI_DIR) test:release
 	cargo check --manifest-path $(AGENT_GUI_DIR)/src-tauri/Cargo.toml --tests
 	node scripts/release/prepare-app-version-from-tag.mjs "$(RELEASE_TAG)" --json
-	git tag -a "$(RELEASE_TAG)" -m "ZeroBox $(RELEASE_TAG)"
+	git tag -a "$(RELEASE_TAG)" -m "ZeroAgent $(RELEASE_TAG)"
 	git push origin "$(RELEASE_TAG)"
 
 check-github-release-tag:

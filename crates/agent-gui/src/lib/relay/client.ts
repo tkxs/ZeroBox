@@ -23,7 +23,7 @@ function initialRelayOrigin() {
   const configured =
     typeof localStorage === "undefined" ? "" : localStorage.getItem(RELAY_ORIGIN_KEY)?.trim();
   const buildDefault =
-    typeof __ZEROBOX_USA_ZERO_ORIGIN__ === "string" ? __ZEROBOX_USA_ZERO_ORIGIN__.trim() : "";
+    typeof __ZEROAGENT_USA_ZERO_ORIGIN__ === "string" ? __ZEROAGENT_USA_ZERO_ORIGIN__.trim() : "";
   try {
     return normalizeRelayOrigin(configured || buildDefault || DEFAULT_RELAY_ORIGIN);
   } catch {
