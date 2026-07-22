@@ -4,6 +4,7 @@
 // bigint 边界：本文件是 64 位整数（生成代码映射为 bigint）的唯一出入口——入站一律 Number()（均为
 // 时间戳/计数，远小于 2^53 无精度损失），出站 BigInt() 收窄；适配层之外不允许出现 bigint。
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { decodeSelectionCredential } from "@/lib/executionTargets";
 import type {
   AgentEnvelope,
   ChatQueueEvent,
@@ -88,7 +89,6 @@ import type {
   WebClientFrame,
   WebServerFrame,
 } from "@/lib/proto/gen/proto/v2/gateway_ws_pb";
-import { decodeSelectionCredential } from "@/lib/executionTargets";
 import {
   ChatActivitiesRequestSchema,
   ChatPrepareRequestSchema,
