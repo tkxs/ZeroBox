@@ -193,6 +193,10 @@ macro_rules! app_invoke_handler {
             commands::git::git_branches,
             commands::git::git_init,
             commands::git::git_clone_repository,
+            commands::git::git_clone_repository_start,
+            commands::git::git_clone_repository_tasks,
+            commands::git::git_clone_repository_cancel,
+            commands::git::git_clone_repository_dismiss,
             commands::git::git_list_remote_branches,
             commands::git::git_switch_branch,
             commands::git::git_create_branch,
@@ -478,6 +482,7 @@ pub fn run() {
     let managed_process_registry =
         Arc::new(runtime::managed_process::ManagedProcessRegistry::open());
     let terminal_registry = Arc::new(runtime::terminal::TerminalSessionRegistry::default());
+    let git_clone_task_registry = Arc::new(commands::git::GitCloneTaskRegistry::default());
     let sftp_registry = Arc::new(runtime::sftp::SftpSessionRegistry::new(Arc::clone(
         &terminal_registry,
     )));
@@ -508,6 +513,7 @@ pub fn run() {
         .manage(Arc::clone(&managed_process_registry))
         .manage(Arc::clone(&terminal_registry))
         .manage(Arc::clone(&sftp_registry))
+        .manage(Arc::clone(&git_clone_task_registry))
         .manage(Arc::clone(&allow_exit))
         .manage(Arc::clone(&close_window_behavior))
         .manage(Arc::clone(&automation_store))
@@ -518,6 +524,7 @@ pub fn run() {
             let terminal_registry = Arc::clone(&terminal_registry);
             let sftp_registry = Arc::clone(&sftp_registry);
             let managed_process_registry = Arc::clone(&managed_process_registry);
+            let git_clone_task_registry = Arc::clone(&git_clone_task_registry);
             move |app| {
                 commands::history_db::initialize_history_db()?;
                 configure_system_tray(
@@ -544,6 +551,7 @@ pub fn run() {
                     Arc::clone(&terminal_registry),
                     Arc::clone(&sftp_registry),
                     Arc::clone(&managed_process_registry),
+                    Arc::clone(&git_clone_task_registry),
                 ));
                 managed_process_registry.set_notifier(
                     runtime::managed_process::ManagedProcessNotifier {
@@ -634,6 +642,7 @@ pub fn run() {
                 // Real exit: reclaim every non-isolated managed process
                 // before the OS tears us down (Drop is not guaranteed).
                 managed_process_registry.shutdown_cleanup();
+                git_clone_task_registry.shutdown_cleanup();
                 power_activity.clear_all();
             }
         }

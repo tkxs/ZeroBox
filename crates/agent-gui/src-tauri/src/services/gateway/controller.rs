@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use tauri::Emitter;
 use tokio::sync::watch;
 
+use crate::commands::git::GitCloneTaskRegistry;
 use crate::commands::settings::{
     load_remote_settings, normalize_remote_settings_payload, open_db, RemoteSettingsPayload,
 };
@@ -28,6 +29,7 @@ impl GatewayController {
         terminal_registry: Arc<TerminalSessionRegistry>,
         sftp_registry: Arc<SftpSessionRegistry>,
         managed_process_registry: Arc<ManagedProcessRegistry>,
+        git_clone_task_registry: Arc<GitCloneTaskRegistry>,
     ) -> Self {
         let initial_config = RemoteSettingsPayload::default();
         let (config_tx, _) = watch::channel(initial_config);
@@ -40,6 +42,7 @@ impl GatewayController {
             terminal_registry,
             sftp_registry,
             managed_process_registry,
+            git_clone_task_registry,
             config_tx,
             runner_task: Mutex::new(None),
             status: Mutex::new(GatewayStatusSnapshot {

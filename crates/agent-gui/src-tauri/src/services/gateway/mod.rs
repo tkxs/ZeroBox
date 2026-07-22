@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 
+use crate::commands::git::GitCloneTaskRegistry;
 use crate::commands::settings::RemoteSettingsPayload;
 use crate::runtime::managed_process::ManagedProcessRegistry;
 use crate::runtime::sftp::SftpSessionRegistry;
@@ -128,6 +129,7 @@ pub struct GatewayController {
     terminal_registry: Arc<TerminalSessionRegistry>,
     sftp_registry: Arc<SftpSessionRegistry>,
     managed_process_registry: Arc<ManagedProcessRegistry>,
+    pub(crate) git_clone_task_registry: Arc<GitCloneTaskRegistry>,
     config_tx: watch::Sender<RemoteSettingsPayload>,
     runner_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     status: Mutex<GatewayStatusSnapshot>,

@@ -28,6 +28,7 @@ import {
   mergeWorkspaceProjectsWithHistory,
 } from "../../../lib/workspaceProjects";
 import { asErrorMessage } from "../chatPageUtils";
+import { startWorkspaceCloneTask } from "./cloneTasks";
 import {
   createWorkspaceProjectFromPath,
   getDefaultWorkspaceProjectPath,
@@ -361,18 +362,18 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
 
   const handleCloneWorkspaceProject = useCallback(
     async (remoteUrl: string, parent: string, name: string, branch: string) => {
-      const response = await invoke<{ state?: { workdir?: string } }>("git_clone_repository", {
+      await startWorkspaceCloneTask({
+        remoteUrl,
         parent,
         name,
-        remote_url: remoteUrl,
-        branch: branch || undefined,
+        branch,
       });
-      const path = response.state?.workdir?.trim();
-      if (!path) {
-        throw new Error("克隆完成后未返回工作空间路径。");
-      }
-      activateWorkspaceProject(createWorkspaceProjectFromPath(path, "managed"));
     },
+    [],
+  );
+
+  const handleOpenClonedWorkspace = useCallback(
+    (path: string) => activateWorkspaceProject(createWorkspaceProjectFromPath(path, "managed")),
     [activateWorkspaceProject],
   );
 
@@ -548,6 +549,7 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
     setWorkspaceCreateModalOpen,
     handleOpenWorkspaceFolder,
     handleCloneWorkspaceProject,
+    handleOpenClonedWorkspace,
     handleLoadWorkspaceRemoteBranches,
     handleStartRenamingWorkspaceProject,
     handleCommitWorkspaceProjectRename,

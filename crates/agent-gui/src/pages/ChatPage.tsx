@@ -134,6 +134,7 @@ import { useWorkspaceOverlays } from "./chat/workspace/useWorkspaceOverlays";
 import { useWorkspaceProjectRemoval } from "./chat/workspace/useWorkspaceProjectRemoval";
 import { useWorkspaceProjects } from "./chat/workspace/useWorkspaceProjects";
 import { WorkspaceCloneModal } from "./chat/workspace/WorkspaceCloneModal";
+import { WorkspaceCloneTaskOverlay } from "./chat/workspace/WorkspaceCloneTaskOverlay";
 import { McpHubPage } from "./mcp-hub/McpHubPage";
 import type { SectionId } from "./settings/types";
 import { SkillsHubPage } from "./skills-hub/SkillsHubPage";
@@ -260,6 +261,7 @@ export function ChatPage(props: ChatPageProps) {
     setWorkspaceCreateModalOpen,
     handleOpenWorkspaceFolder,
     handleCloneWorkspaceProject,
+    handleOpenClonedWorkspace,
     handleLoadWorkspaceRemoteBranches,
     handleStartRenamingWorkspaceProject,
     handleCommitWorkspaceProjectRename,
@@ -1539,6 +1541,7 @@ export function ChatPage(props: ChatPageProps) {
             onLoadBranches={handleLoadWorkspaceRemoteBranches}
           />
         ) : null}
+        <WorkspaceCloneTaskOverlay onOpenWorkspace={handleOpenClonedWorkspace} />
 
         {shareConversation ? (
           <HistoryShareModal

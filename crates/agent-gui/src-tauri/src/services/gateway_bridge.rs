@@ -11,7 +11,7 @@ use crate::commands::{
         fs_read_editable_text_sync, fs_read_workspace_image_sync, fs_rename_sync, fs_roots_sync,
         fs_write_text_sync,
     },
-    git::git_gateway_action_sync,
+    git::{git_gateway_clone_task_action_sync, GitCloneTaskRegistry},
     settings::{load_providers, open_db},
     system::{
         system_create_project_folder_sync, system_import_uploaded_readable_files_sync,
@@ -639,10 +639,18 @@ pub async fn handle_fs_delete(
         })
 }
 
-pub async fn handle_git_request(request: proto::GitRequest) -> Result<proto::GitResponse, String> {
+pub async fn handle_git_request(
+    request: proto::GitRequest,
+    clone_task_registry: Arc<GitCloneTaskRegistry>,
+) -> Result<proto::GitResponse, String> {
     let action = request.action.trim().to_string();
     tauri::async_runtime::spawn_blocking(move || {
-        let result = git_gateway_action_sync(action.clone(), request.workdir, request.args_json)?;
+        let result = git_gateway_clone_task_action_sync(
+            action.clone(),
+            request.workdir,
+            request.args_json,
+            &clone_task_registry,
+        )?;
         Ok(proto::GitResponse {
             action,
             result_json: result.to_string(),

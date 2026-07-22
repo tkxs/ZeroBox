@@ -1,4 +1,5 @@
 import {
+  Fragment,
   memo,
   useCallback,
   useDeferredValue,
@@ -2609,7 +2610,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                   </GlassPanel>
                 </div>
               ) : (
-                <>
+                <Fragment key={view}>
                   {view === "installed" ? (
                     <div
                       aria-busy={loading || showInitialInstalledContentLoading}
@@ -2783,7 +2784,7 @@ export function SkillsHubPage(props: SkillsHubPageProps) {
                       onImport={() => void importSelectedExternalSkills()}
                     />
                   )}
-                </>
+                </Fragment>
               )}
             </div>
           </div>

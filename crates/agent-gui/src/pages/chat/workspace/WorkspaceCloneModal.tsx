@@ -275,7 +275,7 @@ export function WorkspaceCloneModal({
                 <div className="space-y-1.5">
                   <Label htmlFor="workspace-clone-branch">{t("chat.workspaceCloneBranch")}</Label>
                   <Select
-                    value={branch || undefined}
+                    value={branch || null}
                     onValueChange={setBranch}
                     disabled={!branches.length || branchesLoading}
                   >
@@ -288,7 +288,7 @@ export function WorkspaceCloneModal({
                         }
                       />
                     </SelectTrigger>
-                    <SelectContent className="max-h-60">
+                    <SelectContent className="max-h-60 w-72 max-w-[calc(100vw-2rem)]">
                       {branches.map((value) => (
                         <SelectItem key={value} value={value}>
                           {value}
