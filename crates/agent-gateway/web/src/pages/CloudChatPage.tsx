@@ -30,6 +30,7 @@ import type { ModelOption } from "@/lib/providers/llm";
 import { toModelValue } from "@/lib/providers/llm";
 import {
   getRelayDashboardStats,
+  getRelayProfile,
   type RelayDashboardStats,
   type RelayUser,
 } from "@/lib/relay/client";
@@ -199,6 +200,15 @@ export function CloudChatPage({
       .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
       .finally(() => setHistoryLoading(false));
   }, [refreshConversations]);
+
+  const refreshRelayAccount = useCallback(async () => {
+    const [profile, stats] = await Promise.all([
+      getRelayProfile(),
+      getRelayDashboardStats(),
+    ]);
+    onUserChange(profile);
+    setAccountStats(stats);
+  }, [onUserChange]);
 
   useEffect(() => {
     if (!transcriptViewport) return;
@@ -570,6 +580,7 @@ export function CloudChatPage({
                 todayTokens={accountStats?.today_tokens}
                 avatarUrl={user.avatar_url}
                 online
+                onRefreshAccount={refreshRelayAccount}
                 onOpenSettings={() => setAccountSettingsOpen(true)}
                 onLogout={onLogout}
               />

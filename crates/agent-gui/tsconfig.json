@@ -8,6 +8,12 @@
 
     /* Bundler mode */
     "moduleResolution": "bundler",
+    "paths": {
+      "@/*": ["../agent-gateway/web/src/*"],
+      "@tauri-apps/api/core": ["./node_modules/@tauri-apps/api/core"],
+      "@tauri-apps/api/event": ["./node_modules/@tauri-apps/api/event"],
+      "@tauri-apps/plugin-opener": ["./node_modules/@tauri-apps/plugin-opener"]
+    },
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,

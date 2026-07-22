@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings } from "../settings";
+import { workspaceProjectPathKey } from "../settings";
 import { getRelayAccessToken } from "./client";
 
 type CredentialRecord = { deviceId: string; credential: string };
@@ -41,11 +42,24 @@ export async function registerDesktopDevice(settings: AppSettings) {
       version: await invoke<string>("zeroagent_app_version"),
       device_id: existing?.deviceId ?? "",
       device_credential: existing?.credential ?? "",
-      workspaces: settings.system.workspaceProjects.map((workspace) => ({
-        id: workspace.id,
-        name: workspace.name,
-        path: workspace.path,
-      })),
+      workspaces: settings.system.workspaceProjects.map((workspace) => {
+        const pathKey = workspaceProjectPathKey(workspace.path);
+        return {
+          id: workspace.id,
+          name: workspace.name,
+          path: workspace.path,
+          kind: workspace.kind,
+          is_pinned: workspace.isPinned === true,
+          pinned_at: workspace.pinnedAt ?? 0,
+          archived: settings.system.archivedWorkspaceProjectPaths.some(
+            (path) => workspaceProjectPathKey(path) === pathKey,
+          ),
+          missing: settings.system.missingWorkspaceProjectPaths.some(
+            (path) => workspaceProjectPathKey(path) === pathKey,
+          ),
+          updated_at: workspace.updatedAt,
+        };
+      }),
     }),
     signal: AbortSignal.timeout(30_000),
   });

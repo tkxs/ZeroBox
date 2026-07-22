@@ -179,7 +179,12 @@ function frameError(message: string): never {
 // 出站：hello / pong / 请求编码
 // ---------------------------------------------------------------------------
 
-export function encodeHelloFrame(requestId: string, token: string): WireBytes {
+export function encodeHelloFrame(
+  requestId: string,
+  token: string,
+  desktopAccessToken = "",
+  clientName = "webui",
+): WireBytes {
   const selection = decodeSelectionCredential(token);
   const frame = create(WebClientFrameSchema, {
     requestId,
@@ -188,8 +193,8 @@ export function encodeHelloFrame(requestId: string, token: string): WireBytes {
       value: create(ClientHelloSchema, {
         protocolVersion: GATEWAY_V2_PROTOCOL_VERSION,
         role: ClientRole.BROWSER,
-        token: selection ? "" : token,
-        clientName: "webui",
+        token: selection ? desktopAccessToken : token,
+        clientName,
         clientVersion: "",
         selectionLease: selection?.lease ?? "",
         workspaceId: selection?.workspaceId ?? "",

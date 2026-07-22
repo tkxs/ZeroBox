@@ -23,6 +23,10 @@ func (c *browserConn) handleAgentRequest(requestID string, env *gatewayv1.Gatewa
 		_ = c.sendLocalError(requestID, err.Error())
 		return
 	}
+	if err := c.vetWorkspaceAgentRequest(env); err != nil {
+		_ = c.sendLocalError(requestID, err.Error())
+		return
+	}
 
 	// 命名空间化：多标签页共享一个桌面端，透传 id 必须按连接隔离；回程剥离前缀还原。
 	agentRequestID := c.idPrefix + requestID

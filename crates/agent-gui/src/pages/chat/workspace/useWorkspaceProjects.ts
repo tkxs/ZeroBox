@@ -6,6 +6,7 @@ import {
   type SetStateAction,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
 } from "react";
@@ -72,9 +73,25 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
   } = params;
 
   const sidebarWorkdirs = useSidebarSelector(sidebarStore, (s) => s.workdirs);
-  const workspaceProjects = useMemo(
-    () => mergeWorkspaceProjectsWithHistory(settings.system, sidebarWorkdirs),
-    [sidebarWorkdirs, settings.system],
+  const workspaceProjects = useMemo(() => {
+    const now = Date.now();
+    return [
+      {
+        id: DEFAULT_WORKSPACE_PROJECT_ID,
+        name: t("chat.plainChat"),
+        path: "",
+        kind: "managed" as const,
+        createdAt: now,
+        updatedAt: now,
+      },
+      ...mergeWorkspaceProjectsWithHistory(settings.system, sidebarWorkdirs).filter(
+        (project) => project.id !== DEFAULT_WORKSPACE_PROJECT_ID,
+      ),
+    ];
+  }, [sidebarWorkdirs, settings.system, t]);
+  const sidebarWorkspaceProjects = useMemo(
+    () => workspaceProjects.filter((project) => project.id !== DEFAULT_WORKSPACE_PROJECT_ID),
+    [workspaceProjects],
   );
   const [activeWorkspaceProjectId, setActiveWorkspaceProjectId] = useState<string>(
     () => settings.system.activeWorkspaceProjectId?.trim() || DEFAULT_WORKSPACE_PROJECT_ID,
@@ -110,11 +127,11 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
       isAgentMode
         ? activeWorkspaceProjectPath
           ? { kind: "workdir", cwd: activeWorkspaceProjectPath }
-          : { kind: "none" }
+          : { kind: "unscoped" }
         : { kind: "unscoped" },
     [activeWorkspaceProjectPath, isAgentMode],
   );
-  useEffect(() => {
+  useLayoutEffect(() => {
     sidebarStore.setScope(sidebarScope);
   }, [sidebarScope, sidebarStore]);
   const historyScopeKey = sidebarScopeKey(sidebarScope);
@@ -155,6 +172,9 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
 
   const checkWorkspaceProjectDirectory = useCallback(
     async (project: WorkspaceProject) => {
+      if (project.id === DEFAULT_WORKSPACE_PROJECT_ID) {
+        return true;
+      }
       const path = project.path.trim();
       if (!path) {
         setWorkspaceProjectDirectoryMissing(project, true);
@@ -180,6 +200,22 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
 
   const activateWorkspaceProject = useCallback(
     (project: WorkspaceProject, options?: { startConversation?: boolean }) => {
+      if (project.id === DEFAULT_WORKSPACE_PROJECT_ID) {
+        const changedProject = activeWorkspaceProjectId !== DEFAULT_WORKSPACE_PROJECT_ID;
+        setActiveWorkspaceProjectId(DEFAULT_WORKSPACE_PROJECT_ID);
+        setSettings((prev) => ({
+          ...prev,
+          system: {
+            ...prev.system,
+            activeWorkspaceProjectId: DEFAULT_WORKSPACE_PROJECT_ID,
+          },
+        }));
+        if (options?.startConversation || changedProject) {
+          prepareComposerForConversationChangeActionRef.current();
+          startNewConversationActionRef.current({ workdir: "" });
+        }
+        return;
+      }
       const pathKey = project.path.trim();
       if (!pathKey) return;
       const normalizedPathKey = workspaceProjectPathKey(pathKey);
@@ -218,14 +254,9 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
               item.id === existing.id
                 ? {
                     ...item,
-                    name: item.id === DEFAULT_WORKSPACE_PROJECT_ID ? item.name : nextProject.name,
+                    name: nextProject.name,
                     path: nextProject.path,
-                    kind:
-                      item.id === DEFAULT_WORKSPACE_PROJECT_ID
-                        ? "managed"
-                        : nextProject.kind === "history"
-                          ? item.kind
-                          : nextProject.kind,
+                    kind: nextProject.kind === "history" ? item.kind : nextProject.kind,
                     updatedAt: item.updatedAt,
                     lastConversationAt:
                       Math.max(item.lastConversationAt ?? 0, nextProject.lastConversationAt ?? 0) ||
@@ -341,18 +372,18 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
     [checkWorkspaceProjectDirectory, setErrorMessage, t],
   );
 
-  const handleOpenCreateWorkspaceProject = useCallback(async () => {
+  const pickWorkspaceProjectFolder = useCallback(async () => {
     try {
       const picked = await invoke<string | null>("system_pick_folder", {
         initial_workdir: activeWorkspaceProjectPath || workdir,
       });
       const path = picked?.trim();
-      if (!path) return;
-      activateWorkspaceProject(createWorkspaceProjectFromPath(path, "managed"));
+      return path ? createWorkspaceProjectFromPath(path, "managed") : null;
     } catch (error) {
       setErrorMessage(asErrorMessage(error, "选择项目目录失败"));
+      return null;
     }
-  }, [activateWorkspaceProject, activeWorkspaceProjectPath, workdir]);
+  }, [activeWorkspaceProjectPath, setErrorMessage, workdir]);
 
   const commitWorkspaceProjectRename = useCallback(
     (project: WorkspaceProject, nextNameInput: string) => {
@@ -435,7 +466,7 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
         const updatedProject: WorkspaceProject = {
           ...source,
           id: existing?.id ?? source.id,
-          kind: source.id === DEFAULT_WORKSPACE_PROJECT_ID ? "managed" : source.kind,
+          kind: source.kind,
           updatedAt: now,
           isPinned,
           pinnedAt: isPinned ? now : null,
@@ -493,6 +524,7 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
 
   return {
     workspaceProjects,
+    sidebarWorkspaceProjects,
     activeWorkspaceProjectId,
     setActiveWorkspaceProjectId,
     missingWorkspaceProjectPathKeys,
@@ -514,7 +546,7 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
     ensureTunnelToolTab,
     ensureSshTunnelToolTab,
     handleBrowseWorkspaceProjectInSystemFileManager,
-    handleOpenCreateWorkspaceProject,
+    pickWorkspaceProjectFolder,
     handleStartRenamingWorkspaceProject,
     handleCommitWorkspaceProjectRename,
     handleCancelWorkspaceProjectRename,

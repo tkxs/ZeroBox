@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { ChevronUp, LogOut, Settings, User } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +21,7 @@ type UserMenuProps = {
   todayTokens?: number;
   avatarUrl?: string;
   online: boolean;
+  onRefreshAccount: () => Promise<void>;
   onOpenSettings: () => void;
   onLogout: () => void;
 };
@@ -35,12 +37,27 @@ export function UserMenu(props: UserMenuProps) {
     todayTokens,
     avatarUrl,
     online,
+    onRefreshAccount,
     onOpenSettings,
     onLogout,
   } = props;
+  const refreshInFlightRef = useRef(false);
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    onOpenChange(nextOpen);
+    if (!nextOpen || refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    void onRefreshAccount()
+      .catch(() => {
+        // Keep the cached account values when the refresh is temporarily unavailable.
+      })
+      .finally(() => {
+        refreshInFlightRef.current = false;
+      });
+  };
 
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
+    <DropdownMenu open={open} onOpenChange={handleOpenChange}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"

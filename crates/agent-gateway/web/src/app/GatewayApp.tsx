@@ -332,6 +332,15 @@ export default function GatewayApp() {
   }, []);
 
   const relayUserId = relayUser?.id;
+  const refreshRelayAccount = useCallback(async () => {
+    const [profile, stats] = await Promise.all([
+      getRelayProfile(),
+      getRelayDashboardStats(),
+    ]);
+    setRelayUser(profile);
+    setRelayStats(stats);
+  }, []);
+
   useEffect(() => {
     if (!relayReady || !relayUserId) return;
     let cancelled = false;
@@ -4288,6 +4297,7 @@ export default function GatewayApp() {
                   todayTokens={relayStats?.today_tokens}
                   avatarUrl={relayUser.avatar_url}
                   online={status?.online === true}
+                  onRefreshAccount={refreshRelayAccount}
                   onOpenSettings={() => openSettings("account")}
                   onLogout={handleLogout}
                 />

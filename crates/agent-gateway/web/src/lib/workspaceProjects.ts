@@ -304,6 +304,11 @@ export function sortWorkspaceProjectsByActivity(
       };
     })
     .sort((left, right) => {
+      const leftIsDefault = left.project.id === DEFAULT_WORKSPACE_PROJECT_ID;
+      const rightIsDefault = right.project.id === DEFAULT_WORKSPACE_PROJECT_ID;
+      if (leftIsDefault !== rightIsDefault) {
+        return leftIsDefault ? -1 : 1;
+      }
       const leftIsPinned = left.project.isPinned === true;
       const rightIsPinned = right.project.isPinned === true;
       if (leftIsPinned !== rightIsPinned) {
@@ -321,11 +326,6 @@ export function sortWorkspaceProjectsByActivity(
       const activityDelta = right.activityUpdatedAt - left.activityUpdatedAt;
       if (activityDelta !== 0) {
         return activityDelta;
-      }
-      const leftIsDefault = left.project.id === DEFAULT_WORKSPACE_PROJECT_ID;
-      const rightIsDefault = right.project.id === DEFAULT_WORKSPACE_PROJECT_ID;
-      if (leftIsDefault !== rightIsDefault && left.activityUpdatedAt === 0) {
-        return leftIsDefault ? -1 : 1;
       }
       const pathDelta = left.pathKey.localeCompare(right.pathKey);
       if (pathDelta !== 0) {

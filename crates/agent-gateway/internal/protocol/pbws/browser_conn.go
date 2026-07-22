@@ -52,6 +52,9 @@ type browserConn struct {
 	deviceID            string
 	workspaceID         string
 	runtimeKind         string
+	selectionScope      string
+	selectionExpiresAt  time.Time
+	allowedWorkspaces   []account.Workspace
 }
 
 // BrowserHandler 返回 /ws/v2 的 HTTP 处理器。
@@ -108,6 +111,11 @@ func browserIDPrefix() string {
 func (c *browserConn) serve() {
 	if !c.handshake() {
 		return
+	}
+	var selectionExpiryTimer *time.Timer
+	if !c.selectionExpiresAt.IsZero() {
+		selectionExpiryTimer = time.AfterFunc(time.Until(c.selectionExpiresAt), c.core.Close)
+		defer selectionExpiryTimer.Stop()
 	}
 
 	observability.Usage.V2BrowserConnectionsTotal.Add(1)
@@ -187,11 +195,19 @@ func (c *browserConn) handshake() bool {
 				hello.GetRuntimeKind() != lease.RuntimeKind || hello.GetWorkspaceId() != lease.WorkspaceID {
 				verdict = helloVerdict{message: "invalid selection lease"}
 			} else {
-				c.userID = accountSession.UserID
-				c.deviceID = lease.DeviceID
-				c.workspaceID = lease.WorkspaceID
-				c.runtimeKind = lease.RuntimeKind
-				c.sm = c.srv.sm.DeviceManager(c.userID, c.deviceID)
+				device, deviceErr := c.srv.accounts.Device(context.Background(), accountSession.UserID, lease.DeviceID)
+				if deviceErr != nil {
+					verdict = helloVerdict{message: "selected device is unavailable"}
+				} else {
+					c.userID = accountSession.UserID
+					c.deviceID = lease.DeviceID
+					c.workspaceID = lease.WorkspaceID
+					c.runtimeKind = lease.RuntimeKind
+					c.selectionScope = lease.EffectiveScope()
+					c.selectionExpiresAt = lease.ExpiresAt
+					c.allowedWorkspaces = append([]account.Workspace(nil), device.Workspaces...)
+					c.sm = c.srv.sm.DeviceManager(c.userID, c.deviceID)
+				}
 			}
 		}
 	}

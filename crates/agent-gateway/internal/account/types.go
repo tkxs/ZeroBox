@@ -11,6 +11,8 @@ const (
 	RuntimeKindDeviceAgent  = "device_agent"
 	CloudWorkspaceID        = "cloud"
 	StepUpPurposeTargetSwap = "execution_target_switch"
+	SelectionScopeWorkspace = "workspace"
+	SelectionScopeDevice    = "device"
 )
 
 type Session struct {
@@ -24,9 +26,15 @@ type Session struct {
 }
 
 type Workspace struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Path string `json:"path,omitempty"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Path      string `json:"path,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	IsPinned  bool   `json:"is_pinned,omitempty"`
+	PinnedAt  int64  `json:"pinned_at,omitempty"`
+	Archived  bool   `json:"archived,omitempty"`
+	Missing   bool   `json:"missing,omitempty"`
+	UpdatedAt int64  `json:"updated_at,omitempty"`
 }
 
 type Device struct {
@@ -51,9 +59,17 @@ type SelectionLease struct {
 	RuntimeKind    string    `json:"runtime_kind"`
 	DeviceID       string    `json:"device_id,omitempty"`
 	WorkspaceID    string    `json:"workspace_id"`
+	Scope          string    `json:"scope,omitempty"`
 	Target         string    `json:"target_fingerprint"`
 	ConversationID string    `json:"conversation_id"`
 	ExpiresAt      time.Time `json:"expires_at"`
+}
+
+func (l *SelectionLease) EffectiveScope() string {
+	if l != nil && l.Scope == SelectionScopeDevice {
+		return SelectionScopeDevice
+	}
+	return SelectionScopeWorkspace
 }
 
 type Environment struct {

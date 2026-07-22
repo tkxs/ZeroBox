@@ -17,6 +17,12 @@ const host = env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react(), Icons({ compiler: "jsx", jsx: "react" })],
+  resolve: {
+    dedupe: ["react", "react-dom"],
+    alias: {
+      "@": fileURLToPath(new URL("../agent-gateway/web/src", import.meta.url)),
+    },
+  },
   define: {
     __LIVEAGENT_APP_VERSION__: JSON.stringify(appVersion),
     __ZEROAGENT_USA_ZERO_ORIGIN__: JSON.stringify(usaZeroOrigin),

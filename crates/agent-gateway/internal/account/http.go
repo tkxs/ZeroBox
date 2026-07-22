@@ -44,6 +44,7 @@ func (h *HTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/desktop/devices/{id}", h.withDesktopSession(h.renameDevice))
 	mux.HandleFunc("DELETE /api/desktop/devices/{id}", h.withDesktopSession(h.revokeDevice))
 	mux.HandleFunc("GET /api/desktop/environments", h.withDesktopSession(h.desktopEnvironments))
+	mux.HandleFunc("GET /api/desktop/conversation-routes", h.withDesktopSession(h.conversationRoutes))
 	mux.HandleFunc("POST /api/desktop/execution-target/step-up", h.withDesktopSession(h.issueStepUp))
 	mux.HandleFunc("POST /api/desktop/execution-target/select", h.withDesktopSession(h.selectTarget))
 	mux.HandleFunc("POST /api/desktop/handoff", h.withDesktopSession(h.createDesktopHandoff))
@@ -95,7 +96,7 @@ func (h *HTTPHandler) registerAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTPHandler) conversationRoutes(w http.ResponseWriter, r *http.Request, session *Session) {
-	routes, err := h.service.ConversationRoutes(r.Context(), session.UserID)
+	routes, err := h.service.ConversationRoutesForDevice(r.Context(), session.UserID, r.URL.Query().Get("device_id"))
 	if err != nil {
 		writeError(w, err)
 		return

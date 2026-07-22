@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import {
   formatRelayBalance,
   formatRelayTokenCount,
@@ -18,16 +19,36 @@ import {
 type UserMenuProps = {
   user: RelayUser;
   stats: RelayDashboardStats | null;
+  onRefreshAccount: () => Promise<void>;
   onOpenSettings: () => void;
   onLogout: () => void;
 };
 
-export function UserMenu({ user, stats, onOpenSettings, onLogout }: UserMenuProps) {
+export function UserMenu({
+  user,
+  stats,
+  onRefreshAccount,
+  onOpenSettings,
+  onLogout,
+}: UserMenuProps) {
+  const refreshInFlightRef = useRef(false);
   const displayName = user.username?.trim() || user.email.split("@")[0] || `用户 ${user.id}`;
   const avatarLabel = displayName.slice(0, 1).toUpperCase();
 
+  const handleOpenChange = (open: boolean) => {
+    if (!open || refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    void onRefreshAccount()
+      .catch(() => {
+        // Keep the cached account values when the refresh is temporarily unavailable.
+      })
+      .finally(() => {
+        refreshInFlightRef.current = false;
+      });
+  };
+
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={handleOpenChange}>
       <DropdownMenuTrigger
         render={
           <Button

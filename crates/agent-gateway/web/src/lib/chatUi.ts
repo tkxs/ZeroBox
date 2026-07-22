@@ -179,12 +179,6 @@ function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function readRound(value: unknown) {
-  const round = readNumber(value);
-  if (typeof round !== "number") return undefined;
-  return round > 0 ? Math.floor(round) : undefined;
-}
-
 function normalizeLiveUploadedFile(value: unknown): PendingUploadedFile | null {
   const record = asNonArrayRecord(value);
   const relativePath = readString(record.relativePath ?? record.relative_path).trim();

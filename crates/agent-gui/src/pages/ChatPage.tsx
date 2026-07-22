@@ -54,6 +54,7 @@ import { setPreferredMonacoNlsLocale } from "../lib/monacoNls";
 import { logoutRelay, type RelayDashboardStats, type RelayUser } from "../lib/relay/client";
 import {
   type AppSettings,
+  DEFAULT_WORKSPACE_PROJECT_ID,
   getRightDockFileTreeState,
   getRightDockProjectState,
   getSshProjectHostIds,
@@ -143,6 +144,7 @@ import { SkillsHubPage } from "./skills-hub/SkillsHubPage";
 type ChatPageProps = {
   relayUser: RelayUser;
   relayStats: RelayDashboardStats | null;
+  onRefreshRelayAccount: () => Promise<void>;
   settings: AppSettings;
   setSettings: (updater: (prev: AppSettings) => AppSettings) => void;
   /** Reads the authoritative settingsRef (not render-time state) so tools never see a stale snapshot. */
@@ -160,6 +162,7 @@ export function ChatPage(props: ChatPageProps) {
   const {
     relayUser,
     relayStats,
+    onRefreshRelayAccount,
     settings,
     setSettings,
     getMcpSettings,
@@ -247,11 +250,11 @@ export function ChatPage(props: ChatPageProps) {
   const [rightDockOpen, setRightDockOpen] = useState(false);
   const {
     workspaceProjects,
+    sidebarWorkspaceProjects,
     setActiveWorkspaceProjectId,
     missingWorkspaceProjectPathKeys,
     archivedWorkspaceProjectPathKeys,
     activeWorkspaceProject,
-    activeWorkspaceProjectPath,
     sidebarScope,
     historyScopeKey,
     projectRenamingId,
@@ -265,7 +268,7 @@ export function ChatPage(props: ChatPageProps) {
     ensureTunnelToolTab,
     ensureSshTunnelToolTab,
     handleBrowseWorkspaceProjectInSystemFileManager,
-    handleOpenCreateWorkspaceProject,
+    pickWorkspaceProjectFolder,
     handleStartRenamingWorkspaceProject,
     handleCommitWorkspaceProjectRename,
     handleCancelWorkspaceProjectRename,
@@ -286,6 +289,7 @@ export function ChatPage(props: ChatPageProps) {
     prepareComposerForConversationChangeActionRef,
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [conversationContextVersion, setConversationContextVersion] = useState(0);
   const { remoteRuntimeStatus, setRemoteRuntimeStatus } = useGatewayStatus({
     remote: settings.remote,
   });
@@ -512,13 +516,14 @@ export function ChatPage(props: ChatPageProps) {
   const isDraftConversation = !historyItems.some((item) => item.id === currentConversationId);
   const currentConversationPersistedCwd =
     historyItems.find((item) => item.id === currentConversationId)?.cwd?.trim() || "";
-  const currentConversationRuntimeWorkdir =
-    conversationRuntimeCacheRef.current.get(currentConversationId)?.workdir?.trim() || "";
+  const currentConversationRuntimeWorkdir = useMemo(
+    () => conversationRuntimeCacheRef.current.get(currentConversationId)?.workdir?.trim() || "",
+    [conversationContextVersion, conversationRuntimeCacheRef, currentConversationId],
+  );
   const displayedConversationWorkdir =
-    currentConversationPersistedCwd ||
-    currentConversationRuntimeWorkdir ||
-    (isAgentMode ? activeWorkspaceProjectPath || workdir : "");
-  const terminalProjectPath = isAgentMode ? activeWorkspaceProjectPath.trim() : "";
+    currentConversationPersistedCwd || currentConversationRuntimeWorkdir;
+  const hasConversationProject = isAgentMode && Boolean(displayedConversationWorkdir);
+  const terminalProjectPath = hasConversationProject ? displayedConversationWorkdir : "";
   const terminalProjectPathKey = terminalProjectPath
     ? workspaceProjectPathKey(terminalProjectPath)
     : "";
@@ -937,8 +942,7 @@ export function ChatPage(props: ChatPageProps) {
     disposeSubagentsForConversation: (conversationId) => {
       subagentStoresRef.current.dispose(conversationId);
     },
-    getDefaultNewConversationWorkdir: () =>
-      isAgentMode ? activeWorkspaceProjectPath || undefined : undefined,
+    getDefaultNewConversationWorkdir: () => undefined,
     resolveConversationSelectedModel: (json) =>
       normalizeSelectedModelForProviders(parseSelectedModelJson(json), settings.customProviders),
     setCurrentConversationId,
@@ -986,45 +990,6 @@ export function ChatPage(props: ChatPageProps) {
     displayedConversationWorkdir,
     startNewConversationActionRef,
   });
-
-  useEffect(() => {
-    const nextWorkdir = activeWorkspaceProjectPath.trim();
-    if (!isAgentMode || !nextWorkdir) {
-      return;
-    }
-    const conversationId = currentConversationIdRef.current.trim();
-    if (!conversationId || isSending || isConversationRunning(conversationId)) {
-      return;
-    }
-    if (conversationState.meta.totalMessageCount > 0 || pendingUploadedFiles.length > 0) {
-      return;
-    }
-    if (persistedConversationStateRef.current.has(conversationId)) {
-      return;
-    }
-    const historyItem = sidebarStore.peek(conversationId);
-    if (historyItem && !historyItem.isPending) {
-      return;
-    }
-    const currentWorkdir =
-      conversationRuntimeCacheRef.current.get(conversationId)?.workdir?.trim() || "";
-    if (currentWorkdir === nextWorkdir) {
-      return;
-    }
-    updateConversationRuntimeEntry(conversationId, (prev) => ({
-      ...prev,
-      workdir: nextWorkdir,
-    }));
-  }, [
-    activeWorkspaceProjectPath,
-    conversationState.meta.totalMessageCount,
-    isAgentMode,
-    isConversationRunning,
-    isSending,
-    pendingUploadedFiles.length,
-    sidebarStore,
-    updateConversationRuntimeEntry,
-  ]);
 
   useEffect(() => {
     const previous = previousSubagentRuntimeConversationRef.current;
@@ -1285,7 +1250,18 @@ export function ChatPage(props: ChatPageProps) {
     requestQueuedChatTurnProcessing,
   });
 
-  sendActionRef.current = send;
+  const sendForConversationProject: SendChatAction = (overrides) =>
+    send(
+      hasConversationProject
+        ? overrides
+        : {
+            ...overrides,
+            executionModeOverride: "text",
+            workdirOverride: "",
+            selectedSystemToolIdsOverride: [],
+          },
+    );
+  sendActionRef.current = sendForConversationProject;
   stopSendingActionRef.current = stopSending;
 
   const handleOpenSidebar = useCallback(() => {
@@ -1302,11 +1278,16 @@ export function ChatPage(props: ChatPageProps) {
 
   const handleNewConversation = useCallback(() => {
     openController.cancel();
+    const plainChatProject = workspaceProjects.find(
+      (project) => project.id === DEFAULT_WORKSPACE_PROJECT_ID,
+    );
+    if (plainChatProject) {
+      activateWorkspaceProject(plainChatProject, { startConversation: true });
+      return;
+    }
     prepareComposerForConversationChange();
-    startNewConversationActionRef.current({
-      workdir: isAgentMode ? activeWorkspaceProjectPath || undefined : undefined,
-    });
-  }, [activeWorkspaceProjectPath, isAgentMode, openController]);
+    startNewConversationActionRef.current({ workdir: "" });
+  }, [activateWorkspaceProject, openController, workspaceProjects]);
 
   // 全局快捷键「新建对话」：Rust 端呼出窗口后发事件，这里切回对话视图
   // （可能停在 Skills/MCP Hub）、开新会话并聚焦输入框，行为对齐侧栏按钮。
@@ -1357,11 +1338,41 @@ export function ChatPage(props: ChatPageProps) {
       if (!targetConversationId) {
         return;
       }
+      const targetWorkdir = sidebarStore.peek(targetConversationId)?.cwd?.trim() || "";
+      if (targetWorkdir) {
+        const targetProject = workspaceProjects.find(
+          (project) =>
+            workspaceProjectPathKey(project.path) === workspaceProjectPathKey(targetWorkdir),
+        );
+        if (targetProject) {
+          activateWorkspaceProject(targetProject);
+        }
+      } else {
+        setActiveWorkspaceProjectId(DEFAULT_WORKSPACE_PROJECT_ID);
+        setSettings((previous) =>
+          previous.system.activeWorkspaceProjectId === DEFAULT_WORKSPACE_PROJECT_ID
+            ? previous
+            : {
+                ...previous,
+                system: {
+                  ...previous.system,
+                  activeWorkspaceProjectId: DEFAULT_WORKSPACE_PROJECT_ID,
+                },
+              },
+        );
+      }
       prepareComposerForConversationChange();
       openController.open(targetConversationId);
       restoreCachedComposerDraft(targetConversationId);
     },
-    [openController],
+    [
+      activateWorkspaceProject,
+      openController,
+      setActiveWorkspaceProjectId,
+      setSettings,
+      sidebarStore,
+      workspaceProjects,
+    ],
   );
 
   // Called by the sidebar container after the store confirmed a deletion:
@@ -1408,6 +1419,51 @@ export function ChatPage(props: ChatPageProps) {
   const isCompactionRunning = compactionStatus.phase === "running";
   const isConversationHydrating = hydratingConversationId === currentConversationId;
   const isConversationHydrationFailed = hydrationFailedConversationId === currentConversationId;
+  const conversationProject = displayedConversationWorkdir
+    ? workspaceProjects.find(
+        (project) =>
+          workspaceProjectPathKey(project.path) ===
+          workspaceProjectPathKey(displayedConversationWorkdir),
+      )
+    : undefined;
+  const canBindConversationFolder =
+    isDraftConversation &&
+    !displayedConversationWorkdir &&
+    conversationState.meta.totalMessageCount === 0 &&
+    pendingUploadedFiles.length === 0 &&
+    !isSending &&
+    !isConversationRunning(currentConversationId);
+  const handleBindConversationFolder = useCallback(async () => {
+    if (!canBindConversationFolder) return;
+    const conversationId = currentConversationIdRef.current;
+    const project = await pickWorkspaceProjectFolder();
+    if (!project) return;
+    if (currentConversationIdRef.current !== conversationId) return;
+    const persistedWorkdir = sidebarStore.peek(conversationId)?.cwd?.trim() || "";
+    const runtimeWorkdir =
+      conversationRuntimeCacheRef.current.get(conversationId)?.workdir?.trim() || "";
+    if (persistedWorkdir || runtimeWorkdir) return;
+    activateWorkspaceProject(project);
+    updateConversationRuntimeEntry(conversationId, (previous) => ({
+      ...previous,
+      workdir: previous.workdir?.trim() || project.path,
+    }));
+    setConversationContextVersion((current) => current + 1);
+    setSettings((previous) =>
+      previous.system.executionMode === "text"
+        ? updateSystem(previous, { executionMode: "tools" })
+        : previous,
+    );
+  }, [
+    activateWorkspaceProject,
+    canBindConversationFolder,
+    conversationRuntimeCacheRef,
+    currentConversationIdRef,
+    pickWorkspaceProjectFolder,
+    setSettings,
+    sidebarStore,
+    updateConversationRuntimeEntry,
+  ]);
   const composerPlaceholder = isCompactionRunning
     ? t("chat.compactingContextWait")
     : isConversationHydrating
@@ -1485,8 +1541,8 @@ export function ChatPage(props: ChatPageProps) {
           isOpen={sidebarOpen}
           fontScale={settings.customSettings.fontScale.sidebar}
           activeView={activeView}
-          showProjects={isAgentMode}
-          projects={workspaceProjects}
+          showProjects={isAgentMode && sidebarWorkspaceProjects.length > 0}
+          projects={sidebarWorkspaceProjects}
           activeProjectId={activeWorkspaceProject?.id}
           missingProjectPathKeys={missingWorkspaceProjectPathKeys}
           projectRenamingId={projectRenamingId}
@@ -1495,7 +1551,6 @@ export function ChatPage(props: ChatPageProps) {
           recentCollapsed={settings.customSettings.chatSidebar.recentCollapsed}
           onProjectsCollapsedChange={handleSidebarProjectsCollapsedChange}
           onRecentCollapsedChange={handleSidebarRecentCollapsedChange}
-          onCreateProject={handleOpenCreateWorkspaceProject}
           onSelectProject={handleSelectWorkspaceProject}
           onNewConversationForProject={handleNewConversationForProject}
           onBrowseProjectInFileTree={handleBrowseWorkspaceProjectInFileTree}
@@ -1530,6 +1585,7 @@ export function ChatPage(props: ChatPageProps) {
             <UserMenu
               user={relayUser}
               stats={relayStats}
+              onRefreshAccount={onRefreshRelayAccount}
               onOpenSettings={() => onOpenSettings("account")}
               onLogout={() => void logoutRelay()}
             />
@@ -1714,6 +1770,9 @@ export function ChatPage(props: ChatPageProps) {
                 isInputDisabled={isComposerInputDisabled}
                 inputPlaceholder={composerPlaceholder}
                 workdir={displayedConversationWorkdir}
+                projectFolderLabel={conversationProject?.name}
+                canSelectProjectFolder={canBindConversationFolder}
+                onSelectProjectFolder={handleBindConversationFolder}
                 enabledSkills={enabledComposerSkills}
                 isAgentMode={isAgentMode}
                 chatRuntimeControls={chatRuntimeControlsForCurrentProvider}

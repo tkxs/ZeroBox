@@ -460,78 +460,6 @@ type RawSftpEvent = {
   transfer?: RawSftpTransfer | null;
 };
 
-class AsyncEventQueue<T> implements AsyncIterable<T>, AsyncIterator<T> {
-  private values: T[] = [];
-  private waiters: Array<{
-    resolve: (value: IteratorResult<T>) => void;
-    reject: (reason?: unknown) => void;
-  }> = [];
-  private closed = false;
-  private failure: Error | null = null;
-
-  push(value: T) {
-    if (this.closed || this.failure) {
-      return;
-    }
-
-    const waiter = this.waiters.shift();
-    if (waiter) {
-      waiter.resolve({ value, done: false });
-      return;
-    }
-    this.values.push(value);
-  }
-
-  fail(error: Error) {
-    if (this.closed || this.failure) {
-      return;
-    }
-    this.failure = error;
-    const waiters = [...this.waiters];
-    this.waiters = [];
-    for (const waiter of waiters) {
-      waiter.reject(error);
-    }
-  }
-
-  close() {
-    if (this.closed) {
-      return;
-    }
-    this.closed = true;
-    const waiters = [...this.waiters];
-    this.waiters = [];
-    for (const waiter of waiters) {
-      waiter.resolve({ value: undefined as T, done: true });
-    }
-  }
-
-  async next(): Promise<IteratorResult<T>> {
-    if (this.failure) {
-      return Promise.reject(this.failure);
-    }
-    if (this.values.length > 0) {
-      return { value: this.values.shift() as T, done: false };
-    }
-    if (this.closed) {
-      return { value: undefined as T, done: true };
-    }
-
-    return new Promise<IteratorResult<T>>((resolve, reject) => {
-      this.waiters.push({ resolve, reject });
-    });
-  }
-
-  async return(): Promise<IteratorResult<T>> {
-    this.close();
-    return { value: undefined as T, done: true };
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<T> {
-    return this;
-  }
-}
-
 function asErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message.trim()) {
     return error.message.trim();
@@ -540,8 +468,8 @@ function asErrorMessage(error: unknown, fallback: string) {
   return text || fallback;
 }
 
-function buildWebSocketUrl() {
-  const origin = getRuntimeOrigin();
+function buildWebSocketUrl(originOverride = "") {
+  const origin = originOverride.trim() || getRuntimeOrigin();
   if (!origin) {
     throw new Error("Gateway WebSocket origin is unavailable");
   }
@@ -1277,7 +1205,14 @@ export class GatewayWebSocketClient {
     this.noteForegroundWakeup(event);
   };
 
-  constructor(private readonly token: string) {
+  constructor(
+    private readonly token: string,
+    private readonly options: {
+      origin?: string;
+      desktopAccessToken?: string;
+      clientName?: string;
+    } = {},
+  ) {
     this.terminalStream = new BrowserGatewayTerminalStreamClient(token);
     this.installReconnectWakeups();
   }
@@ -2810,7 +2745,7 @@ export class GatewayWebSocketClient {
       return;
     }
 
-    const socketUrl = buildWebSocketUrl();
+    const socketUrl = buildWebSocketUrl(this.options.origin);
     let reconnectAfterTimeout = false;
     this.connectPromise = new Promise<void>((resolve, reject) => {
       // 显式连接尝试清除鉴权失败标记；自动重连循环不会反复敲门坏 token。
@@ -2928,7 +2863,14 @@ export class GatewayWebSocketClient {
           timeoutId: authTimeoutId,
         });
 
-        this.sendFrame(encodeHelloFrame(authId, this.token));
+        this.sendFrame(
+          encodeHelloFrame(
+            authId,
+            this.token,
+            this.options.desktopAccessToken,
+            this.options.clientName ?? "webui",
+          ),
+        );
       };
     }).finally(() => {
       this.connectPromise = null;

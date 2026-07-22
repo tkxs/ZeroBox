@@ -91,6 +91,14 @@ func (c *browserConn) handleChatCommand(requestID string, cmd *gatewayv1.ChatCom
 		_ = c.sendLocalError(requestID, err.Error())
 		return
 	}
+	if err := c.vetChatWorkdir(body.Workdir); err != nil {
+		_ = c.sendLocalError(requestID, err.Error())
+		return
+	}
+	if err := c.vetPlainChat(body.ExecutionMode, body.Workdir, body.SelectedSystemTools); err != nil {
+		_ = c.sendLocalError(requestID, err.Error())
+		return
+	}
 
 	if existing, ok := c.sm.LookupChatCommand(body.ClientRequestID); ok {
 		c.respondChatCommandDeduped(requestID, existing)

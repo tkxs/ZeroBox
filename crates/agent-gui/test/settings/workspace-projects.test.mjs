@@ -51,7 +51,7 @@ test("workspace project path key normalizes windows-shaped paths and preserves P
   );
 });
 
-test("workspace project ordering follows latest activity instead of pinning default first", () => {
+test("plain chat stays first while explicit projects follow latest activity", () => {
   const projects = [
     project(settings.DEFAULT_WORKSPACE_PROJECT_ID, "/tmp/default-project", 1),
     project("project-a", "/tmp/project-a", 2),
@@ -69,7 +69,7 @@ test("workspace project ordering follows latest activity instead of pinning defa
 
   assert.deepEqual(
     ordered.map((item) => item.id),
-    ["project-a", "project-b", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a", "project-b"],
   );
 });
 
@@ -95,11 +95,11 @@ test("workspace project keeps its active position after the running marker is cl
 
   assert.deepEqual(
     duringRun.map((item) => item.id),
-    ["project-a", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a"],
   );
   assert.deepEqual(
     afterRun.map((item) => item.id),
-    ["project-a", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a"],
   );
 });
 
@@ -122,7 +122,7 @@ test("running workspace project outranks a newer idle project", () => {
 
   assert.deepEqual(
     ordered.map((item) => item.id),
-    ["project-running", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-running"],
   );
 });
 
@@ -188,7 +188,7 @@ test("history workdir activity restores ordering after page refresh", () => {
 
   assert.deepEqual(
     ordered.map((item) => item.id),
-    ["project-a", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a"],
   );
 });
 
@@ -205,7 +205,7 @@ test("persisted last conversation activity restores ordering before history work
 
   assert.deepEqual(
     ordered.map((item) => item.id),
-    ["project-a", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a"],
   );
 });
 
@@ -255,10 +255,10 @@ test("archived paths survive resolveWorkspaceProjects normalization", () => {
     "/tmp/project-a",
     "/tmp/default-project",
   ]);
-  assert.equal(resolved.activeWorkspaceProjectId, "project-b");
+  assert.equal(resolved.activeWorkspaceProjectId, settings.DEFAULT_WORKSPACE_PROJECT_ID);
 });
 
-test("resolveWorkspaceProjects keeps one workspace selectable when every path is archived", () => {
+test("resolveWorkspaceProjects keeps archived projects while plain chat remains selectable", () => {
   const resolved = settings.resolveWorkspaceProjects(
     {
       ...settings.getDefaultSettings().system,
@@ -273,7 +273,10 @@ test("resolveWorkspaceProjects keeps one workspace selectable when every path is
   );
 
   assert.equal(resolved.activeWorkspaceProjectId, settings.DEFAULT_WORKSPACE_PROJECT_ID);
-  assert.deepEqual(resolved.archivedWorkspaceProjectPaths, ["/tmp/project-a"]);
+  assert.deepEqual(resolved.archivedWorkspaceProjectPaths, [
+    "/tmp/default-project",
+    "/tmp/project-a",
+  ]);
 });
 
 test("removed (hidden) paths are dropped from the archived list", () => {
@@ -332,7 +335,7 @@ test("live activity overrides stale persisted last conversation activity", () =>
 
   assert.deepEqual(
     ordered.map((item) => item.id),
-    ["project-a", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a"],
   );
 });
 
@@ -373,4 +376,23 @@ test("workspace project ordering uses deterministic path tie breaker", () => {
     ordered.map((item) => item.id),
     [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a", "project-b"],
   );
+});
+
+test("legacy default workspace migrates to an explicit folder project", () => {
+  const resolved = settings.resolveWorkspaceProjects(
+    {
+      ...settings.getDefaultSettings().system,
+      workspaceProjects: [
+        project(settings.DEFAULT_WORKSPACE_PROJECT_ID, "/tmp/legacy-project", 1),
+      ],
+      activeWorkspaceProjectId: settings.DEFAULT_WORKSPACE_PROJECT_ID,
+    },
+    "/tmp/legacy-project",
+  );
+
+  assert.equal(resolved.activeWorkspaceProjectId, settings.DEFAULT_WORKSPACE_PROJECT_ID);
+  assert.equal(resolved.workspaceProjects.length, 1);
+  assert.notEqual(resolved.workspaceProjects[0].id, settings.DEFAULT_WORKSPACE_PROJECT_ID);
+  assert.equal(resolved.workspaceProjects[0].path, "/tmp/legacy-project");
+  assert.equal(resolved.workspaceProjects[0].kind, "folder");
 });

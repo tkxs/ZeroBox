@@ -21,6 +21,7 @@ import {
   ChevronDown,
   ChevronUp,
   Clock3,
+  FolderClosed,
   Globe,
   GlobeOff,
   Lightbulb,
@@ -135,6 +136,9 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
   allowUploadsWithoutWorkspace?: boolean;
   inputPlaceholder: string;
   workdir: string;
+  projectFolderLabel?: string;
+  canSelectProjectFolder: boolean;
+  onSelectProjectFolder: () => void;
   enabledSkills: MentionComposerSkill[];
   isAgentMode: boolean;
   chatRuntimeControls: ChatRuntimeControls;
@@ -169,6 +173,9 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
     allowUploadsWithoutWorkspace = false,
     inputPlaceholder,
     workdir,
+    projectFolderLabel,
+    canSelectProjectFolder,
+    onSelectProjectFolder,
     enabledSkills,
     isAgentMode,
     chatRuntimeControls,
@@ -195,6 +202,13 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
     onHeightChange,
   } = props;
   const { t } = useLocale();
+  const projectFolderDisplayName =
+    projectFolderLabel ||
+    workdir
+      .replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .at(-1) ||
+    "";
   const rootRef = useRef<HTMLDivElement | null>(null);
   const queuePanelRef = useRef<HTMLDivElement | null>(null);
   const queueListRef = useRef<HTMLUListElement | null>(null);
@@ -733,6 +747,29 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
             aria-hidden
             className="pointer-events-none absolute inset-0 rounded-[24px] bg-gradient-to-b from-white/18 to-transparent opacity-70 dark:from-white/[0.04] dark:opacity-100"
           />
+
+          <div className="relative z-10 flex h-9 shrink-0 items-center border-b border-border/45 px-3">
+            <button
+              type="button"
+              disabled={!canSelectProjectFolder}
+              onClick={onSelectProjectFolder}
+              title={
+                workdir
+                  ? `${t("chat.composer.folderBound")}: ${workdir}`
+                  : t("chat.composer.selectFolder")
+              }
+              className={cn(
+                "flex h-7 min-w-0 max-w-full items-center gap-2 rounded-md px-2 text-xs text-muted-foreground outline-hidden transition-colors",
+                canSelectProjectFolder &&
+                  "hover:bg-muted/60 hover:text-foreground focus-visible:bg-muted/60",
+              )}
+            >
+              <FolderClosed className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">
+                {projectFolderDisplayName || t("chat.composer.noFolder")}
+              </span>
+            </button>
+          </div>
 
           <button
             type="button"

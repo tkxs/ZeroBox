@@ -16,6 +16,7 @@ import {
   selectRunningConversationIds,
   sidebarShallowEqual,
 } from "../../../lib/sidebar/selectors";
+import { sortSidebarConversations } from "../../../lib/sidebar/reconcile";
 import type { SidebarSnapshot, SidebarStore } from "../../../lib/sidebar/store";
 import type { SidebarConversation } from "../../../lib/sidebar/types";
 import { useSidebarSelector } from "../../../lib/sidebar/useSidebarSelector";
@@ -39,7 +40,6 @@ type ChatSidebarContainerProps = {
   recentCollapsed: boolean;
   onProjectsCollapsedChange: (collapsed: boolean) => void;
   onRecentCollapsedChange: (collapsed: boolean) => void;
-  onCreateProject: () => void;
   onSelectProject: (project: WorkspaceProject) => void;
   onNewConversationForProject: (project: WorkspaceProject) => void;
   onBrowseProjectInFileTree: (project: WorkspaceProject) => void;
@@ -82,6 +82,14 @@ export function ChatSidebarContainer(props: ChatSidebarContainerProps) {
   const { t } = useLocale();
 
   const items = useSidebarSelector(store, selectConversations);
+  const conversationsById = useSidebarSelector(store, (snapshot) => snapshot.byId);
+  const taskItems = useMemo(
+    () =>
+      sortSidebarConversations(
+        Array.from(conversationsById.values()).filter((item) => !item.cwd?.trim()),
+      ),
+    [conversationsById],
+  );
   const listState = useSidebarSelector(store, selectListState, sidebarShallowEqual);
   const scopeKey = useSidebarSelector(store, (snapshot) => snapshot.scopeKey);
   const runningConversationIds = useSidebarSelector(store, selectRunningConversationIds);
@@ -176,6 +184,7 @@ export function ChatSidebarContainer(props: ChatSidebarContainerProps) {
   return (
     <ChatHistorySidebar
       items={items}
+      taskItems={taskItems}
       currentConversationId={props.currentConversationId}
       runningConversationIds={runningConversationIds}
       busyConversationIds={busyConversationIds}
@@ -203,7 +212,6 @@ export function ChatSidebarContainer(props: ChatSidebarContainerProps) {
       recentCollapsed={props.recentCollapsed}
       onProjectsCollapsedChange={props.onProjectsCollapsedChange}
       onRecentCollapsedChange={props.onRecentCollapsedChange}
-      onCreateProject={props.onCreateProject}
       onSelectProject={props.onSelectProject}
       onNewConversationForProject={props.onNewConversationForProject}
       onBrowseProjectInFileTree={props.onBrowseProjectInFileTree}

@@ -36,11 +36,11 @@ import {
   FolderOpen,
   FolderTree,
   Loader2,
+  MessageSquare,
   MoreHorizontal,
   PanelLeftClose,
   Pin,
   PinOff,
-  Plus,
   Share2,
   Trash2,
   X,
@@ -57,6 +57,7 @@ import { Input } from "../ui/input";
 
 type ChatHistorySidebarProps = {
   items: readonly SidebarConversation[];
+  taskItems?: readonly SidebarConversation[];
   currentConversationId: string;
   runningConversationIds: ReadonlySet<string>;
   // Rows with an in-flight mutation: only that row's controls are disabled.
@@ -91,7 +92,6 @@ type ChatHistorySidebarProps = {
   recentCollapsed?: boolean;
   onProjectsCollapsedChange?: (collapsed: boolean) => void;
   onRecentCollapsedChange?: (collapsed: boolean) => void;
-  onCreateProject?: () => void;
   onSelectProject?: (project: WorkspaceProject) => void;
   onNewConversationForProject?: (project: WorkspaceProject) => void;
   onBrowseProjectInFileTree?: (project: WorkspaceProject) => void;
@@ -491,7 +491,7 @@ const ProjectRow = memo(function ProjectRow(props: {
   const [menuOpen, setMenuOpen] = useState(false);
   const isDefaultProject = project.id === DEFAULT_WORKSPACE_PROJECT_ID;
   const isPinned = project.isPinned === true;
-  const ProjectFolderIcon = isActive ? FolderOpen : FolderClosed;
+  const ProjectFolderIcon = isDefaultProject ? MessageSquare : isActive ? FolderOpen : FolderClosed;
 
   useEffect(() => {
     if (!isRenaming) return;
@@ -686,9 +686,11 @@ const ProjectRow = memo(function ProjectRow(props: {
             >
               <Tooltip.Popup className="w-64 rounded-xl border border-border/60 bg-popover px-3 py-2.5 text-popover-foreground shadow-lg outline-hidden data-[open]:animate-in data-[closed]:animate-out data-[closed]:fade-out-0 data-[open]:fade-in-0 data-[closed]:zoom-out-95 data-[open]:zoom-in-95">
                 <p className="truncate text-sm font-semibold leading-5">{project.name}</p>
-                <p className="mt-1 break-all text-xs leading-4 text-muted-foreground">
-                  {project.path}
-                </p>
+                {project.path ? (
+                  <p className="mt-1 break-all text-xs leading-4 text-muted-foreground">
+                    {project.path}
+                  </p>
+                ) : null}
               </Tooltip.Popup>
             </Tooltip.Positioner>
           </Tooltip.Portal>
@@ -748,7 +750,7 @@ const ProjectRow = memo(function ProjectRow(props: {
               ) : null
             ) : (
               <>
-                {!isArchived ? (
+                {!isArchived && !isDefaultProject ? (
                   <Button
                     type="button"
                     variant="ghost"
@@ -765,74 +767,76 @@ const ProjectRow = memo(function ProjectRow(props: {
                     )}
                   </Button>
                 ) : null}
-                <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className={PROJECT_ICON_BUTTON_CLASS}
-                        title={t("chat.workspaceMore")}
-                        aria-label={t("chat.workspaceMore")}
-                      />
-                    }
-                  >
-                    <MoreHorizontal className="h-3.5 w-3.5" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    side="right"
-                    align="start"
-                    sideOffset={6}
-                    className="sidebar-context-menu"
-                  >
-                    {!isDefaultProject ? (
-                      <>
+                {!isDefaultProject ? (
+                  <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className={PROJECT_ICON_BUTTON_CLASS}
+                          title={t("chat.workspaceMore")}
+                          aria-label={t("chat.workspaceMore")}
+                        />
+                      }
+                    >
+                      <MoreHorizontal className="h-3.5 w-3.5" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      side="right"
+                      align="start"
+                      sideOffset={6}
+                      className="sidebar-context-menu"
+                    >
+                      {!isDefaultProject ? (
+                        <>
+                          <DropdownMenuItem
+                            onSelect={() => onStartRenamingProject(project)}
+                            className="gap-2"
+                          >
+                            <Edit3 className="h-3.5 w-3.5" />
+                            {t("chat.workspaceRename")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={handleRequestRemove}
+                            className="gap-2 text-destructive focus:bg-destructive/10 focus:text-destructive"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            {t("chat.workspaceRemove")}
+                          </DropdownMenuItem>
+                        </>
+                      ) : null}
+                      {!isArchived && canArchive ? (
+                        <DropdownMenuItem onSelect={handleArchive} className="gap-2">
+                          <Archive className="h-3.5 w-3.5" />
+                          {t("chat.workspaceArchive")}
+                        </DropdownMenuItem>
+                      ) : null}
+                      {isArchived ? (
+                        <DropdownMenuItem onSelect={handleUnarchive} className="gap-2">
+                          <ArchiveRestore className="h-3.5 w-3.5" />
+                          {t("chat.workspaceUnarchive")}
+                        </DropdownMenuItem>
+                      ) : null}
+                      {onBrowseProjectInFileTree ? (
+                        <DropdownMenuItem onSelect={handleBrowseInFileTree} className="gap-2">
+                          <FolderTree className="h-3.5 w-3.5" />
+                          {t("chat.workspaceBrowseInFileTree")}
+                        </DropdownMenuItem>
+                      ) : null}
+                      {onBrowseProjectInSystemFileManager ? (
                         <DropdownMenuItem
-                          onSelect={() => onStartRenamingProject(project)}
+                          onSelect={handleBrowseInSystemFileManager}
                           className="gap-2"
                         >
-                          <Edit3 className="h-3.5 w-3.5" />
-                          {t("chat.workspaceRename")}
+                          <FolderOpen className="h-3.5 w-3.5" />
+                          {t("chat.workspaceBrowseInSystemFileManager")}
                         </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onSelect={handleRequestRemove}
-                          className="gap-2 text-destructive focus:bg-destructive/10 focus:text-destructive"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          {t("chat.workspaceRemove")}
-                        </DropdownMenuItem>
-                      </>
-                    ) : null}
-                    {!isArchived && canArchive ? (
-                      <DropdownMenuItem onSelect={handleArchive} className="gap-2">
-                        <Archive className="h-3.5 w-3.5" />
-                        {t("chat.workspaceArchive")}
-                      </DropdownMenuItem>
-                    ) : null}
-                    {isArchived ? (
-                      <DropdownMenuItem onSelect={handleUnarchive} className="gap-2">
-                        <ArchiveRestore className="h-3.5 w-3.5" />
-                        {t("chat.workspaceUnarchive")}
-                      </DropdownMenuItem>
-                    ) : null}
-                    {onBrowseProjectInFileTree ? (
-                      <DropdownMenuItem onSelect={handleBrowseInFileTree} className="gap-2">
-                        <FolderTree className="h-3.5 w-3.5" />
-                        {t("chat.workspaceBrowseInFileTree")}
-                      </DropdownMenuItem>
-                    ) : null}
-                    {onBrowseProjectInSystemFileManager ? (
-                      <DropdownMenuItem
-                        onSelect={handleBrowseInSystemFileManager}
-                        className="gap-2"
-                      >
-                        <FolderOpen className="h-3.5 w-3.5" />
-                        {t("chat.workspaceBrowseInSystemFileManager")}
-                      </DropdownMenuItem>
-                    ) : null}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                      ) : null}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
               </>
             )}
           </div>
@@ -926,6 +930,7 @@ function SidebarStateCard(props: {
 export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHistorySidebarProps) {
   const {
     items,
+    taskItems = items,
     currentConversationId,
     runningConversationIds,
     busyConversationIds,
@@ -953,7 +958,6 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     recentCollapsed = false,
     onProjectsCollapsedChange,
     onRecentCollapsedChange,
-    onCreateProject,
     onSelectProject,
     onBrowseProjectInFileTree,
     onBrowseProjectInSystemFileManager,
@@ -1069,12 +1073,28 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
       ),
     [archivedProjectPathKeys, projects],
   );
+  const selectedProject = useMemo(
+    () => activeProjects.find((project) => project.id === activeProjectId),
+    [activeProjectId, activeProjects],
+  );
+  const activeScopedProject = useMemo(() => {
+    if (!scopeKey.startsWith("cwd:")) return undefined;
+    const scopedPathKey = workspaceProjectPathKey(scopeKey.slice(4));
+    return activeProjects.find(
+      (project) => workspaceProjectPathKey(project.path) === scopedPathKey,
+    );
+  }, [activeProjects, scopeKey]);
+  const isTaskScopeActive = !scopeKey.startsWith("cwd:");
   // Projects arrive pre-sorted from the container; the view only caps the
   // rendered count until the user expands the list.
-  const renderedProjects = useMemo(
-    () => (showAllProjects ? activeProjects : activeProjects.slice(0, PROJECT_LIST_COLLAPSED_MAX)),
-    [activeProjects, showAllProjects],
-  );
+  const renderedProjects = useMemo(() => {
+    if (showAllProjects) return activeProjects;
+    const visible = activeProjects.slice(0, PROJECT_LIST_COLLAPSED_MAX);
+    if (!selectedProject || visible.some((project) => project.id === selectedProject.id)) {
+      return visible;
+    }
+    return [...visible, selectedProject];
+  }, [activeProjects, selectedProject, showAllProjects]);
   // Archiving must always leave at least one active workspace behind.
   const canArchiveProjects = Boolean(onArchiveProject) && activeProjects.length > 1;
   const [archivedGroupOpen, setArchivedGroupOpen] = useState(false);
@@ -1103,7 +1123,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
       Math.min(projectsContentHeight, projectMinBodyHeight, resizeMaxHeight),
     );
     const defaultProjectsBodyHeight = clampSidebarSectionHeight(
-      Math.min(projectsContentHeight, Math.floor(available / 2)),
+      projectsContentHeight,
       resizeMinHeight,
       resizeMaxHeight,
     );
@@ -1158,9 +1178,12 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     resizeMaxHeight: sidebarSectionLayout.resizeMaxHeight,
   };
   const historyScrollRef = useRef<HTMLDivElement | null>(null);
-  const getHistoryItemKey = useCallback((index: number) => items[index]?.id ?? index, [items]);
+  const getHistoryItemKey = useCallback(
+    (index: number) => taskItems[index]?.id ?? index,
+    [taskItems],
+  );
   const historyVirtualizer = useVirtualizer({
-    count: items.length,
+    count: taskItems.length,
     getScrollElement: () => historyScrollRef.current,
     estimateSize: () => HISTORY_ROW_ESTIMATED_HEIGHT + HISTORY_ROW_GAP,
     getItemKey: getHistoryItemKey,
@@ -1181,11 +1204,12 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
   useEffect(() => {
     if (
       !hasMore ||
+      !isTaskScopeActive ||
       isListLoading ||
       isLoadingMore ||
       recentCollapsed ||
-      items.length === 0 ||
-      lastVirtualHistoryIndex < items.length - HISTORY_LOAD_MORE_THRESHOLD
+      taskItems.length === 0 ||
+      lastVirtualHistoryIndex < taskItems.length - HISTORY_LOAD_MORE_THRESHOLD
     ) {
       return;
     }
@@ -1194,10 +1218,11 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     hasMore,
     isListLoading,
     isLoadingMore,
-    items.length,
+    taskItems.length,
     lastVirtualHistoryIndex,
     onLoadMore,
     recentCollapsed,
+    isTaskScopeActive,
   ]);
 
   useEffect(() => {
@@ -1532,38 +1557,22 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
         >
           {showProjects ? (
             <>
-              <div
-                ref={projectsHeaderRef}
-                className="group/workspace-header flex items-center justify-between px-2 pb-1 pt-2"
-              >
-                <button
-                  type="button"
-                  aria-expanded={!projectsCollapsed}
-                  className="group flex min-w-0 items-center gap-1 rounded-md px-3 py-1 text-xs font-semibold text-muted-foreground outline-hidden"
-                  onClick={() => onProjectsCollapsedChange?.(!projectsCollapsed)}
-                >
-                  <span>{t("chat.workspaceSection")}</span>
-                  <ChevronRight
-                    aria-hidden="true"
-                    className="h-3.5 w-3.5 shrink-0 opacity-0 transition-[opacity,transform] duration-300 ease-in-out group-hover:opacity-100"
-                    style={{ transform: `rotate(${projectsCollapsed ? 0 : 90}deg)` }}
-                  />
-                </button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className={cn(
-                    PROJECT_ICON_BUTTON_CLASS,
-                    "pointer-events-none opacity-0 transition-opacity hover:!bg-transparent group-hover/workspace-header:pointer-events-auto group-hover/workspace-header:opacity-100 focus-visible:opacity-100",
-                  )}
-                  title={t("chat.workspaceCreate")}
-                  aria-label={t("chat.workspaceCreate")}
-                  onClick={() => onCreateProject?.()}
-                  disabled={!onCreateProject}
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
+              <div ref={projectsHeaderRef} className="px-2 pb-1 pt-2">
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    aria-expanded={!projectsCollapsed}
+                    className="group flex min-w-0 items-center gap-1 rounded-md px-3 py-1 text-xs font-semibold text-muted-foreground outline-hidden"
+                    onClick={() => onProjectsCollapsedChange?.(!projectsCollapsed)}
+                  >
+                    <span>{t("chat.workspaceSection")}</span>
+                    <ChevronRight
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 shrink-0 opacity-0 transition-[opacity,transform] duration-300 ease-in-out group-hover:opacity-100"
+                      style={{ transform: `rotate(${projectsCollapsed ? 0 : 90}deg)` }}
+                    />
+                  </button>
+                </div>
               </div>
               <div
                 aria-hidden={projectsCollapsed}
@@ -1576,37 +1585,80 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                 <div ref={projectsBodyRef} className="space-y-0.5 px-2 pb-0.5">
                   {renderedProjects.map((project) => {
                     const pathKey = workspaceProjectPathKey(project.path);
+                    const isExpanded = activeScopedProject?.id === project.id;
                     return (
-                      <ProjectRow
-                        key={project.id}
-                        project={project}
-                        isActive={activeProjectId === project.id}
-                        isMissing={missingProjectPathKeys.has(pathKey)}
-                        isRunning={runningProjectPathKeys.has(pathKey)}
-                        isRenaming={projectRenamingId === project.id}
-                        isPendingRemove={pendingProjectRemoveId === project.id}
-                        renameDraft={projectRenameDraft}
-                        onSelectProject={handleSelectProject}
-                        onBrowseProjectInFileTree={
-                          onBrowseProjectInFileTree ? handleBrowseProjectInFileTree : undefined
-                        }
-                        onBrowseProjectInSystemFileManager={
-                          onBrowseProjectInSystemFileManager
-                            ? handleBrowseProjectInSystemFileManager
-                            : undefined
-                        }
-                        onStartRenamingProject={handleStartRenamingProject}
-                        onProjectRenameDraftChange={handleProjectRenameDraftChange}
-                        onCommitProjectRename={handleCommitProjectRename}
-                        onCancelProjectRename={handleCancelProjectRename}
-                        onSetProjectPinned={handleSetProjectPinned}
-                        onRemoveProject={handleRemoveProject}
-                        isArchived={false}
-                        canArchive={canArchiveProjects}
-                        onArchiveProject={handleArchiveProject}
-                        onUnarchiveProject={handleUnarchiveProject}
-                        onSetPendingRemove={setPendingProjectRemoveId}
-                      />
+                      <div key={project.id}>
+                        <ProjectRow
+                          project={project}
+                          isActive={activeProjectId === project.id}
+                          isMissing={missingProjectPathKeys.has(pathKey)}
+                          isRunning={runningProjectPathKeys.has(pathKey)}
+                          isRenaming={projectRenamingId === project.id}
+                          isPendingRemove={pendingProjectRemoveId === project.id}
+                          renameDraft={projectRenameDraft}
+                          onSelectProject={handleSelectProject}
+                          onBrowseProjectInFileTree={
+                            onBrowseProjectInFileTree ? handleBrowseProjectInFileTree : undefined
+                          }
+                          onBrowseProjectInSystemFileManager={
+                            onBrowseProjectInSystemFileManager
+                              ? handleBrowseProjectInSystemFileManager
+                              : undefined
+                          }
+                          onStartRenamingProject={handleStartRenamingProject}
+                          onProjectRenameDraftChange={handleProjectRenameDraftChange}
+                          onCommitProjectRename={handleCommitProjectRename}
+                          onCancelProjectRename={handleCancelProjectRename}
+                          onSetProjectPinned={handleSetProjectPinned}
+                          onRemoveProject={handleRemoveProject}
+                          isArchived={false}
+                          canArchive={canArchiveProjects}
+                          onArchiveProject={handleArchiveProject}
+                          onUnarchiveProject={handleUnarchiveProject}
+                          onSetPendingRemove={setPendingProjectRemoveId}
+                        />
+                        {isExpanded ? (
+                          <div className="ml-5 border-l border-border/45 py-1 pl-1">
+                            {errorMessage ? (
+                              <div className="pb-1 pl-1 pr-2">
+                                <SidebarStateCard
+                                  title={errorMessage}
+                                  description={errorDetail ?? undefined}
+                                  tone="error"
+                                  onDismiss={onDismissError}
+                                  dismissLabel={t("chat.cancel")}
+                                />
+                              </div>
+                            ) : null}
+                            {isListLoading && items.length === 0 ? (
+                              <div className="flex min-h-10 items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground/60">
+                                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                                <span>{t("chat.history.syncing")}</span>
+                              </div>
+                            ) : items.length === 0 ? (
+                              listStatus === "ready" && !errorMessage ? (
+                                <p className="flex min-h-10 items-center px-3 py-2 text-xs font-medium text-muted-foreground/60">
+                                  {t("chat.emptyChatHistory")}
+                                </p>
+                              ) : null
+                            ) : (
+                              <div className="space-y-0.5">{items.map(renderHistoryRow)}</div>
+                            )}
+                            {items.length > 0 && (hasMore || isLoadingMore) ? (
+                              <button
+                                type="button"
+                                disabled={isLoadingMore}
+                                onClick={onLoadMore}
+                                className="w-full px-2 py-1.5 text-center text-[calc(11px*var(--zone-font-scale,1))] leading-5 text-muted-foreground/70 hover:text-foreground disabled:cursor-wait"
+                              >
+                                {isLoadingMore
+                                  ? t("sidebar.loadingMoreHistory")
+                                  : t("sidebar.continueLoadingHistory")}
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
                     );
                   })}
                   {hiddenProjectCount > 0 || showAllProjects ? (
@@ -1711,132 +1763,138 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
             </>
           ) : null}
 
-          <div
-            ref={recentHeaderRef}
-            className={cn(
-              "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-2 pb-2",
-              showProjects ? "border-t border-border/35 pt-0.5" : "pt-3",
-            )}
-          >
-            <button
-              type="button"
-              aria-expanded={!recentCollapsed}
-              className="group flex min-w-0 items-center gap-1 rounded-md px-3 py-1 text-xs font-semibold text-muted-foreground outline-hidden"
-              onClick={() => onRecentCollapsedChange?.(!recentCollapsed)}
-            >
-              <span className="min-w-0 truncate">{t("chat.recentConversation")}</span>
-              <ChevronRight
-                aria-hidden="true"
-                className="h-3.5 w-3.5 shrink-0 opacity-0 transition-[opacity,transform] duration-300 ease-in-out group-hover:opacity-100"
-                style={{ transform: `rotate(${recentCollapsed ? 0 : 90}deg)` }}
-              />
-            </button>
-            <div className="flex items-center gap-1.5">
-              {canShareConversations ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleOpenSharedConversations}
-                  className={PROJECT_ICON_BUTTON_CLASS}
-                  title={t("chat.manageSharedConversations").replace(
-                    "{count}",
-                    String(sharedConversationCount),
-                  )}
-                  aria-label={t("chat.manageSharedConversations").replace(
-                    "{count}",
-                    String(sharedConversationCount),
-                  )}
-                >
-                  <Share2 className="h-3.5 w-3.5" />
-                </Button>
-              ) : null}
-            </div>
-          </div>
-
-          <div
-            aria-hidden={recentCollapsed}
-            inert={recentCollapsed}
-            className={cn(
-              "flex min-h-0 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
-              recentCollapsed
-                ? "pointer-events-none -translate-y-2 opacity-0"
-                : "translate-y-0 opacity-100",
-            )}
-          >
-            {errorMessage ? (
-              <div className="shrink-0 px-2 pb-2">
-                <SidebarStateCard
-                  title={errorMessage}
-                  description={errorDetail ?? undefined}
-                  tone="error"
-                  onDismiss={onDismissError}
-                  dismissLabel={t("chat.cancel")}
-                />
-              </div>
-            ) : null}
+          <>
             <div
-              ref={historyScrollRef}
-              aria-busy={isListLoading || isLoadingMore}
-              className="chat-history-list min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pb-3"
+              ref={recentHeaderRef}
+              className={cn(
+                "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-2 pb-2",
+                showProjects ? "border-t border-border/35 pt-0.5" : "pt-3",
+              )}
             >
-              {/* Render priority: skeleton (loading with zero rows) → rows
+              <button
+                type="button"
+                aria-expanded={!recentCollapsed}
+                className="group flex min-w-0 items-center gap-1 rounded-md px-3 py-1 text-xs font-semibold text-muted-foreground outline-hidden"
+                onClick={() => onRecentCollapsedChange?.(!recentCollapsed)}
+              >
+                <span className="min-w-0 truncate">{t("chat.recentConversation")}</span>
+                <ChevronRight
+                  aria-hidden="true"
+                  className="h-3.5 w-3.5 shrink-0 opacity-0 transition-[opacity,transform] duration-300 ease-in-out group-hover:opacity-100"
+                  style={{ transform: `rotate(${recentCollapsed ? 0 : 90}deg)` }}
+                />
+              </button>
+              <div className="flex items-center gap-1.5">
+                {canShareConversations ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleOpenSharedConversations}
+                    className={PROJECT_ICON_BUTTON_CLASS}
+                    title={t("chat.manageSharedConversations").replace(
+                      "{count}",
+                      String(sharedConversationCount),
+                    )}
+                    aria-label={t("chat.manageSharedConversations").replace(
+                      "{count}",
+                      String(sharedConversationCount),
+                    )}
+                  >
+                    <Share2 className="h-3.5 w-3.5" />
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+
+            <div
+              aria-hidden={recentCollapsed}
+              inert={recentCollapsed}
+              className={cn(
+                "flex min-h-0 flex-col transition-[opacity,transform] duration-300 ease-out motion-reduce:transition-none",
+                recentCollapsed
+                  ? "pointer-events-none -translate-y-2 opacity-0"
+                  : "translate-y-0 opacity-100",
+              )}
+            >
+              {isTaskScopeActive && errorMessage ? (
+                <div className="shrink-0 px-2 pb-2">
+                  <SidebarStateCard
+                    title={errorMessage}
+                    description={errorDetail ?? undefined}
+                    tone="error"
+                    onDismiss={onDismissError}
+                    dismissLabel={t("chat.cancel")}
+                  />
+                </div>
+              ) : null}
+              <div
+                ref={historyScrollRef}
+                aria-busy={isListLoading || isLoadingMore}
+                className="chat-history-list min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2 pb-3"
+              >
+                {/* Render priority: skeleton (loading with zero rows) → rows
                   (with a syncing pill) → empty state only when ready without
                   error. The error banner above never replaces the rows. The
                   scope-keyed wrapper replays a soft enter transition when the
                   workspace scope changes. */}
-              {isListLoading && items.length === 0 ? (
-                <HistoryListLoadingSkeleton />
-              ) : (
-                <div key={scopeKey || "scope"} className="chat-history-scope-enter">
-                  {listStatus === "syncing" ? (
-                    <div className="flex items-center gap-2 px-2 pb-1 pt-1 text-[calc(11px*var(--zone-font-scale,1))] font-medium text-muted-foreground/75">
-                      <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
-                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/35 opacity-75" />
-                        <span className="relative inline-flex h-2 w-2 rounded-full bg-primary/70" />
-                      </span>
-                      <span>{t("chat.history.syncing")}</span>
-                    </div>
-                  ) : null}
-                  {items.length === 0 ? (
-                    listStatus === "ready" && !errorMessage ? (
-                      <div className="flex items-center justify-center px-4 py-8 text-center">
-                        <p className="text-xs font-medium text-muted-foreground/60">
-                          {t("chat.emptyChatHistory")}
-                        </p>
+                {isTaskScopeActive && isListLoading && taskItems.length === 0 ? (
+                  <HistoryListLoadingSkeleton />
+                ) : (
+                  <div key={scopeKey || "scope"} className="chat-history-scope-enter">
+                    {isTaskScopeActive && listStatus === "syncing" ? (
+                      <div className="flex items-center gap-2 px-2 pb-1 pt-1 text-[calc(11px*var(--zone-font-scale,1))] font-medium text-muted-foreground/75">
+                        <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
+                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/35 opacity-75" />
+                          <span className="relative inline-flex h-2 w-2 rounded-full bg-primary/70" />
+                        </span>
+                        <span>{t("chat.history.syncing")}</span>
                       </div>
-                    ) : null
-                  ) : (
-                    <div className="relative" style={{ height: historyVirtualizer.getTotalSize() }}>
-                      {virtualHistoryRows.map((virtualRow) => {
-                        const item = items[virtualRow.index];
-                        if (!item) return null;
+                    ) : null}
+                    {taskItems.length === 0 ? (
+                      (!isTaskScopeActive || listStatus === "ready") &&
+                      (!isTaskScopeActive || !errorMessage) ? (
+                        <div className="flex items-center justify-center px-4 py-8 text-center">
+                          <p className="text-xs font-medium text-muted-foreground/60">
+                            {t("chat.emptyChatHistory")}
+                          </p>
+                        </div>
+                      ) : null
+                    ) : (
+                      <div
+                        className="relative"
+                        style={{ height: historyVirtualizer.getTotalSize() }}
+                      >
+                        {virtualHistoryRows.map((virtualRow) => {
+                          const item = taskItems[virtualRow.index];
+                          if (!item) return null;
 
-                        return (
-                          <div
-                            key={virtualRow.key}
-                            data-index={virtualRow.index}
-                            ref={historyVirtualizer.measureElement}
-                            className="absolute inset-x-0 top-0 pb-0.5"
-                            style={{ transform: `translateY(${virtualRow.start}px)` }}
-                          >
-                            {renderHistoryRow(item)}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-              {items.length > 0 && (hasMore || isLoadingMore) ? (
-                <div className="px-2 pb-2 pt-1 text-center text-[calc(11px*var(--zone-font-scale,1))] leading-5 text-muted-foreground/70">
-                  {isLoadingMore
-                    ? t("sidebar.loadingMoreHistory")
-                    : t("sidebar.continueLoadingHistory")}
-                </div>
-              ) : null}
+                          return (
+                            <div
+                              key={virtualRow.key}
+                              data-index={virtualRow.index}
+                              ref={historyVirtualizer.measureElement}
+                              className="absolute inset-x-0 top-0 pb-0.5"
+                              style={{ transform: `translateY(${virtualRow.start}px)` }}
+                            >
+                              {renderHistoryRow(item)}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {isTaskScopeActive && taskItems.length > 0 && (hasMore || isLoadingMore) ? (
+                  <div className="px-2 pb-2 pt-1 text-center text-[calc(11px*var(--zone-font-scale,1))] leading-5 text-muted-foreground/70">
+                    {isLoadingMore
+                      ? t("sidebar.loadingMoreHistory")
+                      : t("sidebar.continueLoadingHistory")}
+                  </div>
+                ) : null}
+              </div>
             </div>
-          </div>
+          </>
         </div>
         <div className="shrink-0 border-t border-border/50 bg-[hsl(var(--sidebar-bg))] px-2 py-1.5">
           <div className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2">

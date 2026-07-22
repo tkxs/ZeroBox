@@ -177,6 +177,23 @@ func TestDeviceOwnershipSelectionAndDesktopHandoffAreIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	deviceTarget := TargetFingerprint(RuntimeKindDeviceAgent, device.ID, "")
+	deviceLease, err := service.SelectTarget(ctx, desktop1, SelectTargetInput{
+		Proof: "proof-2", RuntimeKind: RuntimeKindDeviceAgent, DeviceID: device.ID,
+		Scope: SelectionScopeDevice, Target: deviceTarget,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deviceLease.EffectiveScope() != SelectionScopeDevice || deviceLease.WorkspaceID != "" {
+		t.Fatalf("unexpected device-scoped lease: %#v", deviceLease)
+	}
+	if _, err := service.SelectTarget(ctx, desktop1, SelectTargetInput{
+		Proof: "proof-3", RuntimeKind: RuntimeKindDeviceAgent, DeviceID: device.ID,
+		WorkspaceID: "workspace-1", Scope: SelectionScopeDevice, Target: target,
+	}); err == nil {
+		t.Fatal("device-scoped selection accepted workspace_id")
+	}
 	if _, err := service.SelectTarget(ctx, desktop2, SelectTargetInput{
 		Proof: "proof-1", RuntimeKind: RuntimeKindDeviceAgent, DeviceID: device.ID,
 		WorkspaceID: "workspace-1", Target: target,
@@ -355,7 +372,7 @@ func TestWebProviderModelsRequireAnOwnedActiveKey(t *testing.T) {
 }
 
 func TestDeviceHistoryRoutesRemainVisibleWhenDeviceIsOffline(t *testing.T) {
-	service, _, _ := newAccountTestRuntime(t)
+	service, _, handler := newAccountTestRuntime(t)
 	ctx := context.Background()
 	device, _, err := service.RegisterDevice(ctx, 1, RegisterDeviceInput{
 		InstallationID: "history-device", Name: "Home PC", Platform: "windows", Version: "1.0.0",
@@ -382,6 +399,38 @@ func TestDeviceHistoryRoutesRemainVisibleWhenDeviceIsOffline(t *testing.T) {
 	if len(routes) != 1 || routes[0].WorkspaceID != "workspace-home" || routes[0].DeviceOnline || routes[0].Summary != "4 条消息 · gpt-5.1" {
 		t.Fatalf("unexpected offline route: %#v", routes)
 	}
+	filtered, err := service.ConversationRoutesForDevice(ctx, 1, device.ID)
+	if err != nil || len(filtered) != 1 || filtered[0].DeviceID != device.ID {
+		t.Fatalf("device-filtered routes=%#v err=%v", filtered, err)
+	}
+	filtered, err = service.ConversationRoutesForDevice(ctx, 1, "3e22f236-e821-4352-8eb7-2c9ac2a86f63")
+	if err != nil || len(filtered) != 0 {
+		t.Fatalf("foreign device filter returned routes=%#v err=%v", filtered, err)
+	}
+
+	endpoint := "/api/desktop/conversation-routes?device_id=" + device.ID
+	unauthenticated := httptest.NewRecorder()
+	handler.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodGet, endpoint, nil))
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated routes status=%d body=%s", unauthenticated.Code, unauthenticated.Body.String())
+	}
+
+	ownerRequest := httptest.NewRequest(http.MethodGet, endpoint, nil)
+	ownerRequest.Header.Set("Authorization", "Bearer access-1")
+	owner := httptest.NewRecorder()
+	handler.ServeHTTP(owner, ownerRequest)
+	if owner.Code != http.StatusOK || !strings.Contains(owner.Body.String(), conversationID) {
+		t.Fatalf("owner routes status=%d body=%s", owner.Code, owner.Body.String())
+	}
+
+	foreignRequest := httptest.NewRequest(http.MethodGet, endpoint, nil)
+	foreignRequest.Header.Set("Authorization", "Bearer access-2")
+	foreign := httptest.NewRecorder()
+	handler.ServeHTTP(foreign, foreignRequest)
+	if foreign.Code != http.StatusOK || strings.Contains(foreign.Body.String(), conversationID) {
+		t.Fatalf("foreign routes status=%d body=%s", foreign.Code, foreign.Body.String())
+	}
+
 	service.RecordDeviceHistorySync(1, device.ID, &gatewayv1.HistorySyncEvent{Kind: "delete", ConversationId: conversationID})
 	routes, err = service.ConversationRoutes(ctx, 1)
 	if err != nil || len(routes) != 0 {

@@ -368,20 +368,33 @@ type SelectTargetInput struct {
 	RuntimeKind string `json:"runtime_kind"`
 	DeviceID    string `json:"device_id,omitempty"`
 	WorkspaceID string `json:"workspace_id"`
+	Scope       string `json:"scope,omitempty"`
 	Target      string `json:"target_fingerprint"`
+}
+
+func (s *Service) Device(ctx context.Context, userID int64, deviceID string) (*Device, error) {
+	device, err := s.store.GetDevice(ctx, userID, strings.TrimSpace(deviceID))
+	if err != nil {
+		return nil, &APIError{Status: http.StatusNotFound, Message: "device not found"}
+	}
+	return device, nil
 }
 
 func (s *Service) SelectTarget(ctx context.Context, session *Session, input SelectTargetInput) (*SelectionLease, error) {
 	input.RuntimeKind = strings.TrimSpace(input.RuntimeKind)
 	input.DeviceID = strings.TrimSpace(input.DeviceID)
 	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	input.Scope = strings.TrimSpace(input.Scope)
+	if input.Scope == "" {
+		input.Scope = SelectionScopeWorkspace
+	}
 	expectedTarget := TargetFingerprint(input.RuntimeKind, input.DeviceID, input.WorkspaceID)
 	if input.Target != expectedTarget {
 		return nil, &APIError{Status: http.StatusBadRequest, Message: "target fingerprint does not match the requested environment"}
 	}
 	switch input.RuntimeKind {
 	case RuntimeKindWebChat:
-		if input.DeviceID != "" || input.WorkspaceID != CloudWorkspaceID {
+		if input.DeviceID != "" || input.WorkspaceID != CloudWorkspaceID || input.Scope != SelectionScopeWorkspace {
 			return nil, &APIError{Status: http.StatusBadRequest, Message: "invalid web chat workspace"}
 		}
 	case RuntimeKindDeviceAgent:
@@ -392,8 +405,17 @@ func (s *Service) SelectTarget(ctx context.Context, session *Session, input Sele
 		if !device.Online {
 			return nil, &APIError{Status: http.StatusConflict, Message: "device is offline"}
 		}
-		if !hasWorkspace(device.Workspaces, input.WorkspaceID) {
-			return nil, &APIError{Status: http.StatusForbidden, Message: "workspace is not published by this device"}
+		switch input.Scope {
+		case SelectionScopeDevice:
+			if input.WorkspaceID != "" {
+				return nil, &APIError{Status: http.StatusBadRequest, Message: "device-scoped selection cannot include workspace_id"}
+			}
+		case SelectionScopeWorkspace:
+			if !hasWorkspace(device.Workspaces, input.WorkspaceID) {
+				return nil, &APIError{Status: http.StatusForbidden, Message: "workspace is not published by this device"}
+			}
+		default:
+			return nil, &APIError{Status: http.StatusBadRequest, Message: "unsupported selection scope"}
 		}
 	default:
 		return nil, &APIError{Status: http.StatusBadRequest, Message: "unsupported runtime_kind"}
@@ -405,7 +427,7 @@ func (s *Service) SelectTarget(ctx context.Context, session *Session, input Sele
 	lease := &SelectionLease{
 		ID: uuid.NewString(), UserID: session.UserID, ControllerID: session.ID,
 		RuntimeKind: input.RuntimeKind, DeviceID: input.DeviceID, WorkspaceID: input.WorkspaceID,
-		Target: expectedTarget, ConversationID: uuid.NewString(), ExpiresAt: now.Add(s.selectionLeaseTTL),
+		Scope: input.Scope, Target: expectedTarget, ConversationID: uuid.NewString(), ExpiresAt: now.Add(s.selectionLeaseTTL),
 	}
 	if err := s.store.PutSelectionLease(ctx, lease); err != nil {
 		return nil, err
@@ -602,6 +624,10 @@ func (s *Service) RecordDeviceHistorySync(userID int64, deviceID string, event *
 }
 
 func (s *Service) ConversationRoutes(ctx context.Context, userID int64) ([]ConversationRoute, error) {
+	return s.ConversationRoutesForDevice(ctx, userID, "")
+}
+
+func (s *Service) ConversationRoutesForDevice(ctx context.Context, userID int64, deviceID string) ([]ConversationRoute, error) {
 	routes, err := s.store.ListConversationRoutes(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -614,15 +640,21 @@ func (s *Service) ConversationRoutes(ctx context.Context, userID int64) ([]Conve
 	for _, device := range devices {
 		byID[device.ID] = device
 	}
+	filtered := make([]ConversationRoute, 0, len(routes))
+	deviceID = strings.TrimSpace(deviceID)
 	for index := range routes {
+		if deviceID != "" && routes[index].DeviceID != deviceID {
+			continue
+		}
 		if device, ok := byID[routes[index].DeviceID]; ok {
 			routes[index].DeviceName = device.Name
 			routes[index].DeviceOnline = device.Online
 		} else {
 			routes[index].DeviceName = "已撤销设备"
 		}
+		filtered = append(filtered, routes[index])
 	}
-	return routes, nil
+	return filtered, nil
 }
 
 func equalWorkspacePath(left, right string) bool {
@@ -649,6 +681,7 @@ func normalizeWorkspaces(input []Workspace) ([]Workspace, error) {
 		workspace.ID = strings.TrimSpace(workspace.ID)
 		workspace.Name = strings.TrimSpace(workspace.Name)
 		workspace.Path = strings.TrimSpace(workspace.Path)
+		workspace.Kind = strings.TrimSpace(workspace.Kind)
 		if workspace.ID == "" || workspace.Name == "" || workspace.Path == "" || len(workspace.Path) > 4096 {
 			return nil, &APIError{Status: http.StatusBadRequest, Message: "each workspace requires id, name and path"}
 		}

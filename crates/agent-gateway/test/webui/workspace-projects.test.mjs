@@ -51,7 +51,7 @@ test("workspace project path key normalizes windows-shaped paths and preserves P
   );
 });
 
-test("workspace project ordering follows latest activity instead of pinning default first", () => {
+test("plain chat stays first while explicit projects follow latest activity", () => {
   const projects = [
     project(settings.DEFAULT_WORKSPACE_PROJECT_ID, "/tmp/default-project", 1),
     project("project-a", "/tmp/project-a", 2),
@@ -69,7 +69,7 @@ test("workspace project ordering follows latest activity instead of pinning defa
 
   assert.deepEqual(
     ordered.map((item) => item.id),
-    ["project-a", "project-b", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a", "project-b"],
   );
 });
 
@@ -95,11 +95,11 @@ test("workspace project keeps its active position after the running marker is cl
 
   assert.deepEqual(
     duringRun.map((item) => item.id),
-    ["project-a", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a"],
   );
   assert.deepEqual(
     afterRun.map((item) => item.id),
-    ["project-a", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a"],
   );
 });
 
@@ -122,7 +122,36 @@ test("running workspace project outranks a newer idle project", () => {
 
   assert.deepEqual(
     ordered.map((item) => item.id),
-    ["project-running", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-running"],
+  );
+});
+
+test("pinned workspace project outranks running and newer projects", () => {
+  const projects = [
+    {
+      ...project("project-pinned", "/tmp/project-pinned", 1),
+      isPinned: true,
+      pinnedAt: 1_700_000_000_100,
+    },
+    project("project-running", "/tmp/project-running", 2),
+    project("project-newer", "/tmp/project-newer", 3),
+  ];
+  const activity = workspaceProjects.buildWorkspaceProjectActivityUpdatedAts([
+    { path: "/tmp/project-pinned", updatedAt: 1_700_000_000_100 },
+    { path: "/tmp/project-running", updatedAt: 1_700_000_000_200 },
+    { path: "/tmp/project-newer", updatedAt: 1_700_000_000_900 },
+  ]);
+
+  const ordered = workspaceProjects.sortWorkspaceProjectsByActivity(projects, {
+    projectActivityUpdatedAts: activity,
+    runningProjectPathKeys: new Set([
+      settings.workspaceProjectPathKey("/tmp/project-running"),
+    ]),
+  });
+
+  assert.deepEqual(
+    ordered.map((item) => item.id),
+    ["project-pinned", "project-running", "project-newer"],
   );
 });
 
@@ -159,7 +188,7 @@ test("history workdir activity restores ordering after page refresh", () => {
 
   assert.deepEqual(
     ordered.map((item) => item.id),
-    ["project-a", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a"],
   );
 });
 
@@ -176,7 +205,7 @@ test("persisted last conversation activity restores ordering before history work
 
   assert.deepEqual(
     ordered.map((item) => item.id),
-    ["project-a", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a"],
   );
 });
 
@@ -303,7 +332,7 @@ test("live activity overrides stale persisted last conversation activity", () =>
 
   assert.deepEqual(
     ordered.map((item) => item.id),
-    ["project-a", settings.DEFAULT_WORKSPACE_PROJECT_ID],
+    [settings.DEFAULT_WORKSPACE_PROJECT_ID, "project-a"],
   );
 });
 

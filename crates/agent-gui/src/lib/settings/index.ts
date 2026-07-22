@@ -354,6 +354,7 @@ export const DEFAULT_CHAT_RUNTIME_CONTROLS: ChatRuntimeControls = {
 
 export const DEFAULT_WORKSPACE_PROJECT_ID = "default-project";
 export const DEFAULT_WORKSPACE_PROJECT_NAME = "Default Project";
+const LEGACY_DEFAULT_WORKSPACE_PROJECT_ID = "legacy-default-project";
 
 function normalizeCodexRequestFormat(input: unknown): CodexRequestFormat | undefined {
   switch (input) {
@@ -654,39 +655,18 @@ export function resolveWorkspaceProjects(
   defaultWorkdir: string,
 ): SystemSettings {
   const defaultPath = normalizeWorkspaceProjectPath(defaultWorkdir || system.workdir);
-  if (!defaultPath) return system;
-
-  const now = Date.now();
-  const defaultKey = workspaceProjectPathKey(defaultPath);
   const configured = normalizeWorkspaceProjects(system.workspaceProjects);
-  const defaultExisting = configured.find(
-    (project) =>
-      project.id === DEFAULT_WORKSPACE_PROJECT_ID ||
-      workspaceProjectPathKey(project.path) === defaultKey,
-  );
-  const defaultProject: WorkspaceProject = {
-    id: DEFAULT_WORKSPACE_PROJECT_ID,
-    name: DEFAULT_WORKSPACE_PROJECT_NAME,
-    path: defaultPath,
-    kind: "managed",
-    createdAt: defaultExisting?.createdAt ?? now,
-    updatedAt: defaultExisting?.updatedAt ?? now,
-    ...(defaultExisting?.lastConversationAt
-      ? { lastConversationAt: defaultExisting.lastConversationAt }
-      : {}),
-    ...(defaultExisting?.isPinned
-      ? { isPinned: true, pinnedAt: defaultExisting.pinnedAt ?? defaultExisting.updatedAt }
-      : {}),
-  };
-
-  const projects: WorkspaceProject[] = [defaultProject];
-  const seenPaths = new Set<string>([defaultKey]);
+  const projects: WorkspaceProject[] = [];
+  const seenPaths = new Set<string>();
   const seenIds = new Set<string>([DEFAULT_WORKSPACE_PROJECT_ID]);
   for (const project of configured) {
     const pathKey = workspaceProjectPathKey(project.path);
     if (!pathKey || seenPaths.has(pathKey)) continue;
     seenPaths.add(pathKey);
-    let id = project.id;
+    let id =
+      project.id === DEFAULT_WORKSPACE_PROJECT_ID
+        ? LEGACY_DEFAULT_WORKSPACE_PROJECT_ID
+        : project.id;
     if (!id || id === DEFAULT_WORKSPACE_PROJECT_ID || seenIds.has(id)) {
       id = createUuid();
     }
@@ -695,19 +675,16 @@ export function resolveWorkspaceProjects(
       ...project,
       id,
       name:
-        project.name.trim() ||
-        project.path
-          .split(/[\\/]+/)
-          .filter(Boolean)
-          .pop() ||
+        (project.id === DEFAULT_WORKSPACE_PROJECT_ID ? "" : project.name.trim()) ||
+        project.path.split(/[\\/]+/).filter(Boolean).pop() ||
         "Project",
-      kind: project.kind,
+      kind: project.id === DEFAULT_WORKSPACE_PROJECT_ID ? "folder" : project.kind,
     });
   }
 
   const hiddenWorkspaceProjectPaths = normalizeHiddenWorkspaceProjectPaths(
     system.hiddenWorkspaceProjectPaths,
-  ).filter((path) => workspaceProjectPathKey(path) !== defaultKey);
+  );
   const hiddenWorkspaceProjectPathKeys = new Set(
     hiddenWorkspaceProjectPaths.map(workspaceProjectPathKey),
   );
@@ -718,38 +695,25 @@ export function resolveWorkspaceProjects(
   const normalizedArchivedWorkspaceProjectPaths = normalizeArchivedWorkspaceProjectPaths(
     system.archivedWorkspaceProjectPaths,
   ).filter((path) => !hiddenWorkspaceProjectPathKeys.has(workspaceProjectPathKey(path)));
-  const normalizedArchivedWorkspaceProjectPathKeys = new Set(
-    normalizedArchivedWorkspaceProjectPaths.map(workspaceProjectPathKey),
-  );
-  const archivedWorkspaceProjectPaths = projects.every((project) =>
-    normalizedArchivedWorkspaceProjectPathKeys.has(workspaceProjectPathKey(project.path)),
-  )
-    ? normalizedArchivedWorkspaceProjectPaths.filter(
-        (path) => workspaceProjectPathKey(path) !== defaultKey,
-      )
-    : normalizedArchivedWorkspaceProjectPaths;
+  const archivedWorkspaceProjectPaths = normalizedArchivedWorkspaceProjectPaths;
   const archivedWorkspaceProjectPathKeys = new Set(
     archivedWorkspaceProjectPaths.map(workspaceProjectPathKey),
   );
   const selectableProjects = projects.filter(
     (project) => !archivedWorkspaceProjectPathKeys.has(workspaceProjectPathKey(project.path)),
   );
-  const activeProjectId = selectableProjects.some(
-    (project) => project.id === system.activeWorkspaceProjectId,
-  )
-    ? system.activeWorkspaceProjectId
-    : (selectableProjects.find((project) => project.id === DEFAULT_WORKSPACE_PROJECT_ID)?.id ??
-      selectableProjects[0]?.id ??
-      DEFAULT_WORKSPACE_PROJECT_ID);
-  const activeProject =
-    selectableProjects.find((project) => project.id === activeProjectId) ?? defaultProject;
+  const activeProjectId =
+    system.activeWorkspaceProjectId === DEFAULT_WORKSPACE_PROJECT_ID ||
+    selectableProjects.some((project) => project.id === system.activeWorkspaceProjectId)
+      ? system.activeWorkspaceProjectId
+      : DEFAULT_WORKSPACE_PROJECT_ID;
   const workdir = normalizeWorkdir(system.workdir) || defaultPath;
 
   return {
     ...system,
     workdir,
     workspaceProjects: projects,
-    activeWorkspaceProjectId: activeProject.id,
+    activeWorkspaceProjectId: activeProjectId,
     hiddenWorkspaceProjectPaths,
     missingWorkspaceProjectPaths,
     archivedWorkspaceProjectPaths,

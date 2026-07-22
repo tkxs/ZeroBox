@@ -2,7 +2,17 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings } from "../settings";
 import { getRelayAccessToken } from "./client";
 
-export type DesktopWorkspace = { id: string; name: string; path?: string };
+export type DesktopWorkspace = {
+  id: string;
+  name: string;
+  path?: string;
+  kind?: "managed" | "folder" | "history";
+  is_pinned?: boolean;
+  pinned_at?: number;
+  archived?: boolean;
+  missing?: boolean;
+  updated_at?: number;
+};
 export type DesktopEnvironment = {
   runtime_kind: "device_agent";
   device_id: string;
@@ -68,7 +78,6 @@ export async function revokeDesktopDevice(settings: AppSettings, deviceId: strin
     method: "DELETE",
   });
 }
-
 export async function switchDesktopEnvironment(
   settings: AppSettings,
   environment: DesktopEnvironment,
@@ -101,18 +110,75 @@ export async function switchDesktopEnvironment(
   return selection;
 }
 
-export async function createRemoteControllerURL(
-  settings: AppSettings,
-  selectionLease: string,
-  localDeviceId: string,
+export function desktopGatewayOrigin(settings: AppSettings) {
+  return gatewayURL(settings, "/").origin;
+}
+
+export function encodeDesktopSelectionCredential(
+  lease: string,
+  deviceId: string,
+  workspaceId = "",
 ) {
-  const handoff = await desktopRequest<{ handoff_code: string }>(settings, "/api/desktop/handoff", {
-    method: "POST",
-    body: JSON.stringify({ selection_lease: selectionLease }),
+  const json = JSON.stringify({
+    lease,
+    runtimeKind: "device_agent",
+    deviceId,
+    workspaceId,
   });
-  const url = gatewayURL(settings, "/api/auth/handoff");
-  url.searchParams.set("code", handoff.handoff_code);
-  url.searchParams.set("controller_surface", "desktop_embed");
-  url.searchParams.set("local_device_id", localDeviceId);
-  return url.toString();
+  const bytes = new TextEncoder().encode(json);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `selection.${btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")}`;
+}
+
+export type DesktopConversationRoute = {
+  conversation_id: string;
+  device_id: string;
+  workspace_id: string;
+  title: string;
+  summary: string;
+  created_at: string;
+  updated_at: string;
+  device_name?: string;
+  device_online: boolean;
+};
+
+export async function getDesktopConversationRoutes(settings: AppSettings, deviceId: string) {
+  const response = await desktopRequest<{ conversations: DesktopConversationRoute[] }>(
+    settings,
+    `/api/desktop/conversation-routes?device_id=${encodeURIComponent(deviceId)}`,
+  );
+  return response.conversations;
+}
+
+export async function switchDesktopDevice(
+  settings: AppSettings,
+  environment: DesktopEnvironment,
+  password: string,
+) {
+  const target = `device_agent:${environment.device_id}:`;
+  const stepUp = await desktopRequest<{ proof: string }>(
+    settings,
+    "/api/desktop/execution-target/step-up",
+    {
+      method: "POST",
+      body: JSON.stringify({ password, target_fingerprint: target }),
+    },
+  );
+  return desktopRequest<{
+    selection_lease: string;
+    scope: "device";
+    device_id: string;
+    expires_at: string;
+  }>(settings, "/api/desktop/execution-target/select", {
+    method: "POST",
+    body: JSON.stringify({
+      proof: stepUp.proof,
+      runtime_kind: "device_agent",
+      device_id: environment.device_id,
+      workspace_id: "",
+      scope: "device",
+      target_fingerprint: target,
+    }),
+  });
 }
