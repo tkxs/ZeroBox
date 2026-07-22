@@ -94,7 +94,7 @@ jobs:
           docker run -d \
             --name liveagent-gateway-smoke \
             -p 18080:8080 \
-            -e LIVEAGENT_GATEWAY_TOKEN=ci-token \
+            -e LIVEAGENT_GATEWAY_OPERATOR_TOKEN=ci-token \
             liveagent-gateway:ci
           trap 'docker rm -f liveagent-gateway-smoke >/dev/null 2>&1 || true' EXIT
           for _ in $(seq 1 30); do

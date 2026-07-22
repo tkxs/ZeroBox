@@ -100,7 +100,7 @@ jobs:
         working-directory: crates/agent-gui
         run: pnpm tauri android init --ci --skip-targets-install --config "$LIVEAGENT_TAURI_VERSION_CONFIG"
 
-      - name: Allow the fixed local USA-Zero HTTP endpoint
+      - name: Allow HTTP Gateway addresses for local testing
         shell: bash
         run: |
           set -euo pipefail

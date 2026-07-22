@@ -78,9 +78,9 @@
 
 ## Why ZeroBox?
 
-ZeroBox is a local-first AI agent client dedicated to the local **USA-Zero** service. Accounts, groups, and API keys are managed by USA-Zero; arbitrary third-party provider URLs are intentionally rejected.
+ZeroBox is a local-first AI agent client dedicated to **USA-Zero**. Accounts, groups, and API keys are managed by USA-Zero; arbitrary third-party provider URLs are intentionally rejected.
 
-- Fixed USA-Zero backend: `http://127.0.0.1:8080`
+- Runtime-configurable USA-Zero backend (desktop login screen or `VITE_USA_ZERO_ORIGIN`; Gateway `USA_ZERO_ORIGIN`)
 - Groups and models sync after login; users without a key are guided through multi-group creation
 - Keys stay masked and require password verification before copying
 
@@ -170,15 +170,15 @@ Choose by distribution from [Releases](https://github.com/tkxs/ZeroBox/releases/
 
 Download `ZeroBox-<version>-Android-arm64.apk` from [Releases](https://github.com/tkxs/ZeroBox/releases/latest) and allow installation from your browser or file manager when Android prompts for permission.
 
-ZeroBox remains bound to USA-Zero at `127.0.0.1:8080`. To test the APK on an emulator or a USB-connected Android device while USA-Zero runs on this computer, enable port reverse forwarding before opening ZeroBox:
+The Android app is a lightweight wrapper for the ZeroBox Gateway WebUI. On launch, enter the HTTPS address of your deployed Gateway. To test against a Gateway running locally on port `3001` from an emulator or USB-connected device, enable port reverse forwarding and enter `http://127.0.0.1:3001` in the app:
 
 ```bash
-adb reverse tcp:8080 tcp:8080
+adb reverse tcp:3001 tcp:3001
 ```
 
 ### Need Remote Access? Deploy the Gateway
 
-The desktop app requires the local USA-Zero backend on port `8080`. Deploy the Gateway in addition only if you want to **control your local agent from a browser**.
+The desktop app connects directly to the USA-Zero address configured on its login screen. Deploy the Gateway when you want browser cloud chat or browser/desktop control of another registered device.
 
 **Note: when deployed behind an Nginx reverse proxy, set the Gateway address on the Settings → Remote page to the HTTPS URL and use port 443.**
 
@@ -191,7 +191,8 @@ docker run -d \
   --name zerobox-gateway \
   --restart unless-stopped \
   -p 3000:8080 \
-  -e LIVEAGENT_GATEWAY_TOKEN=your-token \
+  -e LIVEAGENT_GATEWAY_OPERATOR_TOKEN=your-operator-token \
+  -e USA_ZERO_ORIGIN=https://accounts.example.com \
   ghcr.io/tkxs/zerobox-gateway:latest
 ```
 
@@ -204,7 +205,8 @@ docker pull ghcr.io/tkxs/zerobox-gateway:latest \
     --name zerobox-gateway \
     --restart unless-stopped \
     -p 3000:8080 \
-    -e LIVEAGENT_GATEWAY_TOKEN=your-token \
+    -e LIVEAGENT_GATEWAY_OPERATOR_TOKEN=your-operator-token \
+    -e USA_ZERO_ORIGIN=https://accounts.example.com \
     ghcr.io/tkxs/zerobox-gateway:latest \
   && docker image prune -f
 ```
@@ -251,7 +253,7 @@ location / {
 
 ### Build from Source
 
-Prerequisites: Node.js 22, pnpm 10, Rust stable, Go 1.25, and `protoc`. Start the local USA-Zero frontend at `http://127.0.0.1:3000` and backend at `http://127.0.0.1:8080` first.
+Prerequisites: Node.js 22, pnpm 10, Rust stable, Go 1.25, and `protoc`. For local development, start USA-Zero (the conventional backend address is `http://127.0.0.1:8080`) or configure another deployment at login.
 
 ```powershell
 cd crates/agent-gui
@@ -259,7 +261,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-Tauri loads the desktop development page from `http://localhost:2120`. Because the USA-Zero frontend already uses port `3000`, run Gateway with `PORT=3001` and open ZeroBox WebUI at `http://127.0.0.1:3001`. Browser USA-Zero API calls go through Gateway's fixed local proxy to port `8080`.
+Tauri loads the desktop development page from `http://localhost:2120`. Run Gateway with `PORT=3001` and `USA_ZERO_ORIGIN=<your-USA-Zero-origin>`, then open ZeroBox WebUI at `http://127.0.0.1:3001`. Browser account requests use Gateway's BFF and HttpOnly session cookie.
 
 Expand the Development Guide below for the full set of Make commands.
 
@@ -369,14 +371,14 @@ ZeroBox/
 <details>
 <summary><b>Does my API key ever leave my machine?</b></summary>
 
-Provider keys are synced back to the desktop through the existing settings channel, while browser persistence is redacted. Gateway exposes only an authenticated, fixed proxy to the local USA-Zero backend.
+Provider keys are synced back to the desktop through the existing settings channel, while browser persistence is redacted. Gateway exposes only an authenticated proxy to its configured USA-Zero origin and does not accept a user-supplied upstream per request.
 
 </details>
 
 <details>
 <summary><b>Do I have to deploy the Gateway?</b></summary>
 
-ZeroBox login, groups, and keys require the local USA-Zero backend at `http://127.0.0.1:8080`. Gateway is only required for WebUI access.
+Desktop-only local Agent use does not require Gateway. Gateway is required for WebUI cloud chat, account-based device discovery, and remote execution; both surfaces can use a deployed USA-Zero service.
 
 </details>
 

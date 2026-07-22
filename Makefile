@@ -136,13 +136,13 @@ gateway-docker-build:
 	docker build -t $(GATEWAY_DOCKER_IMAGE) .
 
 gateway-docker-run:
-	docker run --rm -p 8080:8080 -e LIVEAGENT_GATEWAY_TOKEN=$(DEV_GATEWAY_TOKEN) $(GATEWAY_DOCKER_IMAGE)
+	docker run --rm -p 8080:8080 -e LIVEAGENT_GATEWAY_OPERATOR_TOKEN=$(DEV_GATEWAY_TOKEN) $(GATEWAY_DOCKER_IMAGE)
 
 gateway-docker-smoke: gateway-docker-build
 	@set -e; \
 	name="liveagent-gateway-smoke"; \
 	docker rm -f "$$name" >/dev/null 2>&1 || true; \
-	docker run -d --name "$$name" -p 18080:8080 -e LIVEAGENT_GATEWAY_TOKEN=$(DEV_GATEWAY_TOKEN) $(GATEWAY_DOCKER_IMAGE) >/dev/null; \
+	docker run -d --name "$$name" -p 18080:8080 -e LIVEAGENT_GATEWAY_OPERATOR_TOKEN=$(DEV_GATEWAY_TOKEN) $(GATEWAY_DOCKER_IMAGE) >/dev/null; \
 	trap 'docker rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
 	for _ in $$(seq 1 30); do \
 		if curl -fsS http://127.0.0.1:18080/healthz | grep -q '"ok":true'; then \

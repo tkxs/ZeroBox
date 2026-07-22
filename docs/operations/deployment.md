@@ -24,7 +24,11 @@
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
-| `LIVEAGENT_GATEWAY_TOKEN` | 是 | WebUI、HTTP API、桌面端 v2 WebSocket 的共享访问 token。 |
+| `USA_ZERO_ORIGIN` | 是 | USA-零账户与模型服务地址，例如 `https://accounts.example.com`。 |
+| `DATABASE_URL` | 是（生产） | PostgreSQL 连接地址，保存设备、工作区快照、对话路由与网页对话历史。 |
+| `REDIS_URL` | 是（生产） | Redis 连接地址，保存 Web 会话、step-up proof 消费状态与设备在线 TTL。 |
+| `LIVEAGENT_GATEWAY_OPERATOR_TOKEN` | 否 | 仅用于运维状态页和内部诊断；普通用户、浏览器和设备不使用此 token。未配置时关闭 operator 诊断认证。 |
+| `LIVEAGENT_GATEWAY_COOKIE_SECURE` | 否 | 账号会话 Cookie 的 `Secure` 标志；生产默认 `true`。仅本机 HTTP 开发时设为 `false`。 |
 | `PORT` | Railway 自动提供 | HTTP/WebUI/桌面端 WebSocket 监听端口，未提供时 Dockerfile 默认 `8080`。 |
 | `LIVEAGENT_GATEWAY_GRPC_ADDR` | 否 | **已弃用 no-op**：v1 gRPC 监听已移除，设置后启动时打印警告；保留仅为兼容旧启动脚本。 |
 | `LIVEAGENT_GATEWAY_CHAT_PREPARE_TIMEOUT` | 否 | `chat.prepare` 与 command accepted 前关联原生 Ping/Pong 的最大等待时间，默认 `2s`。 |
@@ -49,7 +53,7 @@ Railway 自部署路径：
 1. 在 Railway 新建项目，选择 GitHub Repository。
 2. 选择 `Stack-Cairn/LiveAgent` 或用户自己的 fork。
 3. 分支选择包含根目录 `Dockerfile` 和 `railway.json` 的分支。
-4. 在 service variables 中设置 `LIVEAGENT_GATEWAY_TOKEN=<long-random-token>`。
+4. 在 service variables 中设置 `USA_ZERO_ORIGIN`、`DATABASE_URL` 和 `REDIS_URL`；需要运维诊断时另设 `LIVEAGENT_GATEWAY_OPERATOR_TOKEN=<long-random-token>`。
 5. 部署成功后生成 Public Domain，并访问 `/healthz` 验证健康检查。
 
 推荐生产部署模型：
@@ -64,13 +68,17 @@ Gateway 运行时变量由用户在自己的平台配置：
 
 | 变量 | 说明 |
 |---|---|
-| `LIVEAGENT_GATEWAY_TOKEN` | WebUI、HTTP API、桌面端 v2 WebSocket 的共享访问 token。 |
+| `USA_ZERO_ORIGIN` | USA-零账户与模型服务地址。 |
+| `DATABASE_URL` | PostgreSQL 连接地址。 |
+| `REDIS_URL` | Redis 连接地址。 |
+| `LIVEAGENT_GATEWAY_OPERATOR_TOKEN` | 可选的运维诊断 token，不用于用户或设备认证。 |
+| `LIVEAGENT_GATEWAY_COOKIE_SECURE` | 生产保持 `true`；仅本机 HTTP 调试设为 `false`。 |
 | `LIVEAGENT_GATEWAY_CHAT_PREPARE_TIMEOUT` | 默认 `2s`；通常无需调大，超时应暴露半开连接并让客户端快速恢复。 |
 | `LIVEAGENT_GATEWAY_CHAT_DELIVERY_TIMEOUT` | 默认 `5s`；控制 accepted 后投递桌面 stream 的上限。 |
 | `LIVEAGENT_GATEWAY_CHAT_START_TIMEOUT` | 默认 `5s`；控制远程 command 启动 watchdog 的第一阶段。 |
 | `LIVEAGENT_GATEWAY_CHAT_RENDER_START_TIMEOUT` | 默认 `10s`；控制启动 watchdog 的附加阶段。 |
 
-Gateway 的 conversation stream replay 与 `client_request_id` 去重当前都是进程内有界状态，不需要 SQLite 持久卷。事件窗口默认保留最近 10 分钟、最多 4096 条或约 8 MiB；command 去重记录保留 24 小时，但 Gateway 进程重启后不会保留。
+Gateway 一期按单实例部署，实时 conversation stream replay 与 `client_request_id` 去重仍是进程内有界状态。账号、设备、工作区、网页历史和设备对话路由写入 PostgreSQL；Web 会话、一次性 proof 状态和在线 TTL 写入 Redis。事件窗口默认保留最近 10 分钟、最多 4096 条或约 8 MiB；实时窗口在 Gateway 重启后不会保留。
 
 ## GitHub Secrets
 
