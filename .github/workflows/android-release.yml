@@ -100,32 +100,25 @@ jobs:
         working-directory: crates/agent-gui
         run: pnpm tauri android init --ci --skip-targets-install --config "$LIVEAGENT_TAURI_VERSION_CONFIG"
 
-      - name: Allow HTTP Gateway addresses for local testing
+      - name: Install ZeroAgent Android launcher icons
         shell: bash
         run: |
           set -euo pipefail
-          manifest="crates/agent-gui/src-tauri/gen/android/app/src/main/AndroidManifest.xml"
-          test -f "$manifest"
-          python3 - "$manifest" <<'PY'
-          import sys
-          import xml.etree.ElementTree as ET
-
-          manifest = sys.argv[1]
-          android_namespace = "http://schemas.android.com/apk/res/android"
-          ET.register_namespace("android", android_namespace)
-          tree = ET.parse(manifest)
-          root = tree.getroot()
-          application = next(
-              (node for node in root if node.tag.rsplit("}", 1)[-1] == "application"),
-              None,
-          )
-          if application is None:
-              raise SystemExit("AndroidManifest.xml has no <application> element")
-          application.set(f"{{{android_namespace}}}usesCleartextTraffic", "true")
-          tree.write(manifest, encoding="utf-8", xml_declaration=True)
-          ET.parse(manifest)
-          PY
-          grep -q 'android:usesCleartextTraffic="true"' "$manifest"
+          source_dir="crates/agent-gui/src-tauri/icons/android"
+          target_dir="crates/agent-gui/src-tauri/gen/android/app/src/main/res"
+          test -d "$source_dir"
+          test -d "$target_dir"
+          cp -R "$source_dir"/. "$target_dir"/
+          for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            for icon in ic_launcher ic_launcher_foreground ic_launcher_round; do
+              cmp "$source_dir/mipmap-${density}/${icon}.png" \
+                "$target_dir/mipmap-${density}/${icon}.png"
+            done
+          done
+          cmp "$source_dir/mipmap-anydpi-v26/ic_launcher.xml" \
+            "$target_dir/mipmap-anydpi-v26/ic_launcher.xml"
+          cmp "$source_dir/values/ic_launcher_background.xml" \
+            "$target_dir/values/ic_launcher_background.xml"
 
       - name: Warm Gradle distribution
         shell: bash

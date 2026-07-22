@@ -22,9 +22,11 @@ test("Android workflow builds a signed arm64 APK and can publish it", () => {
   assert.match(workflow, /apksigner" sign/);
   assert.match(workflow, /apksigner" verify --verbose --print-certs/);
   assert.match(workflow, /gh release upload/);
-  assert.match(workflow, /import xml\.etree\.ElementTree as ET/);
-  assert.match(workflow, /application\.set\(f"\{\{\{android_namespace\}\}\}usesCleartextTraffic", "true"\)/);
-  assert.doesNotMatch(workflow, /sed -i .*usesCleartextTraffic/);
+  assert.match(workflow, /Install ZeroAgent Android launcher icons/);
+  assert.match(workflow, /src-tauri\/icons\/android/);
+  assert.match(workflow, /cp -R "\$source_dir"\/\. "\$target_dir"\//);
+  assert.match(workflow, /cmp "\$source_dir\/mipmap-\$\{density\}\/\$\{icon\}\.png"/);
+  assert.doesNotMatch(workflow, /usesCleartextTraffic/);
   assert.match(workflow, /networkTimeout=120000/);
   assert.match(workflow, /\.\/gradlew --version --no-daemon/);
   assert.match(workflow, /for attempt in 1 2 3/);
@@ -34,29 +36,21 @@ test("Android workflow builds a signed arm64 APK and can publish it", () => {
   );
 });
 
-test("Android uses the packaged Gateway WebUI wrapper", () => {
+test("Android opens the fixed USA-Zero account login", () => {
   const androidConfig = readRepoFile("crates/agent-gui/src-tauri/tauri.android.conf.json");
   const tauriLib = readRepoFile("crates/agent-gui/src-tauri/src/lib.rs");
-  const mobileHtml = readRepoFile("crates/agent-gui/mobile.html");
-  const mobileEntry = readRepoFile("crates/agent-gui/src/mobile.ts");
-  const mobileStyles = readRepoFile("crates/agent-gui/src/mobile.css");
   const viteConfig = readRepoFile("crates/agent-gui/vite.config.ts");
 
-  assert.match(androidConfig, /"url": "mobile\.html"/);
+  assert.match(androidConfig, /"url": "https:\/\/usa0\.top\/login"/);
+  assert.doesNotMatch(androidConfig, /mobile\.html|Gateway/);
   assert.match(tauriLib, /#\[cfg\(mobile\)\][\s\S]*ZeroAgent mobile WebView/);
   assert.match(tauriLib, /#\[cfg\(desktop\)\]\s*pub fn run\(\)/);
-  assert.match(mobileHtml, /Gateway 地址/);
-  assert.match(mobileHtml, /id="code-flow"/);
-  assert.match(mobileEntry, /window\.location\.assign\(gatewayUrl\)/);
-  assert.match(mobileEntry, /function startCodeFlow/);
-  assert.match(mobileEntry, /prefers-reduced-motion: reduce/);
-  assert.match(mobileStyles, /\.mobile-background__code-flow/);
-  assert.match(viteConfig, /mobile: fileURLToPath\(new URL\("\.\/mobile\.html"/);
+  assert.doesNotMatch(viteConfig, /mobile\.html/);
   for (const filename of ["README.md", "README.zh-CN.md"]) {
     const readme = readRepoFile(filename);
     assert.match(readme, /Android-arm64\.apk/);
-    assert.match(readme, /adb reverse tcp:3001 tcp:3001/);
-    assert.match(readme, /127\.0\.0\.1:3001/);
+    assert.match(readme, /https:\/\/usa0\.top\/login/);
+    assert.doesNotMatch(readme, /adb reverse tcp:3001 tcp:3001/);
   }
 });
 

@@ -170,11 +170,7 @@ Choose by distribution from [Releases](https://github.com/tkxs/ZeroAgent/release
 
 Download `ZeroAgent-<version>-Android-arm64.apk` from [Releases](https://github.com/tkxs/ZeroAgent/releases/latest) and allow installation from your browser or file manager when Android prompts for permission.
 
-The Android app is a lightweight wrapper for the ZeroAgent Gateway WebUI. On launch, enter the HTTPS address of your deployed Gateway. To test against a Gateway running locally on port `3001` from an emulator or USB-connected device, enable port reverse forwarding and enter `http://127.0.0.1:3001` in the app:
-
-```bash
-adb reverse tcp:3001 tcp:3001
-```
+The Android app opens the hosted ZeroAgent account sign-in at `https://usa0.top/login`. Sign in with your account email and password; the app no longer asks for a Gateway address.
 
 ### Need Remote Access? Deploy the Gateway
 
