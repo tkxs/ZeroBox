@@ -111,6 +111,151 @@ func TestRunReportFinalizesLostRunAfterGrace(t *testing.T) {
 	}
 }
 
+// A loss the desktop merely inferred (ledger sweep starved while the webview
+// was throttled) must not kill a run whose events still flow through the
+// relay; once the events go quiet past the grace window it is adopted.
+func TestInferredLossNotAdoptedWhileEventsFlow(t *testing.T) {
+	m := NewManager()
+	m.ingestChatControl("run-1", startedControl("run-1", "conv-1"))
+	m.ingestChatEvent("run-1", tokenEvent("conv-1", "hello"))
+
+	lost := runReport("run-1", "conv-1", "failed")
+	lost.ErrorCode = "desktop_run_lost"
+	lost.Message = "The desktop runtime stopped reporting this run."
+	report := runsReport(nil, []*gatewayv1.ChatRunReport{lost})
+
+	m.convStreams.onRuntimeStatus(report, time.Now())
+	if activities := m.ActiveConversationActivities(); len(activities) != 1 {
+		t.Fatalf("inferred loss adopted despite fresh events, activities=%d", len(activities))
+	}
+
+	m.convStreams.onRuntimeStatus(report, time.Now().Add(16*time.Second))
+	if activities := m.ActiveConversationActivities(); len(activities) != 0 {
+		t.Fatalf("inferred loss not adopted after events went quiet, activities=%d", len(activities))
+	}
+	last := lastEvent(t, m, "conv-1")
+	if last.Type != StreamEventRunFinished || last.Payload["error_code"] != "desktop_run_lost" {
+		t.Fatalf("quiet-adopted tail = %s %#v, want failed/desktop_run_lost", last.Type, last.Payload)
+	}
+}
+
+// The desktop ledger flushes inferred losses as failed control events too; the
+// conversation's active run ignores that verdict while its events are fresh. A
+// genuine failure the run produced always terminates it.
+func TestInferredFailedControlIgnoredWhileEventsFlow(t *testing.T) {
+	m := NewManager()
+	m.ingestChatControl("run-1", startedControl("run-1", "conv-1"))
+	m.ingestChatEvent("run-1", tokenEvent("conv-1", "hello"))
+
+	m.ingestChatControl("run-1", &gatewayv1.ChatControlEvent{
+		RequestId:      "run-1",
+		ConversationId: "conv-1",
+		Type:           "failed",
+		ErrorCode:      "desktop_run_lost",
+		Message:        "The desktop runtime stopped reporting this run.",
+	})
+	if activities := m.ActiveConversationActivities(); len(activities) != 1 {
+		t.Fatalf("inferred failed control killed a streaming run, activities=%d", len(activities))
+	}
+
+	m.ingestChatControl("run-1", &gatewayv1.ChatControlEvent{
+		RequestId:      "run-1",
+		ConversationId: "conv-1",
+		Type:           "failed",
+		ErrorCode:      "provider_error",
+		Message:        "boom",
+	})
+	if activities := m.ActiveConversationActivities(); len(activities) != 0 {
+		t.Fatalf("genuine failure must terminate the run, activities=%d", len(activities))
+	}
+}
+
+// A wrongly-lost run resurrects when its events resume: the finished set
+// releases it, activity returns, the stream is marked snapshot-hungry so
+// subscribers rebuild the tail, and repeats of the stale verdict are ignored
+// until the genuine terminal arrives.
+func TestChatEventResurrectsInferredLostRun(t *testing.T) {
+	m := NewManager()
+	m.ingestChatControl("run-1", startedControl("run-1", "conv-1"))
+	m.convStreams.onRuntimeStatus(runsReport(nil, nil), time.Now().Add(16*time.Second))
+	if activities := m.ActiveConversationActivities(); len(activities) != 0 {
+		t.Fatalf("precondition: run not finalized as lost, activities=%d", len(activities))
+	}
+
+	m.ingestChatEvent("run-1", tokenEvent("conv-1", "still alive"))
+
+	activities := m.ActiveConversationActivities()
+	if len(activities) != 1 || activities[0].RunID != "run-1" {
+		t.Fatalf("run not resurrected by its own event, activities=%#v", activities)
+	}
+	stream := m.convStreams.streams["conv-1"]
+	if stream == nil || !stream.snapshotDirty || !stream.runNeedsSnapshot {
+		t.Fatalf("resurrection must mark the stream snapshot-hungry")
+	}
+	sub := m.SubscribeConversationStream("conv-1", 0, "")
+	sub.Cleanup()
+	if len(sub.Events) < 2 {
+		t.Fatalf("expected restart + token events, got %d", len(sub.Events))
+	}
+	tail := sub.Events[len(sub.Events)-2:]
+	if tail[0].Type != StreamEventRunStarted || tail[1].Type != "token" {
+		t.Fatalf("resurrection tail = %s,%s, want run_started,token", tail[0].Type, tail[1].Type)
+	}
+
+	// The desktop ledger may keep repeating the stale verdict; a revived run
+	// ignores it (the reaper stays the backstop for a genuinely dead run).
+	lost := runReport("run-1", "conv-1", "failed")
+	lost.ErrorCode = "desktop_run_lost"
+	m.convStreams.onRuntimeStatus(
+		runsReport(nil, []*gatewayv1.ChatRunReport{lost}),
+		time.Now().Add(time.Hour),
+	)
+	if activities := m.ActiveConversationActivities(); len(activities) != 1 {
+		t.Fatalf("revived run must ignore stale loss verdicts, activities=%d", len(activities))
+	}
+
+	// The genuine terminal still settles it.
+	m.ingestChatEvent("run-1", doneEvent("conv-1"))
+	if activities := m.ActiveConversationActivities(); len(activities) != 0 {
+		t.Fatalf("genuine done must settle a revived run, activities=%d", len(activities))
+	}
+	last := lastEvent(t, m, "conv-1")
+	if last.Type != StreamEventRunFinished || last.Payload["status"] != "completed" {
+		t.Fatalf("final tail = %s %#v, want run_finished/completed", last.Type, last.Payload)
+	}
+}
+
+// Stragglers after a genuine terminal stay dropped — resurrection applies only
+// to inferred losses.
+func TestGenuineTerminalStragglersStayDropped(t *testing.T) {
+	m := NewManager()
+	m.ingestChatControl("run-1", startedControl("run-1", "conv-1"))
+	m.ingestChatEvent("run-1", doneEvent("conv-1"))
+	m.ingestChatEvent("run-1", tokenEvent("conv-1", "late"))
+
+	if activities := m.ActiveConversationActivities(); len(activities) != 0 {
+		t.Fatalf("straggler resurrected a completed run, activities=%d", len(activities))
+	}
+	last := lastEvent(t, m, "conv-1")
+	if last.Type != StreamEventRunFinished {
+		t.Fatalf("tail after straggler = %s, want run_finished", last.Type)
+	}
+}
+
+// A reconnect republish of "started" re-anchors a run this store wrongly gave
+// up on.
+func TestStartedControlResurrectsInferredLostRun(t *testing.T) {
+	m := NewManager()
+	m.ingestChatControl("run-1", startedControl("run-1", "conv-1"))
+	m.convStreams.onRuntimeStatus(runsReport(nil, nil), time.Now().Add(16*time.Second))
+
+	m.ingestChatControl("run-1", startedControl("run-1", "conv-1"))
+	activities := m.ActiveConversationActivities()
+	if len(activities) != 1 || activities[0].RunID != "run-1" {
+		t.Fatalf("started republish must resurrect the lost run, activities=%#v", activities)
+	}
+}
+
 // Queued runs belong to the accepted-command startup watchdog; the desktop may
 // not know them yet, so reconcile never finalizes them.
 func TestRunReportSkipsQueuedRuns(t *testing.T) {

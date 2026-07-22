@@ -137,6 +137,18 @@ function readEventClientRequestId(event: ConversationStreamEvent): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+// Terminals carrying these codes were inferred from missing liveness reports
+// (gateway reconcile / desktop ledger sweep) rather than produced by the run
+// itself — the run may still be streaming and the settled content incomplete.
+function isInferredRunLossErrorCode(errorCode: unknown): boolean {
+  return (
+    errorCode === "desktop_run_lost" ||
+    errorCode === "stale_run" ||
+    errorCode === "agent_offline" ||
+    errorCode === "desktop_runtime_lease_expired"
+  );
+}
+
 // Assistant-side content carriers (everything applyDelta folds into a turn's
 // entries, except the slot-guarded user_message). Lifecycle events —
 // run_started/run_finished/run_queued/rebased/snapshot/tool_status — are not
@@ -588,7 +600,12 @@ export function createTranscriptStore(options?: {
       }
       return;
     }
-    const payload = event as { status?: string; message?: string; reason?: string };
+    const payload = event as {
+      status?: string;
+      message?: string;
+      reason?: string;
+      error_code?: string;
+    };
     let turn = findTurnByRunId(runId) ?? findStreamingTurn();
     if (payload.status === "failed" && payload.message && payload.reason !== "superseded") {
       if (!turn) {
@@ -602,8 +619,19 @@ export function createTranscriptStore(options?: {
       replaceTurn(turn, withError);
       turn = withError;
     }
-    if (turn && turn.phase !== "settled") {
-      replaceTurn(turn, { ...turn, phase: "settled" });
+    // A failure inferred from missing liveness reports (desktop_run_lost &
+    // co) may have cut the stream mid-reply, so the streamed copy cannot be
+    // trusted as the full content: mark it stale so the post-persist history
+    // refresh may adopt the real reply (enrichTurnFromHistory). A gateway
+    // resurrection rebuilds from the runtime snapshot and clears the mark.
+    const inferredLoss =
+      payload.status === "failed" && isInferredRunLossErrorCode(payload.error_code);
+    if (turn && (turn.phase !== "settled" || (inferredLoss && turn.contentStale !== true))) {
+      replaceTurn(turn, {
+        ...turn,
+        phase: "settled",
+        contentStale: inferredLoss ? true : turn.contentStale,
+      });
     }
     activeRun = null;
     setToolStatus(null, false);

@@ -929,16 +929,43 @@ impl GatewayController {
         })
     }
 
+    // A record that is stale relative to the webview's 2s heartbeat cadence
+    // but still within the republish max age means the webview is alive yet
+    // throttled (hidden/occluded window): its DOM timers — including the 60s
+    // run-snapshot keepalive that normally refreshes the ledger through long
+    // silent tool calls — are not firing, so an untouched ledger entry proves
+    // nothing about the run. Beyond the max age the webview is treated as gone
+    // and the normal TTL judgment resumes, keeping terminal delivery for
+    // genuinely lost runs guaranteed.
+    fn webview_status_report_stalled_but_alive(&self) -> bool {
+        let Ok(slot) = self.runtime_status_republish.lock() else {
+            return false;
+        };
+        let Some(record) = slot.as_ref() else {
+            return false;
+        };
+        let age = Instant::now().saturating_duration_since(record.updated_at);
+        age > GATEWAY_WEBVIEW_REPORT_FRESH_WINDOW && age <= GATEWAY_RUNTIME_STATUS_REPUBLISH_MAX_AGE
+    }
+
     pub(crate) async fn flush_unsent_chat_run_terminals(&self) -> Result<(), String> {
         if !self.status().online {
             return Ok(());
         }
+        let webview_stalled_but_alive = self.webview_status_report_stalled_but_alive();
         let unsent = {
             let (now, now_ms) = chat_run_ledger_now();
             let mut ledger = self
                 .chat_run_ledger
                 .lock()
                 .map_err(|_| "gateway chat run ledger lock poisoned".to_string())?;
+            // While the webview is merely throttled its keepalive cannot vouch
+            // for long-silent runs; stand in for it so the sweep below (and the
+            // gateway's active_runs reconcile fed by active_reports) never
+            // declares a live run desktop_run_lost during a stall.
+            if webview_stalled_but_alive {
+                ledger.refresh_running(now, now_ms);
+            }
             // Sweep first: runs demoted by the TTL become unsent terminals and
             // are picked up by this very flush.
             ledger.sweep(now, now_ms);

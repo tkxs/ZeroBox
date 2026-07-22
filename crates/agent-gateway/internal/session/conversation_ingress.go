@@ -66,8 +66,12 @@ func (m *Manager) ingestChatEvent(requestID string, event *gatewayv1.ChatEvent) 
 	}
 
 	if stream.runFinishedRecently(runID) {
-		// Late straggler after a forced or duplicate terminal; drop it.
-		return
+		// A live event for a run whose terminal was merely inferred proves the
+		// inference wrong — reopen the run instead of dropping its stream.
+		if !s.resurrectRunLocked(stream, runID) {
+			// Late straggler after a genuine or duplicate terminal; drop it.
+			return
+		}
 	}
 
 	if event.GetType() == gatewayv1.ChatEvent_USER_MESSAGE {
@@ -154,8 +158,27 @@ func (m *Manager) ingestChatControl(requestID string, control *gatewayv1.ChatCon
 
 	switch controlType {
 	case "started":
+		// A reconnect republish may re-anchor a run this store wrongly gave up
+		// on (inferred loss); resurrect before the started no-ops against the
+		// finished set.
+		if stream.runFinishedRecently(runID) {
+			s.resurrectRunLocked(stream, runID)
+		}
 		s.runStartedLocked(stream, runID, "", now)
 	case "completed", "failed", "cancelled":
+		// The desktop ledger flushes inferred losses (desktop_run_lost & co)
+		// through this same channel. For the conversation's active run, ignore
+		// such a verdict while the run's own events are fresh or it was
+		// already falsified once — genuine terminals always pass.
+		if controlType == "failed" && isInferredRunLossCode(errorCode) &&
+			stream.activity != nil && stream.activity.RunID == runID {
+			record := s.runs[runID]
+			eventsFresh := !stream.lastEventAt.IsZero() &&
+				now.Sub(stream.lastEventAt) < s.runReportLostTimeout
+			if eventsFresh || (record != nil && record.revived) {
+				return
+			}
+		}
 		s.runFinishedLocked(stream, runID, controlType, errorCode, message, nil, now)
 	case "queued_in_gui":
 		s.markRunQueuedInGUILocked(stream, runID, now)
@@ -235,7 +258,11 @@ func (m *Manager) ingestRuntimeSnapshot(snapshot *gatewayv1.ChatRuntimeSnapshot)
 		return
 	}
 	if stream.runFinishedRecently(runID) {
-		return
+		// A running snapshot proves the desktop still executes a run this
+		// store wrongly inferred as lost — reopen it.
+		if !s.resurrectRunLocked(stream, runID) {
+			return
+		}
 	}
 
 	next := &RunSnapshot{
