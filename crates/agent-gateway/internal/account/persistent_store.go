@@ -230,7 +230,7 @@ func (s *PersistentStore) ListDevices(ctx context.Context, userID int64) ([]Devi
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	devices := make([]Device, 0)
 	for rows.Next() {
 		device, err := scanDevice(rows)
@@ -341,7 +341,7 @@ func (s *PersistentStore) ListCloudConversations(ctx context.Context, userID int
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]CloudConversation, 0)
 	for rows.Next() {
 		var conversation CloudConversation
@@ -393,7 +393,7 @@ func (s *PersistentStore) ListCloudMessages(ctx context.Context, userID int64, c
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]CloudMessage, 0)
 	for rows.Next() {
 		var message CloudMessage
@@ -462,7 +462,7 @@ func (s *PersistentStore) ListConversationRoutes(ctx context.Context, userID int
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]ConversationRoute, 0)
 	for rows.Next() {
 		var route ConversationRoute

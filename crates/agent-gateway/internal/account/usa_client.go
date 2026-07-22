@@ -233,7 +233,7 @@ func (c *USAClient) ModelsForAPIKey(ctx context.Context, accessToken string, key
 	if err != nil {
 		return nil, &APIError{Status: http.StatusBadGateway, Message: "USA-Zero model gateway is unavailable"}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
@@ -286,7 +286,7 @@ func (c *USAClient) request(ctx context.Context, method, path string, body any, 
 	if err != nil {
 		return nil, &APIError{Status: http.StatusBadGateway, Message: "USA-Zero service is unavailable"}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err

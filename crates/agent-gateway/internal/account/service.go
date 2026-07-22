@@ -379,11 +379,12 @@ func (s *Service) SelectTarget(ctx context.Context, session *Session, input Sele
 	if input.Target != expectedTarget {
 		return nil, &APIError{Status: http.StatusBadRequest, Message: "target fingerprint does not match the requested environment"}
 	}
-	if input.RuntimeKind == RuntimeKindWebChat {
+	switch input.RuntimeKind {
+	case RuntimeKindWebChat:
 		if input.DeviceID != "" || input.WorkspaceID != CloudWorkspaceID {
 			return nil, &APIError{Status: http.StatusBadRequest, Message: "invalid web chat workspace"}
 		}
-	} else if input.RuntimeKind == RuntimeKindDeviceAgent {
+	case RuntimeKindDeviceAgent:
 		device, err := s.store.GetDevice(ctx, session.UserID, input.DeviceID)
 		if err != nil {
 			return nil, &APIError{Status: http.StatusNotFound, Message: "device not found"}
@@ -394,7 +395,7 @@ func (s *Service) SelectTarget(ctx context.Context, session *Session, input Sele
 		if !hasWorkspace(device.Workspaces, input.WorkspaceID) {
 			return nil, &APIError{Status: http.StatusForbidden, Message: "workspace is not published by this device"}
 		}
-	} else {
+	default:
 		return nil, &APIError{Status: http.StatusBadRequest, Message: "unsupported runtime_kind"}
 	}
 	if err := s.usa.ConsumeStepUp(ctx, session.AccessToken, input.Proof, expectedTarget); err != nil {

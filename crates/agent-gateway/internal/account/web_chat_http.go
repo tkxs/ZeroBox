@@ -201,7 +201,7 @@ func (h *HTTPHandler) streamCloudCompletion(w http.ResponseWriter, r *http.Reque
 		writeError(w, err)
 		return
 	}
-	defer upstream.Body.Close()
+	defer func() { _ = upstream.Body.Close() }()
 	if upstream.StatusCode < 200 || upstream.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(upstream.Body, 1<<20))
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

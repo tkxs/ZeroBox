@@ -6,7 +6,6 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/liveagent/agent-gateway/internal/auth"
 	gatewayv2 "github.com/liveagent/agent-gateway/internal/proto/v2"
 )
 
@@ -14,18 +13,6 @@ import (
 type helloVerdict struct {
 	ok      bool
 	message string
-}
-
-// vetHello 校验 ClientHello 的协议版本、角色与令牌（常量时间比较）。
-func (s *Server) vetHello(hello *gatewayv2.ClientHello, wantRole gatewayv2.ClientRole) helloVerdict {
-	verdict := s.vetHelloBase(hello, wantRole)
-	if !verdict.ok {
-		return verdict
-	}
-	if !auth.ValidateToken(hello.GetToken(), s.cfg.Token) {
-		return helloVerdict{message: "unauthorized"}
-	}
-	return helloVerdict{ok: true}
 }
 
 func (s *Server) vetHelloBase(hello *gatewayv2.ClientHello, wantRole gatewayv2.ClientRole) helloVerdict {
