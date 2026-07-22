@@ -59,6 +59,7 @@ export const ChatHeader = memo(function ChatHeader(props: {
   onOpenSettings: (section?: SectionId) => void;
   onToggleTheme: () => void;
   onOpenSidebar: () => void;
+  leadingActions?: ReactNode;
   preThemeActions?: ReactNode;
   trailingActions?: ReactNode;
 }) {
@@ -73,6 +74,7 @@ export const ChatHeader = memo(function ChatHeader(props: {
     onOpenSettings,
     onToggleTheme,
     onOpenSidebar,
+    leadingActions,
     preThemeActions,
     trailingActions,
   } = props;
@@ -134,6 +136,8 @@ export const ChatHeader = memo(function ChatHeader(props: {
             <PanelLeft className="h-4.5 w-4.5" />
           </Button>
         ) : null}
+
+        {leadingActions}
 
         <DropdownMenu open={isModelMenuOpen} onOpenChange={setIsModelMenuOpen}>
           <DropdownMenuTrigger

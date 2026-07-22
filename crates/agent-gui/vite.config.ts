@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import Icons from "unplugin-icons/vite";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const packageJson = JSON.parse(
   readFileSync(new URL("./package.json", import.meta.url), "utf8"),
@@ -10,6 +11,7 @@ const packageJson = JSON.parse(
 // @ts-expect-error process is a nodejs global
 const env = process.env as Record<string, string | undefined>;
 const appVersion = env.LIVEAGENT_APP_VERSION?.trim() || packageJson.version || "0.0.0";
+const usaZeroOrigin = env.VITE_USA_ZERO_ORIGIN?.trim() || "";
 const host = env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
@@ -17,12 +19,21 @@ export default defineConfig(async () => ({
   plugins: [react(), Icons({ compiler: "jsx", jsx: "react" })],
   define: {
     __LIVEAGENT_APP_VERSION__: JSON.stringify(appVersion),
+    __ZEROBOX_USA_ZERO_ORIGIN__: JSON.stringify(usaZeroOrigin),
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
+  build: {
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        mobile: fileURLToPath(new URL("./mobile.html", import.meta.url)),
+      },
+    },
+  },
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 2120,

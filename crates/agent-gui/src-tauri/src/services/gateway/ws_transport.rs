@@ -18,6 +18,7 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 use super::ensure_rustls_crypto_provider;
 use super::gateway_proto::v2;
+use crate::services::device_credentials::DeviceCredentialRecord;
 
 /// v2 WebSocket 子协议名（与 Go 侧 `pbws.Subprotocol` 一致；服务端必须回显）。
 pub(crate) const GATEWAY_WS_SUBPROTOCOL: &str = "liveagent.v2.pb";
@@ -70,14 +71,39 @@ pub(crate) fn build_client_hello(
     agent_id: String,
     agent_version: String,
 ) -> v2::ClientHello {
+    build_device_client_hello(token, agent_id, agent_version, None)
+}
+
+pub(crate) fn build_device_client_hello(
+    token: &str,
+    agent_id: String,
+    agent_version: String,
+    device: Option<&DeviceCredentialRecord>,
+) -> v2::ClientHello {
     v2::ClientHello {
         protocol_version: GATEWAY_WS_PROTOCOL_VERSION,
         role: v2::ClientRole::Agent as i32,
-        token: token.trim().to_string(),
-        agent_id,
+        token: if device.is_some() {
+            String::new()
+        } else {
+            token.trim().to_string()
+        },
+        agent_id: agent_id.clone(),
         agent_version: agent_version.clone(),
         client_name: "desktop".to_string(),
         client_version: agent_version,
+        device_id: device
+            .map(|value| value.device_id.trim().to_string())
+            .unwrap_or_default(),
+        device_credential: device
+            .map(|value| value.credential.trim().to_string())
+            .unwrap_or_default(),
+        device_name: agent_id.clone(),
+        platform: std::env::consts::OS.to_string(),
+        workspaces: Vec::new(),
+        selection_lease: String::new(),
+        workspace_id: String::new(),
+        runtime_kind: "device_agent".to_string(),
     }
 }
 

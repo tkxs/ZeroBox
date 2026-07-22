@@ -170,9 +170,9 @@ impl TerminalSessionRegistry {
 
         let entry = Arc::new(TerminalSessionEntry {
             backend: TerminalSessionBackend::Local {
-                master: Mutex::new(pair.master),
-                input_tx,
+                input_tx: Mutex::new(Some(input_tx)),
                 child: Mutex::new(child),
+                master: Mutex::new(Some(pair.master)),
             },
             record: Mutex::new(record),
             output: Mutex::new(TerminalOutputBuffer::default()),
@@ -279,6 +279,10 @@ impl TerminalSessionRegistry {
         match &entry.backend {
             TerminalSessionBackend::Local { input_tx, .. } => {
                 input_tx
+                    .lock()
+                    .map_err(|_| "terminal input lock poisoned".to_string())?
+                    .as_ref()
+                    .ok_or_else(|| "terminal session is not running".to_string())?
                     .try_send(data)
                     .map_err(|err| format!("failed to enqueue terminal input: {err}"))?;
             }
@@ -313,6 +317,8 @@ impl TerminalSessionRegistry {
                 master
                     .lock()
                     .map_err(|_| "terminal master lock poisoned".to_string())?
+                    .as_ref()
+                    .ok_or_else(|| "terminal session is not running".to_string())?
                     .resize(PtySize {
                         rows,
                         cols,

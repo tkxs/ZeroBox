@@ -9,7 +9,6 @@ import {
 import { normalizeBaseUrl } from "../../lib/settings/normalize";
 
 const GATEWAY_WEBUI_MARKER = "gateway";
-const GATEWAY_TOKEN_STORAGE_KEY = "liveagent.gateway.token";
 const CODEX_MODELS_SUFFIXES = ["/chat/completions", "/responses", "/response"];
 const GEMINI_GENERATE_SUFFIXES = [":streamGenerateContent", ":generateContent"];
 const ANTHROPIC_API_VERSION = "2023-06-01";
@@ -201,14 +200,6 @@ async function fetchModelsThroughGateway(
   apiKey: string,
   useSystemProxy: boolean,
 ): Promise<ProviderModelConfig[]> {
-  const token =
-    typeof window !== "undefined"
-      ? (window.localStorage.getItem(GATEWAY_TOKEN_STORAGE_KEY) ?? "").trim()
-      : "";
-  if (!token) {
-    throw new Error("Gateway token is required");
-  }
-
   const data = await invoke<unknown>("gateway_provider_models", {
     type,
     base_url: baseUrl,

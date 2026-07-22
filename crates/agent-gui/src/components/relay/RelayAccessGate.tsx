@@ -1,5 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  configureRelayOrigin,
   createRelayApiKeys,
   getRelayCurrentUser,
   getRelayPublicSettings,
@@ -15,8 +16,10 @@ import {
   registerRelay,
   sendRelayVerifyCode,
 } from "../../lib/relay/client";
+import { registerDesktopDevice } from "../../lib/relay/deviceRegistration";
 import { bindRelayKeysToSettings, relayProviderTypeForPlatform } from "../../lib/relay/providers";
 import type { AppSettings } from "../../lib/settings";
+import { CodeFlowBackground } from "../CodeFlowBackground";
 import { CheckCircle2, Eye, EyeOff, Key, Loader2, Lock, Mail, RefreshCw } from "../icons";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -46,6 +49,7 @@ export function RelayAccessGate({ settings, setSettings, onReady }: RelayAccessG
   const [groups, setGroups] = useState<RelayGroup[]>([]);
   const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
   const [email, setEmail] = useState("");
+  const [relayOriginDraft, setRelayOriginDraft] = useState(RELAY_ORIGIN);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [verifyCode, setVerifyCode] = useState("");
@@ -95,6 +99,9 @@ export function RelayAccessGate({ settings, setSettings, onReady }: RelayAccessG
       }
       const nextSettings = await bindRelayKeysToSettings(settings, keys, availableGroups);
       setSettings(() => nextSettings);
+      await registerDesktopDevice(nextSettings).catch((error) => {
+        console.warn("automatic ZeroBox device registration failed", error);
+      });
       onReady(currentUser);
     },
     [onReady, setSettings, settings],
@@ -198,6 +205,9 @@ export function RelayAccessGate({ settings, setSettings, onReady }: RelayAccessG
       const keys = await listRelayApiKeys();
       const nextSettings = await bindRelayKeysToSettings(settings, keys, groups, true);
       setSettings(() => nextSettings);
+      await registerDesktopDevice(nextSettings).catch((error) => {
+        console.warn("automatic ZeroBox device registration failed", error);
+      });
       if (user) onReady(user);
     } catch (cause) {
       setError(errorMessage(cause, "创建 Key 失败。"));
@@ -206,10 +216,22 @@ export function RelayAccessGate({ settings, setSettings, onReady }: RelayAccessG
     }
   }
 
+  function applyRelayOrigin() {
+    try {
+      const next = configureRelayOrigin(relayOriginDraft);
+      setRelayOriginDraft(next);
+      setError("");
+      void initialize();
+    } catch (cause) {
+      setError(errorMessage(cause, "USA-零服务地址无效。"));
+    }
+  }
+
   if (step === "checking") {
     return (
-      <div className="flex h-full items-center justify-center bg-background">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+      <div className="relative isolate flex h-full items-center justify-center overflow-hidden bg-background">
+        <CodeFlowBackground />
+        <div className="relative z-10 flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
           正在连接 USA-零
         </div>
@@ -218,20 +240,42 @@ export function RelayAccessGate({ settings, setSettings, onReady }: RelayAccessG
   }
 
   return (
-    <div className="flex h-full w-full items-center justify-center overflow-y-auto bg-background px-5 py-8">
-      <div className="w-full max-w-[420px]">
+    <div className="relative isolate flex h-full w-full items-center justify-center overflow-y-auto bg-background px-5 py-8">
+      <CodeFlowBackground />
+      <div className="relative z-10 w-full max-w-[420px]">
         <div className="mb-6 flex items-center gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/60 bg-white">
             <ZeroBoxLogo className="h-full w-full object-contain" />
           </div>
           <div className="min-w-0">
             <h1 className="text-lg font-semibold text-foreground">ZeroBox</h1>
-            <p className="truncate text-xs text-muted-foreground">USA-零 {RELAY_ORIGIN}</p>
+            <p className="truncate text-xs text-muted-foreground">USA-零账户服务</p>
           </div>
         </div>
 
+        <div className="mb-4 space-y-1.5">
+          <Label htmlFor="relay-origin">USA-零服务地址</Label>
+          <Input
+            id="relay-origin"
+            type="url"
+            inputMode="url"
+            autoComplete="url"
+            value={relayOriginDraft}
+            onChange={(event) => setRelayOriginDraft(event.target.value)}
+            onBlur={applyRelayOrigin}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                applyRelayOrigin();
+              }
+            }}
+            placeholder="https://api.example.com"
+            className="font-mono text-xs"
+          />
+        </div>
+
         {step === "provision" ? (
-          <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+          <div className="rounded-lg border border-border bg-card/95 p-5 shadow-sm backdrop-blur-[2px]">
             <div className="mb-5 flex items-start gap-3">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
                 <Key className="h-4 w-4" />
@@ -270,7 +314,7 @@ export function RelayAccessGate({ settings, setSettings, onReady }: RelayAccessG
             </Button>
           </div>
         ) : (
-          <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+          <div className="rounded-lg border border-border bg-card/95 p-5 shadow-sm backdrop-blur-[2px]">
             {step === "auth" && registrationEnabled && (
               <div className="mb-5 grid grid-cols-2 rounded-md bg-muted p-1">
                 {(["login", "register"] as const).map((item) => (

@@ -1,5 +1,6 @@
 pub mod automation;
 pub mod chat_run_ledger;
+pub mod device_credentials;
 pub mod gateway;
 pub mod gateway_bridge;
 pub mod memory;

@@ -9,6 +9,7 @@ import {
   Info,
   Key,
   Settings2,
+  Shield,
   Wrench,
   Zap,
 } from "../components/icons";
@@ -16,6 +17,7 @@ import { isMacOsTauri, MacOsTitleBarSpacer } from "../components/MacOsTitleBarSp
 
 import { useLocale } from "../i18n";
 import { AboutSection } from "./settings/AboutSection";
+import { AccountSection } from "./settings/AccountSection";
 import { AgentsSection } from "./settings/AgentsSection";
 import { CronSection } from "./settings/CronSection";
 import { HooksSection } from "./settings/HooksSection";
@@ -93,6 +95,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: "settings.groupGeneral",
     items: [
+      { id: "account", icon: <Shield className="h-3.5 w-3.5" /> },
       { id: "system", icon: <Settings2 className="h-3.5 w-3.5" /> },
       { id: "providers", icon: <Cpu className="h-3.5 w-3.5" /> },
       { id: "agents", icon: <BookOpen className="h-3.5 w-3.5" /> },
@@ -134,11 +137,16 @@ export function SettingsPage(props: SettingsPageProps) {
     initialSection = "system",
     hiddenSections = [],
     appUpdate,
+    relayUser,
+    relayStats,
+    onRelayUserChange,
+    onRelayStatsChange,
   } = props;
   const { t } = useLocale();
   const [section, setSection] = useState<SectionId>(initialSection);
 
   const sectionLabels: Record<SectionId, string> = {
+    account: t("settings.navAccount"),
     system: t("settings.navSystem"),
     systemTools: t("settings.navSystemTools"),
     providers: t("settings.navProviders"),
@@ -178,6 +186,16 @@ export function SettingsPage(props: SettingsPageProps) {
   const saveIndicator = getSaveIndicator(saveState, t);
   const sectionContent = (() => {
     switch (section) {
+      case "account":
+        return (
+          <AccountSection
+            settings={settings}
+            user={relayUser}
+            stats={relayStats}
+            onUserChange={onRelayUserChange}
+            onStatsChange={onRelayStatsChange}
+          />
+        );
       case "providers":
         return <RelayProvidersSection settings={settings} setSettings={setSettings} />;
       case "system":

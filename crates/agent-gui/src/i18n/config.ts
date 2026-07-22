@@ -828,6 +828,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "workspaceFilePreview.imageUnavailable": "图片暂不可用",
 
     /* ── Settings Nav ── */
+    "settings.navAccount": "账户设置",
     "settings.navSystem": "系统设置",
     "settings.navSystemTools": "系统工具",
     "settings.navProviders": "密钥配置",
@@ -2780,6 +2781,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "workspaceFilePreview.imageUnavailable": "Image unavailable",
 
     /* ── Settings Nav ── */
+    "settings.navAccount": "Account",
     "settings.navSystem": "System",
     "settings.navSystemTools": "System Tools",
     "settings.navProviders": "Key Configuration",

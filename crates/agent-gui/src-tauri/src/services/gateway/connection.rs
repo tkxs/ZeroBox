@@ -104,10 +104,13 @@ impl GatewayController {
         config_rx: &mut watch::Receiver<RemoteSettingsPayload>,
     ) -> Result<(), String> {
         let ws_url = build_ws_url(&config.gateway_url, config.grpc_port, GATEWAY_WS_AGENT_PATH)?;
-        let hello = build_client_hello(
+        let device_credential = crate::services::device_credentials::load_device_credential()
+            .map_err(|error| format!("load device credential failed: {error}"))?;
+        let hello = build_device_client_hello(
             &config.token,
             effective_agent_id(&config),
             crate::app_version().to_string(),
+            device_credential.as_ref(),
         );
 
         let connect_result = await_abortable_on_reconfigure(&config, config_rx, async move {
@@ -526,7 +529,7 @@ pub(crate) fn ensure_rustls_crypto_provider() {
 }
 
 pub(crate) fn is_remote_configured(config: &RemoteSettingsPayload) -> bool {
-    !config.gateway_url.trim().is_empty() && !config.token.trim().is_empty()
+    !config.gateway_url.trim().is_empty()
 }
 
 pub(crate) fn effective_agent_id(config: &RemoteSettingsPayload) -> String {

@@ -34,11 +34,28 @@ test("Android workflow builds a signed arm64 APK and can publish it", () => {
   );
 });
 
-test("Android install instructions preserve the fixed USA-Zero endpoint", () => {
+test("Android uses the packaged Gateway WebUI wrapper", () => {
+  const androidConfig = readRepoFile("crates/agent-gui/src-tauri/tauri.android.conf.json");
+  const tauriLib = readRepoFile("crates/agent-gui/src-tauri/src/lib.rs");
+  const mobileHtml = readRepoFile("crates/agent-gui/mobile.html");
+  const mobileEntry = readRepoFile("crates/agent-gui/src/mobile.ts");
+  const mobileStyles = readRepoFile("crates/agent-gui/src/mobile.css");
+  const viteConfig = readRepoFile("crates/agent-gui/vite.config.ts");
+
+  assert.match(androidConfig, /"url": "mobile\.html"/);
+  assert.match(tauriLib, /#\[cfg\(mobile\)\][\s\S]*ZeroBox mobile WebView/);
+  assert.match(tauriLib, /#\[cfg\(desktop\)\]\s*pub fn run\(\)/);
+  assert.match(mobileHtml, /Gateway 地址/);
+  assert.match(mobileHtml, /id="code-flow"/);
+  assert.match(mobileEntry, /window\.location\.assign\(gatewayUrl\)/);
+  assert.match(mobileEntry, /function startCodeFlow/);
+  assert.match(mobileEntry, /prefers-reduced-motion: reduce/);
+  assert.match(mobileStyles, /\.mobile-background__code-flow/);
+  assert.match(viteConfig, /mobile: fileURLToPath\(new URL\("\.\/mobile\.html"/);
   for (const filename of ["README.md", "README.zh-CN.md"]) {
     const readme = readRepoFile(filename);
     assert.match(readme, /Android-arm64\.apk/);
-    assert.match(readme, /adb reverse tcp:8080 tcp:8080/);
-    assert.match(readme, /127\.0\.0\.1:8080/);
+    assert.match(readme, /adb reverse tcp:3001 tcp:3001/);
+    assert.match(readme, /127\.0\.0\.1:3001/);
   }
 });

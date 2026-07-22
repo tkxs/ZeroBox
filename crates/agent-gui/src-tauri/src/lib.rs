@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 use tauri::menu::{Menu, MenuItem};
 #[cfg(desktop)]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::Manager;
 #[cfg(desktop)]
 use tauri::Emitter;
+use tauri::Manager;
 #[cfg(desktop)]
 use tauri::WindowEvent;
 
@@ -47,6 +47,11 @@ macro_rules! app_invoke_handler {
     () => {
         tauri::generate_handler![
             // Chat history
+            services::device_credentials::device_credential_get,
+            services::device_credentials::device_credential_set,
+            services::device_credentials::device_credential_delete,
+            services::device_credentials::device_default_name,
+            services::device_credentials::zerobox_app_version,
             commands::chat_history::chat_history_list,
             commands::chat_history::chat_history_workdirs,
             commands::chat_history::chat_history_shared_list,
@@ -377,26 +382,8 @@ fn configure_system_tray(
             }
         });
 
-    #[cfg(target_os = "macos")]
-    {
-        match tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon-macos.png")) {
-            Ok(icon) => {
-                tray_builder = tray_builder.icon(icon).icon_as_template(true);
-            }
-            Err(error) => {
-                eprintln!("failed to load macOS tray icon: {error}");
-                if let Some(icon) = app.default_window_icon() {
-                    tray_builder = tray_builder.icon(icon.clone());
-                }
-            }
-        }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        if let Some(icon) = app.default_window_icon() {
-            tray_builder = tray_builder.icon(icon.clone());
-        }
+    if let Some(icon) = app.default_window_icon() {
+        tray_builder = tray_builder.icon(icon.clone());
     }
 
     let tray = tray_builder.build(app)?;
@@ -414,7 +401,15 @@ fn configure_windows_window_chrome(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(mobile)]
+#[tauri::mobile_entry_point]
+pub fn run() {
+    tauri::Builder::default()
+        .run(tauri::generate_context!())
+        .expect("error while running ZeroBox mobile WebView");
+}
+
+#[cfg(desktop)]
 pub fn run() {
     let automation_store = Arc::new(
         services::automation::AutomationStore::open()

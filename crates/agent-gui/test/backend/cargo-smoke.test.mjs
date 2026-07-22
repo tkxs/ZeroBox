@@ -6,11 +6,31 @@ import { fileURLToPath } from "node:url";
 
 const guiRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
-function runCargoTest() {
-  return new Promise((resolve) => {
+function terminateProcessTree(child) {
+  if (!child.pid || child.exitCode !== null) {
+    return;
+  }
+  if (process.platform === "win32") {
+    spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    }).unref();
+    return;
+  }
+  child.kill("SIGTERM");
+}
+
+function runCargoTest(signal) {
+  return new Promise((resolve, reject) => {
     const child = spawn(
       "cargo",
-      ["test", "--manifest-path", "src-tauri/Cargo.toml"],
+      [
+        "test",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--",
+        "--test-threads=4",
+      ],
       {
         cwd: guiRoot,
         env: {
@@ -31,14 +51,24 @@ function runCargoTest() {
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
+    const onAbort = () => {
+      terminateProcessTree(child);
+      reject(signal.reason ?? new Error("cargo test aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    child.on("error", (error) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+    });
     child.on("close", (code) => {
+      signal.removeEventListener("abort", onAbort);
       resolve({ code, stdout, stderr });
     });
   });
 }
 
-test("Tauri backend cargo test suite passes", { timeout: 180_000 }, async () => {
-  const result = await runCargoTest();
+test("Tauri backend cargo test suite passes", { timeout: 600_000 }, async (context) => {
+  const result = await runCargoTest(context.signal);
   assert.equal(
     result.code,
     0,

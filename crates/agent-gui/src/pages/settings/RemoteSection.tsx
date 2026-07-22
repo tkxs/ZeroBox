@@ -245,8 +245,7 @@ export function RemoteSection(props: SettingsSectionProps) {
     enabled: settings.remote.enabled,
     configured: false,
   });
-  const remoteConfigured =
-    settings.remote.gatewayUrl.trim() !== "" && settings.remote.token.trim() !== "";
+  const remoteConfigured = settings.remote.gatewayUrl.trim() !== "";
 
   useEffect(() => {
     let cancelled = false;

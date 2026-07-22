@@ -1103,7 +1103,9 @@ pub async fn system_pick_folder(initial_workdir: Option<String>) -> Result<Optio
 
 #[tauri::command(rename_all = "snake_case")]
 #[cfg(mobile)]
-pub async fn system_pick_folder(_initial_workdir: Option<String>) -> Result<Option<String>, String> {
+pub async fn system_pick_folder(
+    _initial_workdir: Option<String>,
+) -> Result<Option<String>, String> {
     Err("Android 暂不支持原生文件夹选择器".to_string())
 }
 
@@ -1415,7 +1417,9 @@ mod tests {
 
         assert_eq!(
             response.path,
-            project_folder_display_path(&existing.canonicalize().expect("canonicalize existing dir"))
+            project_folder_display_path(
+                &existing.canonicalize().expect("canonicalize existing dir")
+            )
         );
     }
 

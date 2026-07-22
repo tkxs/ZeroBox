@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { CronPromptRunner } from "./components/cron/CronPromptRunner";
+import { DesktopExecutionSwitcher } from "./components/DesktopExecutionSwitcher";
 import { useNativeInputContextMenu } from "./components/input-context-menu/NativeInputContextMenu";
 import { MemoryOrganizerHost } from "./components/memory/useMemoryOrganizer";
 import { RelayAccessGate } from "./components/relay/RelayAccessGate";
@@ -11,7 +12,20 @@ import { WindowsTitleBar } from "./components/WindowsTitleBar";
 import { LocaleContext, t as translate } from "./i18n";
 import { useAppUpdateController } from "./lib/appUpdates";
 import { initAutomation } from "./lib/automation";
-import { RELAY_SESSION_CHANGED_EVENT } from "./lib/relay/client";
+import {
+  getRelayDashboardStats,
+  getRelayProfile,
+  RELAY_SESSION_CHANGED_EVENT,
+  type RelayDashboardStats,
+  type RelayUser,
+} from "./lib/relay/client";
+import {
+  createRemoteControllerURL,
+  type DesktopEnvironment,
+  getDesktopEnvironments,
+  switchDesktopEnvironment,
+} from "./lib/relay/desktopExecution";
+import { registerDesktopDevice } from "./lib/relay/deviceRegistration";
 import { enforceRelayProviderConstraint } from "./lib/relay/providers";
 import {
   type AppSettings,
@@ -50,6 +64,31 @@ function asErrorMessage(error: unknown, fallback: string) {
 }
 
 const GATEWAY_SETTINGS_SYNC_EVENT = "gateway:settings-sync";
+const LOCAL_ONLY_DEVICE_ID = "zerobox-local";
+
+function buildLocalOnlyEnvironment(settings: AppSettings): DesktopEnvironment[] {
+  const activeWorkspace =
+    settings.system.workspaceProjects.find(
+      (project) => project.id === settings.system.activeWorkspaceProjectId,
+    ) ?? settings.system.workspaceProjects[0];
+  if (!activeWorkspace) return [];
+  return [
+    {
+      runtime_kind: "device_agent",
+      device_id: LOCAL_ONLY_DEVICE_ID,
+      name: "此电脑",
+      online: true,
+      platform: navigator.platform || "desktop",
+      workspaces: [
+        {
+          id: activeWorkspace.id,
+          name: activeWorkspace.name,
+          path: activeWorkspace.path,
+        },
+      ],
+    },
+  ];
+}
 
 function AppChrome(props: { children: ReactNode }) {
   // Plain inputs get a shared cut/copy/paste menu; everything else keeps the
@@ -138,12 +177,115 @@ export default function App() {
   const [settingsSection, setSettingsSection] = useState<SectionId>("system");
   const [settingsReady, setSettingsReady] = useState(false);
   const [relayReady, setRelayReady] = useState(false);
+  const [relayUser, setRelayUser] = useState<RelayUser | null>(null);
+  const [relayStats, setRelayStats] = useState<RelayDashboardStats | null>(null);
+  const [desktopEnvironments, setDesktopEnvironments] = useState<DesktopEnvironment[]>([]);
+  const [localDeviceId, setLocalDeviceId] = useState("");
+  const [selectedExecutionDeviceId, setSelectedExecutionDeviceId] = useState("");
+  const [selectedExecutionWorkspaceId, setSelectedExecutionWorkspaceId] = useState("");
+  const [remoteControllerURL, setRemoteControllerURL] = useState("");
+  const [executionBusy, setExecutionBusy] = useState(false);
+  const [localConversationEpoch, setLocalConversationEpoch] = useState(0);
+  const remoteControllerRef = useRef<HTMLIFrameElement>(null);
   const [settings, setSettingsState] = useState<AppSettings>(() => getDefaultSettings());
   const [settingsSaveState, setSettingsSaveState] = useState<SettingsSaveState>({
     status: "idle",
   });
   const [context, setContext] = useState<Context>(() => getDefaultContext());
   const [overlay, setOverlay] = useState<"closed" | "entering" | "open" | "leaving">("closed");
+
+  useEffect(() => {
+    const applyLocalOnly = () => {
+      const environments = buildLocalOnlyEnvironment(settings);
+      const workspaceId = environments[0]?.workspaces[0]?.id ?? "";
+      setDesktopEnvironments(environments);
+      setLocalDeviceId(LOCAL_ONLY_DEVICE_ID);
+      setSelectedExecutionDeviceId(LOCAL_ONLY_DEVICE_ID);
+      setSelectedExecutionWorkspaceId(workspaceId);
+    };
+    if (!relayReady || !settings.remote.enabled || !settings.remote.gatewayUrl.trim()) {
+      applyLocalOnly();
+      return;
+    }
+    let cancelled = false;
+    const refresh = () =>
+      getDesktopEnvironments(settings)
+        .then((result) => {
+          if (cancelled || !result) return;
+          setDesktopEnvironments(result.environments);
+          setLocalDeviceId(result.localDeviceId);
+          setSelectedExecutionDeviceId((current) => current || result.localDeviceId);
+          const local = result.environments.find((item) => item.device_id === result.localDeviceId);
+          setSelectedExecutionWorkspaceId((current) => current || local?.workspaces[0]?.id || "");
+        })
+        .catch((error) => {
+          console.warn("load desktop execution environments failed", error);
+          if (!cancelled) applyLocalOnly();
+        });
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    relayReady,
+    settings.remote.enabled,
+    settings.remote.gatewayUrl,
+    settings.remote.grpcPort,
+    settings.system.activeWorkspaceProjectId,
+    settings.system.workspaceProjects,
+  ]);
+
+  useEffect(() => {
+    if (!relayReady || !settings.remote.enabled || !settings.remote.gatewayUrl.trim()) return;
+    let cancelled = false;
+    void registerDesktopDevice(settings)
+      .then(() => getDesktopEnvironments(settings))
+      .then((result) => {
+        if (cancelled || !result) return;
+        setDesktopEnvironments(result.environments);
+        setLocalDeviceId(result.localDeviceId);
+        setSelectedExecutionDeviceId((current) => current || result.localDeviceId);
+        const local = result.environments.find((item) => item.device_id === result.localDeviceId);
+        setSelectedExecutionWorkspaceId((current) => current || local?.workspaces[0]?.id || "");
+      })
+      .catch((error) => {
+        console.warn("refresh ZeroBox device registration failed", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    relayReady,
+    settings.remote.enabled,
+    settings.remote.gatewayUrl,
+    settings.remote.grpcPort,
+    settings.system.workspaceProjects,
+  ]);
+
+  useEffect(() => {
+    if (!remoteControllerURL) {
+      setExecutionBusy(false);
+      return;
+    }
+    const expectedOrigin = new URL(remoteControllerURL).origin;
+    const handleMessage = (event: MessageEvent) => {
+      if (
+        event.origin !== expectedOrigin ||
+        event.source !== remoteControllerRef.current?.contentWindow ||
+        !event.data ||
+        typeof event.data !== "object" ||
+        event.data.type !== "zerobox:execution-busy" ||
+        typeof event.data.busy !== "boolean"
+      ) {
+        return;
+      }
+      setExecutionBusy(event.data.busy);
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [remoteControllerURL]);
 
   const saveSequenceRef = useRef(0);
   const saveChainRef = useRef<Promise<unknown>>(Promise.resolve());
@@ -186,12 +328,32 @@ export default function App() {
   useEffect(() => {
     const handleSessionChanged = () => {
       setRelayReady(false);
+      setRelayUser(null);
+      setRelayStats(null);
       setSettingsOpen(false);
       setOverlay("closed");
     };
     window.addEventListener(RELAY_SESSION_CHANGED_EVENT, handleSessionChanged);
     return () => window.removeEventListener(RELAY_SESSION_CHANGED_EVENT, handleSessionChanged);
   }, []);
+
+  const relayUserId = relayUser?.id;
+  useEffect(() => {
+    if (!relayReady || !relayUserId) return;
+    let cancelled = false;
+    void Promise.all([getRelayProfile(), getRelayDashboardStats()])
+      .then(([profile, stats]) => {
+        if (cancelled) return;
+        setRelayUser(profile);
+        setRelayStats(stats);
+      })
+      .catch(() => {
+        // Account details remain available from the authenticated session response.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [relayReady, relayUserId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -426,14 +588,17 @@ export default function App() {
     );
   }
 
-  if (!relayReady) {
+  if (!relayReady || !relayUser) {
     return (
       <LocaleContext.Provider value={localeContextValue}>
         <AppChrome>
           <RelayAccessGate
             settings={settings}
             setSettings={setSettings}
-            onReady={() => setRelayReady(true)}
+            onReady={(user) => {
+              setRelayUser(user);
+              setRelayReady(true);
+            }}
           />
         </AppChrome>
       </LocaleContext.Provider>
@@ -443,23 +608,103 @@ export default function App() {
   const visible = settingsOpen;
   const active = overlay === "open";
 
+  async function handleExecutionSwitch(
+    environment: DesktopEnvironment,
+    workspace: DesktopEnvironment["workspaces"][number],
+    password: string,
+  ) {
+    const selection = await switchDesktopEnvironment(settings, environment, workspace, password);
+    const isLocal = environment.device_id === localDeviceId;
+    const controllerURL = isLocal
+      ? ""
+      : await createRemoteControllerURL(settings, selection.selection_lease, localDeviceId);
+    if (isLocal) {
+      setSettings((prev) => {
+        const target = prev.system.workspaceProjects.find(
+          (project) =>
+            project.id === workspace.id || (workspace.path && project.path === workspace.path),
+        );
+        if (!target) return prev;
+        return {
+          ...prev,
+          system: {
+            ...prev.system,
+            activeWorkspaceProjectId: target.id,
+            hiddenWorkspaceProjectPaths: prev.system.hiddenWorkspaceProjectPaths.filter(
+              (path) => path !== target.path,
+            ),
+            missingWorkspaceProjectPaths: prev.system.missingWorkspaceProjectPaths.filter(
+              (path) => path !== target.path,
+            ),
+            archivedWorkspaceProjectPaths: prev.system.archivedWorkspaceProjectPaths.filter(
+              (path) => path !== target.path,
+            ),
+          },
+        };
+      });
+    }
+    setContext(getDefaultContext());
+    setLocalConversationEpoch((value) => value + 1);
+    setSelectedExecutionDeviceId(environment.device_id);
+    setSelectedExecutionWorkspaceId(workspace.id);
+    setExecutionBusy(false);
+    setRemoteControllerURL(controllerURL);
+  }
+
   return (
     <LocaleContext.Provider value={localeContextValue}>
       <AppChrome>
         <CronPromptRunner settings={settings} />
         <MemoryOrganizerHost settings={settings} setSettings={setSettings} />
         <AppErrorBoundary>
-          <ChatPage
-            settings={settings}
-            setSettings={setSettings}
-            getMcpSettings={getMcpSettings}
-            context={context}
-            setContext={setContext}
-            onOpenSettings={openSettings}
-            onToggleTheme={toggleTheme}
-            appUpdate={appUpdate}
-          />
+          {remoteControllerURL ? (
+            <iframe
+              ref={remoteControllerRef}
+              className="h-full w-full border-0 bg-background"
+              src={remoteControllerURL}
+              title="ZeroBox remote execution"
+            />
+          ) : (
+            <ChatPage
+              key={localConversationEpoch}
+              relayUser={relayUser}
+              relayStats={relayStats}
+              settings={settings}
+              setSettings={setSettings}
+              getMcpSettings={getMcpSettings}
+              context={context}
+              setContext={setContext}
+              onOpenSettings={openSettings}
+              onToggleTheme={toggleTheme}
+              headerLeadingActions={
+                desktopEnvironments.length > 0 && !settingsOpen ? (
+                  <DesktopExecutionSwitcher
+                    environments={desktopEnvironments}
+                    localDeviceId={localDeviceId}
+                    selectedDeviceId={selectedExecutionDeviceId}
+                    selectedWorkspaceId={selectedExecutionWorkspaceId}
+                    disabled={executionBusy}
+                    onSwitch={handleExecutionSwitch}
+                  />
+                ) : null
+              }
+              onExecutionBusyChange={setExecutionBusy}
+              appUpdate={appUpdate}
+            />
+          )}
         </AppErrorBoundary>
+        {remoteControllerURL && desktopEnvironments.length > 0 && !settingsOpen && (
+          <div className="absolute left-1/2 top-2 z-40 -translate-x-1/2">
+            <DesktopExecutionSwitcher
+              environments={desktopEnvironments}
+              localDeviceId={localDeviceId}
+              selectedDeviceId={selectedExecutionDeviceId}
+              selectedWorkspaceId={selectedExecutionWorkspaceId}
+              disabled={executionBusy}
+              onSwitch={handleExecutionSwitch}
+            />
+          </div>
+        )}
         {visible && (
           <div
             className={`absolute inset-0 z-50 transition-all duration-300 ease-out ${
@@ -475,6 +720,10 @@ export default function App() {
                 onBack={closeSettings}
                 initialSection={settingsSection}
                 appUpdate={appUpdate}
+                relayUser={relayUser}
+                relayStats={relayStats}
+                onRelayUserChange={setRelayUser}
+                onRelayStatsChange={setRelayStats}
               />
             </AppErrorBoundary>
           </div>

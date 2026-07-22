@@ -1,7 +1,15 @@
 import { Tooltip } from "@base-ui/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type CSSProperties, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import iconSimpleUrl from "../../../src-tauri/icons/icon-simple.png";
+import {
+  type CSSProperties,
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useLocale } from "../../i18n";
 import type { AppUpdateController } from "../../lib/appUpdates";
 import {
@@ -33,7 +41,6 @@ import {
   Pin,
   PinOff,
   Plus,
-  Settings,
   Share2,
   Trash2,
   X,
@@ -72,6 +79,7 @@ type ChatHistorySidebarProps = {
   fontScale?: number;
   activeView?: "chat" | "skills-hub" | "mcp-hub";
   showProjects?: boolean;
+  showAgentHubs?: boolean;
   // Pre-sorted by the container (activity/running/pinned) — rendered as-is.
   projects?: WorkspaceProject[];
   activeProjectId?: string;
@@ -113,7 +121,7 @@ type ChatHistorySidebarProps = {
   onDeleteConversation: (id: string) => void;
   onLoadMore: () => void;
   onCloseSidebar: () => void;
-  onOpenSettings: () => void;
+  accountMenu: ReactNode;
   appUpdate?: AppUpdateController;
   onOpenSkillsHub?: () => void;
   onOpenMcpHub?: () => void;
@@ -934,6 +942,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     fontScale = 1,
     activeView = "chat",
     showProjects = false,
+    showAgentHubs = true,
     projects = [],
     activeProjectId,
     missingProjectPathKeys = EMPTY_PROJECT_PATH_KEYS,
@@ -971,7 +980,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
     onDeleteConversation,
     onLoadMore,
     onCloseSidebar,
-    onOpenSettings,
+    accountMenu,
     appUpdate,
     onOpenSkillsHub,
     onOpenMcpHub,
@@ -1424,14 +1433,14 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 -translate-y-0.5 items-center gap-2">
               <img
-                src={iconSimpleUrl}
+                src="/zerobox-logo.png"
                 alt=""
                 aria-hidden="true"
                 draggable={false}
                 className="h-8 w-8 shrink-0 select-none rounded-xl object-contain"
               />
               <div className="min-w-0">
-                <div className="truncate font-semibold tracking-tight">Live Agent</div>
+                <div className="truncate font-semibold tracking-tight">零 Agent</div>
               </div>
             </div>
 
@@ -1466,46 +1475,50 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                 {t("chat.newConversation")}
               </span>
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenSkillsHub?.()}
-              className={cn(
-                "sidebar-hub-menu-item h-[30px] w-full justify-start gap-3 rounded-lg px-3 text-[calc(14px*var(--zone-font-scale,1))] font-normal leading-5 shadow-none transition-colors",
-                activeView === "skills-hub"
-                  ? "bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]"
-                  : "text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]",
-              )}
-              title="Skills Hub"
-            >
-              <Blend
-                className={cn(
-                  "h-4 w-4 shrink-0",
-                  activeView === "skills-hub" ? "text-amber-500" : "text-foreground/85",
-                )}
-              />
-              <span className="truncate">Skills</span>
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenMcpHub?.()}
-              className={cn(
-                "sidebar-hub-menu-item h-[30px] w-full justify-start gap-3 rounded-lg px-3 text-[calc(14px*var(--zone-font-scale,1))] font-normal leading-5 shadow-none transition-colors",
-                activeView === "mcp-hub"
-                  ? "bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]"
-                  : "text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]",
-              )}
-              title="MCP Hub"
-            >
-              <Cable
-                className={cn(
-                  "h-4 w-4 shrink-0",
-                  activeView === "mcp-hub" ? "text-violet-500" : "text-foreground/85",
-                )}
-              />
-              <span className="truncate">MCP</span>
-            </Button>
+            {showAgentHubs ? (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => onOpenSkillsHub?.()}
+                  className={cn(
+                    "sidebar-hub-menu-item h-[30px] w-full justify-start gap-3 rounded-lg px-3 text-[calc(14px*var(--zone-font-scale,1))] font-normal leading-5 shadow-none transition-colors",
+                    activeView === "skills-hub"
+                      ? "bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]"
+                      : "text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]",
+                  )}
+                  title="Skills Hub"
+                >
+                  <Blend
+                    className={cn(
+                      "h-4 w-4 shrink-0",
+                      activeView === "skills-hub" ? "text-amber-500" : "text-foreground/85",
+                    )}
+                  />
+                  <span className="truncate">Skills</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => onOpenMcpHub?.()}
+                  className={cn(
+                    "sidebar-hub-menu-item h-[30px] w-full justify-start gap-3 rounded-lg px-3 text-[calc(14px*var(--zone-font-scale,1))] font-normal leading-5 shadow-none transition-colors",
+                    activeView === "mcp-hub"
+                      ? "bg-foreground/[0.06] text-foreground hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]"
+                      : "text-foreground/80 hover:bg-foreground/[0.08] hover:text-foreground focus-visible:bg-foreground/[0.08]",
+                  )}
+                  title="MCP Hub"
+                >
+                  <Cable
+                    className={cn(
+                      "h-4 w-4 shrink-0",
+                      activeView === "mcp-hub" ? "text-violet-500" : "text-foreground/85",
+                    )}
+                  />
+                  <span className="truncate">MCP</span>
+                </Button>
+              </>
+            ) : null}
           </div>
         </div>
 
@@ -1827,16 +1840,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
         </div>
         <div className="shrink-0 border-t border-border/50 bg-[hsl(var(--sidebar-bg))] px-2 py-1.5">
           <div className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={onOpenSettings}
-              className="h-8 w-full min-w-0 justify-start gap-2.5 rounded-lg px-2.5 text-[calc(13px*var(--zone-font-scale,1))] font-normal text-foreground/85 shadow-none hover:bg-foreground/[0.08] hover:text-foreground"
-              title={t("tooltip.settings")}
-            >
-              <Settings className="h-4 w-4 shrink-0 text-foreground/75" />
-              <span className="truncate">{t("tooltip.settings")}</span>
-            </Button>
+            {accountMenu}
             {appUpdate?.showUpdateButton ? (
               <AppUpdateButton appUpdate={appUpdate} iconOnly />
             ) : null}

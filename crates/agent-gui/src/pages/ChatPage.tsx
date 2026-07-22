@@ -6,6 +6,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   type CSSProperties,
   lazy,
+  type ReactNode,
   type SetStateAction,
   Suspense,
   useCallback,
@@ -24,6 +25,7 @@ import type {
 } from "../components/chat/MentionComposer";
 import { type NotifyItem, NotifyToast } from "../components/chat/NotifyToast";
 import { SharedHistoryManagerModal } from "../components/chat/SharedHistoryManagerModal";
+import { UserMenu } from "../components/chat/UserMenu";
 import { Ban, PanelRightClose, PanelRightOpen, Terminal, Upload } from "../components/icons";
 import { MacOsTitleBarSpacer, MacOsTitleBarToggle } from "../components/MacOsTitleBarSpacer";
 import type {
@@ -112,6 +114,7 @@ import {
   isThinkingAlwaysOnForModel,
   toModelValue,
 } from "../lib/providers/llm";
+import { logoutRelay, type RelayDashboardStats, type RelayUser } from "../lib/relay/client";
 import {
   type AppSettings,
   applyMcpOpsToAppSettings,
@@ -289,6 +292,8 @@ function createLocalGatewayChatRunId(conversationId: string) {
 }
 
 type ChatPageProps = {
+  relayUser: RelayUser;
+  relayStats: RelayDashboardStats | null;
   settings: AppSettings;
   setSettings: (updater: (prev: AppSettings) => AppSettings) => void;
   /** Reads the authoritative settingsRef (not render-time state) so tools never see a stale snapshot. */
@@ -297,6 +302,8 @@ type ChatPageProps = {
   setContext: (next: Context) => void;
   onOpenSettings: (section?: SectionId) => void;
   onToggleTheme: () => void;
+  headerLeadingActions?: ReactNode;
+  onExecutionBusyChange?: (busy: boolean) => void;
   appUpdate?: AppUpdateController;
 };
 
@@ -312,7 +319,7 @@ type GatewayRuntimeStatus = {
 };
 
 function isRemoteSettingsConfigured(remote: AppSettings["remote"]) {
-  return remote.gatewayUrl.trim() !== "" && remote.token.trim() !== "";
+  return remote.gatewayUrl.trim() !== "";
 }
 
 function buildFallbackGatewayStatus(remote: AppSettings["remote"]): GatewayRuntimeStatus {
@@ -609,6 +616,8 @@ function createWorkspaceProjectFromPath(path: string, kind: WorkspaceProject["ki
 
 export function ChatPage(props: ChatPageProps) {
   const {
+    relayUser,
+    relayStats,
     settings,
     setSettings,
     getMcpSettings,
@@ -616,6 +625,8 @@ export function ChatPage(props: ChatPageProps) {
     setContext,
     onOpenSettings,
     onToggleTheme,
+    headerLeadingActions,
+    onExecutionBusyChange,
     appUpdate,
   } = props;
   // Monaco reads NLS globals while the lazy editor module imports monaco-editor.
@@ -1843,6 +1854,11 @@ export function ChatPage(props: ChatPageProps) {
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(0);
   const [queuedChatTurns, setQueuedChatTurns] = useState<QueuedChatTurn[]>([]);
   const queuedChatTurnsRef = useRef<QueuedChatTurn[]>([]);
+  const executionBusy = isSending || runningConversationIds.size > 0 || queuedChatTurns.length > 0;
+  useEffect(() => {
+    onExecutionBusyChange?.(executionBusy);
+    return () => onExecutionBusyChange?.(false);
+  }, [executionBusy, onExecutionBusyChange]);
   const queuedChatProcessingConversationIdsRef = useRef(new Set<string>());
   const queuedChatTurnEditSlotRef = useRef<
     | (QueuedChatTurnEditSlot & {
@@ -3697,9 +3713,7 @@ export function ChatPage(props: ChatPageProps) {
     const effectiveIsAgentDevExecutionMode = isAgentDevMode(effectiveExecutionMode);
     const effectiveSkillsEnabled = settings.skills.enabled && effectiveIsAgentMode;
     const hasRemoteGatewayTarget =
-      settings.remote.enabled &&
-      settings.remote.gatewayUrl.trim() !== "" &&
-      settings.remote.token.trim() !== "";
+      settings.remote.enabled && settings.remote.gatewayUrl.trim() !== "";
     const mirrorsLocalRunToGateway = !gatewayBridgeRequest && hasRemoteGatewayTarget;
     const gatewayBridgeRequestId =
       gatewayBridgeRequest?.requestId ?? createLocalGatewayChatRunId(conversationId);
@@ -5085,7 +5099,7 @@ export function ChatPage(props: ChatPageProps) {
   const currentModelLabel = (() => {
     if (!activeSelectedModel) return t("chat.selectModel");
     const opt = modelOptions.find((o) => o.value === selectedValue);
-    if (opt) return `${opt.providerName} / ${opt.model}`;
+    if (opt) return opt.model;
     return activeSelectedModel.model;
   })();
 
@@ -5408,7 +5422,14 @@ export function ChatPage(props: ChatPageProps) {
           onShareConversation={handleOpenShareModal}
           onOpenSharedConversations={handleOpenSharedHistoryManager}
           onCloseSidebar={handleCloseSidebar}
-          onOpenSettings={() => onOpenSettings()}
+          accountMenu={
+            <UserMenu
+              user={relayUser}
+              stats={relayStats}
+              onOpenSettings={() => onOpenSettings("account")}
+              onLogout={() => void logoutRelay()}
+            />
+          }
           appUpdate={appUpdate}
           onOpenSkillsHub={() => {
             cacheActiveComposerDraft();
@@ -5504,6 +5525,7 @@ export function ChatPage(props: ChatPageProps) {
                   onOpenSettings={onOpenSettings}
                   onToggleTheme={onToggleTheme}
                   onOpenSidebar={handleOpenSidebar}
+                  leadingActions={headerLeadingActions}
                   trailingActions={
                     <Button
                       variant="ghost"

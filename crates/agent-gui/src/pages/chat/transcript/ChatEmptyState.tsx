@@ -1,6 +1,5 @@
 import { type CSSProperties, useEffect, useState } from "react";
 
-import iconSimpleUrl from "../../../../src-tauri/icons/icon-simple.png";
 import { FolderTree, Lightbulb, Settings, Wrench } from "../../../components/icons";
 import { useLocale } from "../../../i18n";
 import type { SectionId } from "../../settings/types";
@@ -90,7 +89,7 @@ export function ChatEmptyState({
             className="chat-hero-halo-breathe absolute inset-1 rounded-full bg-sky-500/10 blur-xl dark:bg-sky-400/10"
           />
           <img
-            src={iconSimpleUrl}
+            src="/zerobox-logo.png"
             alt=""
             aria-hidden="true"
             draggable={false}

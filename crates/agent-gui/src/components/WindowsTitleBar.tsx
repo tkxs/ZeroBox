@@ -1,7 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type MouseEvent, useCallback, useEffect, useRef, useState } from "react";
 
-import iconSimpleUrl from "../../src-tauri/icons/icon-simple.png";
 import { useLocale } from "../i18n";
 import { cn } from "../lib/shared/utils";
 import { Maximize2, Minimize2, Minus, X } from "./icons";
@@ -185,7 +184,7 @@ export function WindowsTitleBar() {
         onMouseDown={startDragging}
       >
         <img
-          src={iconSimpleUrl}
+          src="/zerobox-logo.png"
           alt=""
           className="h-[15px] w-[15px] shrink-0 rounded-[3.5px]"
           draggable={false}

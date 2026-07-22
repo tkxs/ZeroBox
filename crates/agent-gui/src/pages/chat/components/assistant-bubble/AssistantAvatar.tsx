@@ -1,4 +1,3 @@
-import iconSimpleUrl from "../../../../../src-tauri/icons/icon-simple.png";
 import { cn } from "../../../../lib/shared/utils";
 
 export function AssistantAvatar(props: { className?: string }) {
@@ -11,7 +10,7 @@ export function AssistantAvatar(props: { className?: string }) {
       )}
     >
       <img
-        src={iconSimpleUrl}
+        src="/zerobox-logo.png"
         alt=""
         aria-hidden="true"
         draggable={false}

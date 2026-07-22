@@ -23,9 +23,9 @@ pub(crate) struct TerminalSessionEntry {
 
 pub(crate) enum TerminalSessionBackend {
     Local {
-        master: Mutex<Box<dyn MasterPty + Send>>,
-        input_tx: mpsc::SyncSender<Vec<u8>>,
+        input_tx: Mutex<Option<mpsc::SyncSender<Vec<u8>>>>,
         child: Mutex<Box<dyn Child + Send + Sync>>,
+        master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     },
     Ssh {
         runtime: Arc<SshSessionRuntime>,

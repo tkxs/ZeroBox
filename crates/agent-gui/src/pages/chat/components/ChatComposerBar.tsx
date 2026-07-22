@@ -118,6 +118,7 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
   isSending: boolean;
   isUploadingFiles: boolean;
   isInputDisabled: boolean;
+  allowUploadsWithoutWorkspace?: boolean;
   inputPlaceholder: string;
   workdir: string;
   enabledSkills: MentionComposerSkill[];
@@ -151,6 +152,7 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
     isSending,
     isUploadingFiles,
     isInputDisabled,
+    allowUploadsWithoutWorkspace = false,
     inputPlaceholder,
     workdir,
     enabledSkills,
@@ -194,7 +196,10 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
   const [queueScrollbar, setQueueScrollbar] = useState<QueueScrollbarState>(
     DEFAULT_QUEUE_SCROLLBAR_STATE,
   );
-  const uploadDisabled = isInputDisabled || isUploadingFiles || !isAgentMode || !workdir;
+  const uploadDisabled =
+    isInputDisabled ||
+    isUploadingFiles ||
+    (!allowUploadsWithoutWorkspace && (!isAgentMode || !workdir));
   const controlsDisabled = isInputDisabled;
   const hasSendableDraft = !composerIsEmpty || pendingUploadedFiles.length > 0;
   const thinkingSupported = reasoningOptions.length > 0;
@@ -210,11 +215,13 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
     : DEFAULT_CHAT_RUNTIME_CONTROLS.reasoning;
   const uploadTooltip = isUploadingFiles
     ? t("chat.upload.uploading")
-    : !isAgentMode
-      ? t("chat.upload.onlyInTools")
-      : !workdir
-        ? t("chat.upload.requireWorkdir")
-        : t("chat.upload.button");
+    : allowUploadsWithoutWorkspace
+      ? t("chat.upload.button")
+      : !isAgentMode
+        ? t("chat.upload.onlyInTools")
+        : !workdir
+          ? t("chat.upload.requireWorkdir")
+          : t("chat.upload.button");
   const thinkingTooltip = !thinkingSupported
     ? t("chat.runtime.thinkingUnavailable")
     : t("chat.runtime.thinkingTooltip");
@@ -631,11 +638,13 @@ export const ChatComposerBar = memo(function ChatComposerBar(props: {
                   aria-label={
                     isUploadingFiles
                       ? t("chat.upload.uploading")
-                      : !isAgentMode
-                        ? t("chat.upload.onlyInTools")
-                        : !workdir
-                          ? t("chat.upload.requireWorkdir")
-                          : t("chat.upload.selectFiles")
+                      : allowUploadsWithoutWorkspace
+                        ? t("chat.upload.selectFiles")
+                        : !isAgentMode
+                          ? t("chat.upload.onlyInTools")
+                          : !workdir
+                            ? t("chat.upload.requireWorkdir")
+                            : t("chat.upload.selectFiles")
                   }
                   className={cn(
                     "composer-toolbar-action relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full outline-hidden transition-colors hover:bg-muted/60 focus-visible:bg-muted/60",

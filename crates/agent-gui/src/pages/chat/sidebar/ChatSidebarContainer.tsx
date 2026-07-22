@@ -3,7 +3,7 @@
 // ChatPage), the conversation-rename UI state, the delete flow, and the
 // error-code → i18n mapping. NOT mirrored — the web end has its own container.
 
-import { useCallback, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useMemo, useState } from "react";
 import { ChatHistorySidebar } from "../../../components/chat/ChatHistorySidebar";
 import { useLocale } from "../../../i18n";
 import type { AppUpdateController } from "../../../lib/appUpdates";
@@ -63,7 +63,7 @@ type ChatSidebarContainerProps = {
   onShareConversation: (item: SidebarConversation) => void;
   onOpenSharedConversations: () => void;
   onCloseSidebar: () => void;
-  onOpenSettings: () => void;
+  accountMenu: ReactNode;
   appUpdate?: AppUpdateController;
   onOpenSkillsHub: () => void;
   onOpenMcpHub: () => void;
@@ -231,7 +231,7 @@ export function ChatSidebarContainer(props: ChatSidebarContainerProps) {
       onDeleteConversation={handleDeleteConversation}
       onLoadMore={handleLoadMore}
       onCloseSidebar={props.onCloseSidebar}
-      onOpenSettings={props.onOpenSettings}
+      accountMenu={props.accountMenu}
       appUpdate={props.appUpdate}
       onOpenSkillsHub={props.onOpenSkillsHub}
       onOpenMcpHub={props.onOpenMcpHub}

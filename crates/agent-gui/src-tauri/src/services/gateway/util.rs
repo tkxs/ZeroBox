@@ -30,7 +30,7 @@ pub(crate) fn gateway_connection_needs_restart(
     config: &RemoteSettingsPayload,
     now_unix_seconds: i64,
 ) -> bool {
-    if !config.enabled || config.gateway_url.trim().is_empty() || config.token.trim().is_empty() {
+    if !config.enabled || config.gateway_url.trim().is_empty() {
         return false;
     }
     if !status.online {

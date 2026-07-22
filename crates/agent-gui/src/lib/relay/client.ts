@@ -1,7 +1,38 @@
 import { prepareProxyRequest } from "../providers/proxy";
 
-export const RELAY_ORIGIN = "http://127.0.0.1:8080";
-export const RELAY_API_BASE_URL = `${RELAY_ORIGIN}/api/v1`;
+const RELAY_ORIGIN_KEY = "zerobox.usa-zero-origin";
+const DEFAULT_RELAY_ORIGIN = "http://127.0.0.1:8080";
+
+function normalizeRelayOrigin(value: string) {
+  const url = new URL(value.trim());
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    !url.hostname ||
+    url.username ||
+    url.password
+  ) {
+    throw new Error("USA-零服务地址必须是有效的 HTTP 或 HTTPS 地址");
+  }
+  url.pathname = url.pathname.replace(/\/$/, "");
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/$/, "");
+}
+
+function initialRelayOrigin() {
+  const configured =
+    typeof localStorage === "undefined" ? "" : localStorage.getItem(RELAY_ORIGIN_KEY)?.trim();
+  const buildDefault =
+    typeof __ZEROBOX_USA_ZERO_ORIGIN__ === "string" ? __ZEROBOX_USA_ZERO_ORIGIN__.trim() : "";
+  try {
+    return normalizeRelayOrigin(configured || buildDefault || DEFAULT_RELAY_ORIGIN);
+  } catch {
+    return DEFAULT_RELAY_ORIGIN;
+  }
+}
+
+export let RELAY_ORIGIN = initialRelayOrigin();
+export let RELAY_API_BASE_URL = `${RELAY_ORIGIN}/api/v1`;
 export const RELAY_SESSION_CHANGED_EVENT = "liveagent:relay-session-changed";
 
 const ACCESS_TOKEN_KEY = "liveagent.relay.access-token";
@@ -26,7 +57,29 @@ export type RelayUser = {
   status?: string;
   created_at?: string;
   total_recharged?: number;
+  avatar_url?: string;
+  email_bound?: boolean;
 };
+
+export type RelayDashboardStats = {
+  today_tokens: number;
+  today_input_tokens?: number;
+  today_output_tokens?: number;
+  today_cache_creation_tokens?: number;
+  today_cache_read_tokens?: number;
+};
+
+export function formatRelayBalance(balance?: number) {
+  return Number.isFinite(balance) ? `$${Number(balance).toFixed(2)}` : "--";
+}
+
+export function formatRelayTokenCount(tokens?: number) {
+  if (!Number.isFinite(tokens)) return "--";
+  return new Intl.NumberFormat("zh-CN", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Number(tokens));
+}
 
 type RelaySessionTokens = {
   access_token: string;
@@ -102,6 +155,10 @@ function readAccessToken() {
   return localStorage.getItem(ACCESS_TOKEN_KEY)?.trim() ?? "";
 }
 
+export function getRelayAccessToken() {
+  return readAccessToken();
+}
+
 function readRefreshToken() {
   return localStorage.getItem(REFRESH_TOKEN_KEY)?.trim() ?? "";
 }
@@ -120,6 +177,17 @@ export function clearRelaySession() {
   localStorage.removeItem(ACCESS_TOKEN_KEY);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
   localStorage.removeItem(EXPIRES_AT_KEY);
+}
+
+export function configureRelayOrigin(value: string) {
+  const next = normalizeRelayOrigin(value);
+  if (next === RELAY_ORIGIN) return next;
+  clearRelaySession();
+  localStorage.setItem(RELAY_ORIGIN_KEY, next);
+  RELAY_ORIGIN = next;
+  RELAY_API_BASE_URL = `${next}/api/v1`;
+  window.dispatchEvent(new Event(RELAY_SESSION_CHANGED_EVENT));
+  return next;
 }
 
 export function hasStoredRelaySession() {
@@ -268,6 +336,53 @@ export async function sendRelayVerifyCode(email: string) {
 
 export async function getRelayCurrentUser() {
   return requestRelay<RelayUser>("/auth/me", { authenticated: true });
+}
+
+export async function getRelayProfile() {
+  return requestRelay<RelayUser>("/user/profile", { authenticated: true });
+}
+
+export async function getRelayDashboardStats() {
+  return requestRelay<RelayDashboardStats>("/usage/dashboard/stats", { authenticated: true });
+}
+
+export async function updateRelayProfile(profile: {
+  username?: string;
+  avatar_url?: string | null;
+}) {
+  return requestRelay<RelayUser>("/user", {
+    method: "PUT",
+    authenticated: true,
+    body: profile,
+  });
+}
+
+export async function sendRelayEmailBindingCode(email: string) {
+  return requestRelay<{ message?: string }>("/user/account-bindings/email/send-code", {
+    method: "POST",
+    authenticated: true,
+    body: { email: email.trim() },
+  });
+}
+
+export async function bindRelayEmail(email: string, verifyCode: string, password: string) {
+  return requestRelay<RelayUser>("/user/account-bindings/email", {
+    method: "POST",
+    authenticated: true,
+    body: {
+      email: email.trim(),
+      verify_code: verifyCode.trim(),
+      password,
+    },
+  });
+}
+
+export async function changeRelayPassword(oldPassword: string, newPassword: string) {
+  return requestRelay<{ message?: string }>("/user/password", {
+    method: "PUT",
+    authenticated: true,
+    body: { old_password: oldPassword, new_password: newPassword },
+  });
 }
 
 export async function listRelayApiKeys() {

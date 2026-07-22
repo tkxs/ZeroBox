@@ -612,9 +612,7 @@ mod tests {
             vec![ReleaseFeedEntry {
                 tag_name: "v0.1.2".to_string(),
                 title: Some("ZeroBox v0.1.2".to_string()),
-                html_url: Some(
-                    "https://github.com/tkxs/ZeroBox/releases/tag/v0.1.2".to_string()
-                ),
+                html_url: Some("https://github.com/tkxs/ZeroBox/releases/tag/v0.1.2".to_string()),
                 updated: Some("2026-05-25T16:00:34Z".to_string()),
             }]
         );

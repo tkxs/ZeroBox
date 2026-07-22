@@ -1,10 +1,12 @@
 import type { AppUpdateController } from "../../lib/appUpdates";
+import type { RelayDashboardStats, RelayUser } from "../../lib/relay/client";
 import type { AppSettings } from "../../lib/settings";
 import type { SettingsSaveState } from "../../lib/settings/storage";
 
 export type SetSettingsFn = (updater: (prev: AppSettings) => AppSettings) => void;
 
 export type SectionId =
+  | "account"
   | "system"
   | "systemTools"
   | "providers"
@@ -24,6 +26,10 @@ export type SettingsPageProps = {
   initialSection?: SectionId;
   hiddenSections?: SectionId[];
   appUpdate: AppUpdateController;
+  relayUser: RelayUser;
+  relayStats: RelayDashboardStats | null;
+  onRelayUserChange: (user: RelayUser) => void;
+  onRelayStatsChange: (stats: RelayDashboardStats) => void;
 };
 
 export type SettingsSectionProps = {

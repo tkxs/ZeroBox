@@ -12,11 +12,22 @@ use super::*;
 
 pub(crate) fn terminate_terminal_entry(entry: &Arc<TerminalSessionEntry>) {
     match &entry.backend {
-        TerminalSessionBackend::Local { child, .. } => {
+        TerminalSessionBackend::Local {
+            input_tx,
+            child,
+            master,
+        } => {
+            if let Ok(mut sender) = input_tx.lock() {
+                sender.take();
+            }
             let pid = entry.record.lock().ok().and_then(|record| record.pid);
-            terminate_process_tree_best_effort(pid);
-            if let Ok(mut child) = child.lock() {
-                let _ = child.kill();
+            if !terminate_process_tree_best_effort(pid) {
+                if let Ok(mut child) = child.lock() {
+                    let _ = child.kill();
+                }
+            }
+            if let Ok(mut master) = master.lock() {
+                release_terminal_master(master.take());
             }
         }
         TerminalSessionBackend::Ssh { runtime } => {
@@ -27,12 +38,24 @@ pub(crate) fn terminate_terminal_entry(entry: &Arc<TerminalSessionEntry>) {
     }
 }
 
-pub(crate) fn terminate_process_tree_best_effort(pid: Option<u32>) {
-    let Some(pid) = pid else {
+fn release_terminal_master(master: Option<Box<dyn portable_pty::MasterPty + Send>>) {
+    let Some(master) = master else {
         return;
     };
+
+    #[cfg(windows)]
+    std::thread::spawn(move || drop(master));
+
+    #[cfg(not(windows))]
+    drop(master);
+}
+
+pub(crate) fn terminate_process_tree_best_effort(pid: Option<u32>) -> bool {
+    let Some(pid) = pid else {
+        return false;
+    };
     if pid == 0 {
-        return;
+        return false;
     }
 
     #[cfg(windows)]
@@ -40,22 +63,24 @@ pub(crate) fn terminate_process_tree_best_effort(pid: Option<u32>) {
         // `taskkill` is a console app; hide its window so app exit stays clean.
         let mut command = std::process::Command::new("taskkill");
         configure_child_process_group(&mut command);
-        let _ = command
+        command
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status();
+            .spawn()
+            .is_ok()
     }
 
     #[cfg(unix)]
     {
-        let _ = std::process::Command::new("kill")
+        std::process::Command::new("kill")
             .args(["-TERM", &format!("-{pid}")])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status();
+            .spawn()
+            .is_ok()
     }
 }
 
