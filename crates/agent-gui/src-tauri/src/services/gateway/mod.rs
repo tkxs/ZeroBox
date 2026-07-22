@@ -112,6 +112,11 @@ pub(crate) const GATEWAY_CHAT_LEASE_SWEEP_INTERVAL: Duration = Duration::from_se
 // throttled) or has said "suspended".
 pub(crate) const GATEWAY_RUNTIME_STATUS_REPUBLISH_INTERVAL: Duration = Duration::from_secs(5);
 pub(crate) const GATEWAY_RUNTIME_STATUS_REPUBLISH_MAX_AGE: Duration = Duration::from_secs(10 * 60);
+// A healthy webview stamps the republish record every ~2s; a gap beyond this
+// window means its DOM timers are throttled (hidden/occluded window), so run
+// keepalives are not firing either and ledger staleness proves nothing about
+// the runs themselves.
+pub(crate) const GATEWAY_WEBVIEW_REPORT_FRESH_WINDOW: Duration = Duration::from_secs(6);
 pub(crate) const GATEWAY_CHAT_RUNTIME_WAKE_REQUEST_PREFIX: &str = "chat-runtime-wake-";
 pub(crate) const GATEWAY_CHAT_RUNTIME_WAKE_EVENT: &str = "gateway:chat-runtime-wake";
 pub(crate) const GATEWAY_CONNECTION_NUDGE_COOLDOWN: Duration = Duration::from_secs(1);

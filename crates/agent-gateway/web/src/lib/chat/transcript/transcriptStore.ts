@@ -95,6 +95,7 @@ const EMPTY_SNAPSHOT: TranscriptSnapshot = {
   toolStatus: null,
   toolStatusIsCompaction: false,
   retryAttempts: EMPTY_RETRY_ATTEMPTS,
+  needsHistoryRefresh: false,
   foldRevision: 0,
   revision: 0,
 };
@@ -135,6 +136,18 @@ function isDocumentHidden() {
 function readEventClientRequestId(event: ConversationStreamEvent): string {
   const value = (event as { client_request_id?: unknown }).client_request_id;
   return typeof value === "string" ? value.trim() : "";
+}
+
+// Terminals carrying these codes were inferred from missing liveness reports
+// (gateway reconcile / desktop ledger sweep) rather than produced by the run
+// itself — the run may still be streaming and the settled content incomplete.
+function isInferredRunLossErrorCode(errorCode: unknown): boolean {
+  return (
+    errorCode === "desktop_run_lost" ||
+    errorCode === "stale_run" ||
+    errorCode === "agent_offline" ||
+    errorCode === "desktop_runtime_lease_expired"
+  );
 }
 
 // Assistant-side content carriers (everything applyDelta folds into a turn's
@@ -335,6 +348,7 @@ export function createTranscriptStore(options?: {
       toolStatus,
       toolStatusIsCompaction,
       retryAttempts,
+      needsHistoryRefresh: turns.some((turn) => turn.contentStale === true),
       foldRevision,
       revision: snapshot.revision + 1,
     };
@@ -559,6 +573,9 @@ export function createTranscriptStore(options?: {
     }
     let next = adoptRun(turn, runId);
     next = rebuildTurnFromSnapshot(next, parsed);
+    if (next.inferredLossErrorEntryId) {
+      next = { ...next, inferredLossErrorEntryId: undefined };
+    }
     if (next.phase !== "streaming" || next.folded) {
       next = { ...next, phase: "streaming", folded: false };
     }
@@ -588,22 +605,62 @@ export function createTranscriptStore(options?: {
       }
       return;
     }
-    const payload = event as { status?: string; message?: string; reason?: string };
+    const payload = event as {
+      status?: string;
+      message?: string;
+      reason?: string;
+      error_code?: string;
+    };
+    const inferredLoss =
+      payload.status === "failed" && isInferredRunLossErrorCode(payload.error_code);
     let turn = findTurnByRunId(runId) ?? findStreamingTurn();
+    if (turn && !inferredLoss && turn.inferredLossErrorEntryId) {
+      const previousTurn = turn;
+      const correctedTurn = {
+        ...previousTurn,
+        entries: previousTurn.entries.filter(
+          (entry) => entry.id !== previousTurn.inferredLossErrorEntryId,
+        ),
+        inferredLossErrorEntryId: undefined,
+      };
+      replaceTurn(previousTurn, correctedTurn);
+      turn = correctedTurn;
+    }
     if (payload.status === "failed" && payload.message && payload.reason !== "superseded") {
       if (!turn) {
         turn = createTurn({ key: `run:${runId || `finished-${readEventSeq(event)}`}`, runId });
         turns = [...turns, turn];
       }
-      const withError = applyEventToTurn(turn, {
+      const previousEntryIds = new Set(turn.entries.map((entry) => entry.id));
+      let withError = applyEventToTurn(turn, {
         type: "error",
         message: payload.message,
       } as ChatEvent);
+      if (inferredLoss) {
+        const inferredErrorEntry = withError.entries.find(
+          (entry) => !previousEntryIds.has(entry.id),
+        );
+        if (inferredErrorEntry) {
+          withError = {
+            ...withError,
+            inferredLossErrorEntryId: inferredErrorEntry.id,
+          };
+        }
+      }
       replaceTurn(turn, withError);
       turn = withError;
     }
-    if (turn && turn.phase !== "settled") {
-      replaceTurn(turn, { ...turn, phase: "settled" });
+    // A failure inferred from missing liveness reports (desktop_run_lost &
+    // co) may have cut the stream mid-reply, so the streamed copy cannot be
+    // trusted as the full content: mark it stale so the post-persist history
+    // refresh may adopt the real reply (enrichTurnFromHistory). A gateway
+    // resurrection rebuilds from the runtime snapshot and clears the mark.
+    if (turn && (turn.phase !== "settled" || (inferredLoss && turn.contentStale !== true))) {
+      replaceTurn(turn, {
+        ...turn,
+        phase: "settled",
+        contentStale: inferredLoss ? true : turn.contentStale,
+      });
     }
     activeRun = null;
     setToolStatus(null, false);
@@ -689,10 +746,15 @@ export function createTranscriptStore(options?: {
           turns = [...turns, turn];
         }
         const bound = adoptRun(turn, runId);
+        const entries = bound.inferredLossErrorEntryId
+          ? bound.entries.filter((entry) => entry.id !== bound.inferredLossErrorEntryId)
+          : bound.entries;
         replaceTurn(turn, {
           ...bound,
+          entries,
           phase: "streaming",
           folded: false,
+          inferredLossErrorEntryId: undefined,
         });
         activeRun = {
           runId,

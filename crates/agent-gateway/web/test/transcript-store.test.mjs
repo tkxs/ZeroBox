@@ -162,6 +162,118 @@ test("failed run appends an error entry and clears busy", () => {
   assert.match(text, /model exploded/);
 });
 
+test("inferred desktop_run_lost marks the streamed copy stale so enrich adopts the persisted reply", () => {
+  const store = createTranscriptStore();
+  store.applyEvent(userMessage("run-1", 1, "hello"));
+  store.applyEvent(runStarted("run-1", 2));
+  store.applyEvent(token("run-1", 3, "partial"));
+  store.applyEvent(
+    runFinished("run-1", 4, "failed", {
+      error_code: "desktop_run_lost",
+      message: "The desktop runtime stopped reporting this run.",
+    }),
+  );
+  store.flush();
+  assert.equal(store.getSnapshot().activeRun, null);
+  assert.equal(store.getSnapshot().needsHistoryRefresh, true);
+
+  // The run actually kept going on the desktop and persisted the full reply;
+  // the truncated streamed copy must not be treated as authoritative.
+  store.applyHistorySnapshot(
+    [
+      { id: "hu:m1", kind: "user", text: "hello", attachments: [], messageRef: messageRef("m1") },
+      { id: "ht:hu:m1>0", kind: "assistant", text: "partial plus the rest of the reply", round: 1 },
+    ],
+    { mode: "enrich" },
+  );
+  store.flush();
+  const text = allRows(store.getSnapshot()).map(rowText).join("\n");
+  assert.match(text, /partial plus the rest of the reply/, "persisted reply adopted");
+  assert.doesNotMatch(text, /stopped reporting/, "inferred error entry replaced by real content");
+  assert.equal(store.getSnapshot().needsHistoryRefresh, false);
+});
+
+test("a genuine failure keeps the streamed copy authoritative under enrich", () => {
+  const store = createTranscriptStore();
+  store.applyEvent(userMessage("run-1", 1, "hello"));
+  store.applyEvent(runStarted("run-1", 2));
+  store.applyEvent(token("run-1", 3, "streamed reply"));
+  store.applyEvent(runFinished("run-1", 4, "failed", { message: "model exploded" }));
+  store.flush();
+
+  store.applyHistorySnapshot(
+    [
+      { id: "hu:m1", kind: "user", text: "hello", attachments: [], messageRef: messageRef("m1") },
+      { id: "ht:hu:m1>0", kind: "assistant", text: "some other persisted text", round: 1 },
+    ],
+    { mode: "enrich" },
+  );
+  store.flush();
+  const text = allRows(store.getSnapshot()).map(rowText).join("\n");
+  assert.match(text, /streamed reply/, "streamed content kept");
+  assert.doesNotMatch(text, /some other persisted text/, "no wholesale adoption without contentStale");
+});
+
+test("a resurrected run reopens its truncated turn in place and finishes normally", () => {
+  const store = createTranscriptStore();
+  store.applyEvent(userMessage("run-1", 1, "hello"));
+  store.applyEvent(runStarted("run-1", 2));
+  store.applyEvent(token("run-1", 3, "part one "));
+  store.applyEvent(
+    runFinished("run-1", 4, "failed", {
+      error_code: "desktop_run_lost",
+      message: "The desktop runtime stopped reporting this run.",
+    }),
+  );
+  store.flush();
+  assert.equal(store.getSnapshot().activeRun, null);
+
+  // The gateway falsified the loss verdict: the same run restarts and keeps
+  // streaming into the same turn.
+  store.applyEvent(runStarted("run-1", 5));
+  store.applyEvent(token("run-1", 6, "part two"));
+  store.flush();
+  const live = store.getSnapshot();
+  assertUniqueKeys(live);
+  assert.equal(live.activeRun?.runId, "run-1", "activity restored");
+  const liveText = allRows(live).map(rowText).join("\n");
+  assert.match(liveText, /part one/);
+  assert.match(liveText, /part two/);
+  assert.doesNotMatch(liveText, /stopped reporting/, "resurrection removes the inferred error");
+  assert.equal(live.needsHistoryRefresh, true, "persisted history still owns final convergence");
+
+  store.applyEvent(runFinished("run-1", 7));
+  store.flush();
+  assert.equal(store.getSnapshot().activeRun, null, "genuine completion settles the revived run");
+});
+
+test("an authoritative terminal replaces an inferred loss without leaving its error", () => {
+  const store = createTranscriptStore();
+  store.applyEvent(userMessage("run-1", 1, "hello"));
+  store.applyEvent(runStarted("run-1", 2));
+  store.applyEvent(token("run-1", 3, "partial"));
+  store.applyEvent(
+    runFinished("run-1", 4, "failed", {
+      error_code: "desktop_run_lost",
+      message: "The desktop runtime stopped reporting this run.",
+    }),
+  );
+  store.flush();
+
+  store.applyEvent(
+    runFinished("run-1", 5, "failed", {
+      error_code: "provider_error",
+      message: "provider failed",
+    }),
+  );
+  store.flush();
+  const snapshot = store.getSnapshot();
+  const text = allRows(snapshot).map(rowText).join("\n");
+  assert.match(text, /provider failed/);
+  assert.doesNotMatch(text, /stopped reporting/);
+  assert.equal(snapshot.needsHistoryRefresh, true, "history still owns final tail convergence");
+});
+
 test("run_queued removes the turn entirely", () => {
   const store = createTranscriptStore();
   store.addOptimisticUserEntry({ clientRequestId: "client-1", text: "park me" });

@@ -915,7 +915,7 @@ const GatewayUserMessageRowBody = memo(function GatewayUserMessageRowBody(props:
       />
       <div className="chat-user-bubble-actions mt-1 flex items-center justify-end gap-1.5">
         {!readOnly ? (
-          <div className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+          <div className="flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
             <button
               type="button"
               className="chat-user-bubble-action rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"

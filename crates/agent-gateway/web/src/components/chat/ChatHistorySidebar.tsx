@@ -626,7 +626,14 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
               className={cn(
                 "relative flex items-center justify-end overflow-hidden transition-[max-width,opacity] duration-200 ease-out",
                 isRunning
-                  ? "max-w-7 opacity-100 group-hover/item:max-w-16 group-focus-within/item:max-w-16"
+                  ? // Mobile rows render no inline action buttons, so this flex
+                    // box has zero content width AND zero height — max-w alone
+                    // leaves the absolutely-positioned spinner fully clipped by
+                    // overflow-hidden. Reserve the spinner slot explicitly
+                    // (both axes) and skip the hover/focus swap.
+                    isMobileMenuLayout
+                    ? "h-7 w-7 opacity-100"
+                    : "max-w-7 opacity-100 group-hover/item:max-w-16 group-focus-within/item:max-w-16"
                   : "max-w-0 opacity-0 group-hover/item:max-w-16 group-hover/item:opacity-100 group-focus-within/item:max-w-16 group-focus-within/item:opacity-100",
                 menuOpen && "max-w-16 opacity-100",
               )}
@@ -638,8 +645,12 @@ const HistoryRow = memo(function HistoryRow(props: HistoryRowProps) {
                   title={t("chat.statusRunningReply")}
                   className={cn(
                     "pointer-events-none absolute right-1.5 flex h-4 w-4 items-center justify-center text-muted-foreground transition-opacity duration-200",
-                    "opacity-100 group-hover/item:opacity-0 group-focus-within/item:opacity-0",
-                    menuOpen && "opacity-0",
+                    isMobileMenuLayout
+                      ? "opacity-100"
+                      : [
+                          "opacity-100 group-hover/item:opacity-0 group-focus-within/item:opacity-0",
+                          menuOpen && "opacity-0",
+                        ],
                   )}
                 >
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -2007,7 +2018,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
             <>
               <div
                 ref={projectsHeaderRef}
-                className="group/workspace-header flex items-center justify-between px-2 pb-1 pt-2"
+                className="flex items-center justify-between px-2 pb-1 pt-2"
               >
                 <button
                   type="button"
@@ -2027,10 +2038,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar(props: ChatHi
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className={cn(
-                    PROJECT_ICON_BUTTON_CLASS,
-                    "pointer-events-none opacity-0 transition-opacity hover:!bg-transparent group-hover/workspace-header:pointer-events-auto group-hover/workspace-header:opacity-100 focus-visible:opacity-100",
-                  )}
+                  className={cn(PROJECT_ICON_BUTTON_CLASS, "hover:!bg-transparent")}
                   title={t("chat.workspaceCreate")}
                   aria-label={t("chat.workspaceCreate")}
                   onClick={handleCreateProject}
