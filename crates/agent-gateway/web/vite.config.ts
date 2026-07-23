@@ -14,7 +14,7 @@ function resolveProxyTarget() {
   return process.env.npm_config_proxy_api || DEFAULT_PROXY_API;
 }
 
-export default defineConfig(() => ({
+export default defineConfig(({ mode }) => ({
   plugins: [react(), Icons({ compiler: "jsx", jsx: "react" })],
   resolve: {
     dedupe: ["react", "react-dom"],
@@ -32,6 +32,9 @@ export default defineConfig(() => ({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+  },
+  define: {
+    __ZEROAGENT_EMBEDDED_MOBILE__: JSON.stringify(mode === "embedded-mobile"),
   },
   server: {
     proxy: {
