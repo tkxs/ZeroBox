@@ -8303,6 +8303,7 @@ dependencies = [
  "futures-util",
  "globset",
  "ignore",
+ "jni 0.21.1",
  "leveldb-core",
  "lopdf",
  "notify",

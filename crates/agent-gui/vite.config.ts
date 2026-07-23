@@ -12,7 +12,6 @@ const packageJson = JSON.parse(
 const env = process.env as Record<string, string | undefined>;
 const appVersion = env.LIVEAGENT_APP_VERSION?.trim() || packageJson.version || "0.0.0";
 const usaZeroOrigin = env.VITE_USA_ZERO_ORIGIN?.trim() || "https://usa0.top";
-const androidWebUrl = env.ZEROAGENT_ANDROID_WEB_URL?.trim() || "";
 const host = env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
@@ -42,7 +41,6 @@ export default defineConfig(async () => ({
   define: {
     __LIVEAGENT_APP_VERSION__: JSON.stringify(appVersion),
     __ZEROAGENT_USA_ZERO_ORIGIN__: JSON.stringify(usaZeroOrigin),
-    __ZEROAGENT_ANDROID_WEB_URL__: JSON.stringify(androidWebUrl),
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
@@ -51,10 +49,7 @@ export default defineConfig(async () => ({
   clearScreen: false,
   build: {
     rollupOptions: {
-      input: {
-        main: fileURLToPath(new URL("./index.html", import.meta.url)),
-        mobile: fileURLToPath(new URL("./mobile.html", import.meta.url)),
-      },
+      input: fileURLToPath(new URL("./index.html", import.meta.url)),
     },
   },
   // 2. tauri expects a fixed port, fail if that port is not available

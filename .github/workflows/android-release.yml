@@ -73,6 +73,10 @@ jobs:
         working-directory: crates/agent-gui
         run: pnpm install --frozen-lockfile
 
+      - name: Install Gateway WebUI dependencies
+        working-directory: crates/agent-gateway/web
+        run: pnpm install --frozen-lockfile
+
       - name: Resolve Android version
         id: version
         shell: bash
@@ -144,8 +148,6 @@ jobs:
 
       - name: Build Android release APK
         working-directory: crates/agent-gui
-        env:
-          ZEROAGENT_ANDROID_WEB_URL: ${{ vars.ZEROAGENT_ANDROID_WEB_URL }}
         run: pnpm tauri android build --apk --target aarch64 --ci --config "$LIVEAGENT_TAURI_VERSION_CONFIG"
 
       - name: Sign and verify Android APK

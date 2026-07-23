@@ -478,6 +478,17 @@ fn configure_windows_window_chrome(app: &tauri::App) -> tauri::Result<()> {
 #[tauri::mobile_entry_point]
 pub fn run() {
     tauri::Builder::default()
+        .manage(services::mobile_gateway::MobileGatewayState::default())
+        .invoke_handler(tauri::generate_handler![
+            services::mobile_gateway::mobile_gateway_bootstrap,
+            services::mobile_gateway::mobile_gateway_origin,
+            services::mobile_gateway::mobile_gateway_configure,
+            services::mobile_gateway::mobile_gateway_logout,
+            services::mobile_gateway::mobile_gateway_request,
+            services::mobile_gateway::mobile_gateway_socket_connect,
+            services::mobile_gateway::mobile_gateway_socket_send,
+            services::mobile_gateway::mobile_gateway_socket_close,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running ZeroAgent mobile WebView");
 }

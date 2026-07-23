@@ -512,6 +512,31 @@ button {
   font: inherit;
 }
 
+@media (max-width: 640px) {
+  html[data-liveagent-webui="gateway"],
+  html[data-liveagent-webui="gateway"] body,
+  html[data-liveagent-webui="gateway"] #root {
+    min-height: 100dvh;
+  }
+
+  html[data-liveagent-webui="gateway"] body {
+    overscroll-behavior-y: none;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  html[data-liveagent-webui="gateway"] button:not([data-size="compact"]),
+  html[data-liveagent-webui="gateway"] [role="button"]:not([data-size="compact"]) {
+    min-height: 40px;
+  }
+
+  html[data-liveagent-webui="gateway"] input,
+  html[data-liveagent-webui="gateway"] select,
+  html[data-liveagent-webui="gateway"] textarea {
+    font-size: 16px;
+  }
+}
+
 html[data-liveagent-webui="gateway"]
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
 html[data-liveagent-webui="gateway"] textarea:focus,

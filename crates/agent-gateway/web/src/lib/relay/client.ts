@@ -1,3 +1,5 @@
+import { clearEmbeddedMobileGatewaySession, isEmbeddedMobileRuntime } from "../mobileRuntime";
+
 export const RELAY_ORIGIN = "https://usa0.top";
 export const RELAY_SESSION_CHANGED_EVENT = "zerobox:relay-session-changed";
 
@@ -368,6 +370,9 @@ export async function logoutRelay() {
     await requestGatewayAccount<void>("/api/auth/logout", { method: "POST" });
   } catch {
     // The UI session still clears when USA-Zero is temporarily unavailable.
+  }
+  if (isEmbeddedMobileRuntime()) {
+    await clearEmbeddedMobileGatewaySession();
   }
   clearRelaySession();
   window.dispatchEvent(new Event(RELAY_SESSION_CHANGED_EVENT));

@@ -47,7 +47,7 @@ USA-零负责账户认证、分组、托管密钥与模型服务；ZeroAgent 负
 |---|---|---|
 | 桌面端 | macOS、Windows、Linux | 完整的本地 Agent 运行时和工具执行能力 |
 | Gateway + WebUI | 服务器 | 账户会话、网页聊天、WebSocket 中继、历史记录和远程设备访问 |
-| Android 客户端 | Android arm64 | 打开已部署的 ZeroAgent WebUI，提供与浏览器一致的聊天体验 |
+| Android 客户端 | Android arm64 | 内置 Gateway WebUI，通过 Gateway 控制已选择的远程设备 |
 | USA-零 | [usa0.top](https://usa0.top) | 账户、分组、密钥和模型服务 |
 
 ## 系统架构
@@ -107,13 +107,9 @@ docker run -d \
 
 ## Android
 
-Android 客户端加载的就是浏览器使用的同一个 Gateway WebUI。发布 Android 版本前，需要配置以下 GitHub Repository Variable：
+Android 客户端内置与浏览器相同的 Gateway WebUI，不再跳转外部网址。首次启动时填写已部署的 Gateway 地址，并在 App 内完成账户登录。原生层把会话和离线只读缓存保留在 WebView 存储之外；远程操作仍需重新申请有效的设备选择 lease。
 
-```text
-ZEROAGENT_ANDROID_WEB_URL=https://你的域名
-```
-
-未配置时，App 首次启动会要求填写 Gateway WebUI 地址。推送 `v*` 版本标签后，`.github/workflows/android-release.yml` 会自动构建并上传 Android APK。
+发布 APK 前必须先部署 Gateway。推送 `v*` 版本标签后，`.github/workflows/android-release.yml` 会自动构建并上传 Android APK。
 
 ## 本地开发
 

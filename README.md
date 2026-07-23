@@ -47,7 +47,7 @@ USA-Zero provides account authentication, groups, managed API keys, and model ac
 |---|---|---|
 | Desktop app | macOS, Windows, Linux | Full local agent runtime and tool execution |
 | Gateway + WebUI | Server | Account sessions, browser chat, WebSocket relay, history, and remote device access |
-| Android app | Android arm64 | Opens the deployed ZeroAgent WebUI with the same browser chat experience |
+| Android app | Android arm64 | Bundles the Gateway WebUI and controls selected remote devices through the Gateway |
 | USA-Zero | [usa0.top](https://usa0.top) | Account, group, key, and model service |
 
 ## Architecture
@@ -107,13 +107,9 @@ After deployment, verify `https://your-domain.example/healthz`, then open the do
 
 ## Android
 
-The Android app loads the same deployed Gateway WebUI as the browser. Before publishing an Android release, configure this GitHub Repository Variable:
+The Android app bundles the same Gateway WebUI as the browser instead of opening an external URL. On first launch, enter the deployed Gateway address and sign in with the account flow in the app. The native layer keeps its session and offline read-only cache outside WebView storage, while remote actions continue to require a fresh selection lease.
 
-```text
-ZEROAGENT_ANDROID_WEB_URL=https://your-domain.example
-```
-
-If the variable is omitted, the app asks for the Gateway WebUI URL on first launch. The Android package is built and uploaded by `.github/workflows/android-release.yml` whenever a `v*` release tag is pushed.
+Deploy the Gateway before distributing an APK. The Android package is built and uploaded by `.github/workflows/android-release.yml` whenever a `v*` release tag is pushed.
 
 ## Development
 
