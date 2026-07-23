@@ -22,8 +22,9 @@ WebUI 是 Gateway 承载的浏览器端操作台。它复用/复制了大量 GUI
 
 | 阶段 | 行为 |
 |---|---|
-| token 读取 | WebUI 从浏览器存储读取 token，或通过 LoginPage 输入。 |
-| socket 创建 | `getGatewayWebSocketClient(token)` 建立 `/ws/v2` 连接（Protobuf 二进制帧，子协议 `liveagent.v2.pb`）；连接建立总超时为 10 秒，认证另有 15 秒超时，旧连接迟到的 close 不会误伤新连接。 |
+| 账户登录 | WebUI 通过 USA-零账号登录，Gateway 以 HttpOnly 账户 Cookie 维护浏览器会话。 |
+| 设备选择 | 用户用账号密码完成 step-up，Gateway 签发绑定账号、设备和工作区的 selection lease；WebUI 只在当前页面内存中保存编码后的 selection credential。 |
+| socket 创建 | `getGatewayWebSocketClient(selectionCredential)` 建立 `/ws/v2` 连接（Protobuf 二进制帧，子协议 `liveagent.v2.pb`）；Gateway 同时校验账户 Cookie 与 selection lease。连接建立总超时为 10 秒，认证另有 15 秒超时，旧连接迟到的 close 不会误伤新连接。 |
 | 状态订阅 | 订阅 Gateway status，展示 Desktop Agent online/offline。 |
 | 请求响应 | 所有 request 带 id，Gateway 用同 id 返回 payload 或 error。 |
 | Chat 唤醒 | 用户消息先即时 optimistic echo，再串行发送 `chat.prepare`；Gateway 通过关联原生 Ping/Pong 真正唤醒桌面 Chat Runtime，并让紧随其后的 command 复用同一 Agent session 上 2 秒内的新鲜探测，避免正常路径重复一个原生 RTT。准备请求最多等待 2.5 秒，旧 Gateway 不支持该方法时回退到 `status.get`，最终仍由 `chat.command` 作为兜底唤醒信号。 |
@@ -34,7 +35,7 @@ WebUI 是 Gateway 承载的浏览器端操作台。它复用/复制了大量 GUI
 
 | 状态 | 来源 | 用途 |
 |---|---|---|
-| `token` | 用户输入/localStorage | WebSocket 和 HTTP API 认证。 |
+| `token` | 当前设备选择生成的内存 selection credential | 与账户 Cookie 配合完成 WebSocket 和 HTTP API 认证；刷新页面后必须重新选择设备。 |
 | `settings` | Gateway `settings.get`、`settings.event`、local redacted cache | 渲染 Settings、Chat mode、model list、MCP/Skills/Memory 等。 |
 | `historyItems` | Gateway `history.list`、`history.event` | 侧边栏、pin/share/delete/rename。 |
 | `visible transcript` | `history.get`、live chat events、本地 draft | 当前会话内容。 |

@@ -15,7 +15,8 @@ body { min-width: 320px; min-height: 100dvh; margin: 0; }
   align-items: center;
   justify-content: center;
   gap: 16px;
-  padding: 32px 24px;
+  padding: max(32px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right))
+    max(32px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
   text-align: center;
 }
 

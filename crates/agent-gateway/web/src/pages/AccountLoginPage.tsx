@@ -116,7 +116,7 @@ export function AccountLoginPage({
   }
 
   return (
-    <main className="relative isolate flex min-h-dvh w-full items-center justify-center overflow-y-auto bg-background px-4 py-8 sm:px-6">
+    <main className="account-login-shell relative isolate flex min-h-dvh w-full items-center justify-center overflow-y-auto bg-background px-4 py-8 sm:px-6">
       <CodeFlowBackground />
       <form
         className="relative z-10 min-w-0 w-full max-w-[calc(100vw-2rem)] rounded-2xl border border-border/70 bg-card/95 p-6 shadow-lg shadow-black/[0.04] backdrop-blur-[2px] sm:max-w-[420px] sm:p-8 dark:shadow-black/20"

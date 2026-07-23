@@ -30,8 +30,6 @@ pub struct RemoteSettingsPayload {
     #[serde(default)]
     pub grpc_endpoint: String,
     #[serde(default)]
-    pub token: String,
-    #[serde(default)]
     pub agent_id: String,
     #[serde(default = "default_remote_auto_reconnect")]
     pub auto_reconnect: bool,

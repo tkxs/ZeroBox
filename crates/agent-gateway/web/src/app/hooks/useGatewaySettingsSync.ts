@@ -76,7 +76,6 @@ export function useGatewaySettingsSync(params: {
             remote: {
               ...prev.remote,
               gatewayUrl: window.location.origin,
-              token: token.trim(),
               enabled: token.trim() !== "" || prev.remote.enabled,
             },
           }),

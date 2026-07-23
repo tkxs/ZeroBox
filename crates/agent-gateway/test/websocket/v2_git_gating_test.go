@@ -21,7 +21,9 @@ func newV2GitBrowserTest(
 ) (*session.Manager, *session.AgentSession, *websocket.Conn, func()) {
 	t.Helper()
 
-	sm := session.NewManager()
+	root := session.NewManager()
+	fixture := newV2AccountFixture(t, root)
+	sm := fixture.deviceManager
 	webGitSetting := "false"
 	if webGitEnabled {
 		webGitSetting = "true"
@@ -31,9 +33,9 @@ func newV2GitBrowserTest(
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
 
-	handler := pbws.NewServer(newV2TestConfig(), sm).BrowserHandler()
+	handler := pbws.NewServer(newV2TestConfig(), root, fixture.accounts).BrowserHandler()
 	conn, cleanup := dialV2(t, handler)
-	helloV2(t, conn, "ws-token")
+	helloV2(t, conn, fixture)
 	return sm, agentSession, conn, cleanup
 }
 

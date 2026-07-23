@@ -1629,10 +1629,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.remoteGatewayUrl": "Gateway 地址",
     "settings.remoteGatewayUrlHint":
       "云端 Gateway 的 HTTPS 地址，用于 WebUI 访问与桌面端 v2 WebSocket 连接",
-    "settings.remoteAuth": "身份认证",
-    "settings.remoteToken": "访问令牌",
-    "settings.remoteTokenPlaceholder": "输入与 Gateway 配置一致的 Token",
-    "settings.remoteTokenHint": "与 Gateway 启动时配置的 --token 参数保持一致，用于双向认证",
+    "settings.remoteAuth": "设备身份",
     "settings.remoteAgentId": "Agent 标识",
     "settings.remoteAgentIdPlaceholder": "例如：macbook-pro",
     "settings.remoteAgentIdHint": "本地 Agent 的唯一标识，在 WebUI 中显示，留空则自动使用主机名",
@@ -3703,11 +3700,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "settings.remoteGatewayUrl": "Gateway URL",
     "settings.remoteGatewayUrlHint":
       "HTTPS address of the cloud Gateway for WebUI access and the desktop v2 WebSocket link",
-    "settings.remoteAuth": "Authentication",
-    "settings.remoteToken": "Access Token",
-    "settings.remoteTokenPlaceholder": "Enter the token matching Gateway config",
-    "settings.remoteTokenHint":
-      "Must match the --token argument used when starting the Gateway, used for mutual authentication",
+    "settings.remoteAuth": "Device Identity",
     "settings.remoteAgentId": "Agent ID",
     "settings.remoteAgentIdPlaceholder": "e.g. macbook-pro",
     "settings.remoteAgentIdHint":

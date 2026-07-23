@@ -8,15 +8,11 @@ import (
 	"time"
 )
 
-func TestLoadNormalizesTokenAndTLSPaths(t *testing.T) {
-	t.Setenv("LIVEAGENT_GATEWAY_TOKEN", "  secret-token\r\n")
+func TestLoadNormalizesTLSPaths(t *testing.T) {
 	t.Setenv("LIVEAGENT_GATEWAY_TLS_CERT", " cert.pem ")
 	t.Setenv("LIVEAGENT_GATEWAY_TLS_KEY", "\tkey.pem\r\n")
 	resetFlagsForTest(t)
 	cfg := Load()
-	if cfg.Token != "secret-token" {
-		t.Fatalf("Token = %q, want %q", cfg.Token, "secret-token")
-	}
 	if cfg.TLSCert != "cert.pem" {
 		t.Fatalf("TLSCert = %q, want %q", cfg.TLSCert, "cert.pem")
 	}
@@ -25,18 +21,7 @@ func TestLoadNormalizesTokenAndTLSPaths(t *testing.T) {
 	}
 }
 
-func TestLoadAllowsOperatorDiagnosticsToBeDisabled(t *testing.T) {
-	t.Setenv("LIVEAGENT_GATEWAY_OPERATOR_TOKEN", "")
-	t.Setenv("LIVEAGENT_GATEWAY_TOKEN", "")
-	resetFlagsForTest(t)
-	cfg := Load()
-	if cfg.OperatorToken != "" || cfg.Token != "" {
-		t.Fatalf("operator token = %q, want diagnostics disabled", cfg.OperatorToken)
-	}
-}
-
 func TestLoadWebSocketHeartbeatGrace(t *testing.T) {
-	t.Setenv("LIVEAGENT_GATEWAY_TOKEN", "dev-token")
 	resetFlagsForTest(t)
 	cfg := Load()
 	if cfg.WebSocketHeartbeatGrace != 5*time.Second {
@@ -59,7 +44,6 @@ func TestLoadWebSocketHeartbeatGrace(t *testing.T) {
 }
 
 func TestLoadChatTimeouts(t *testing.T) {
-	t.Setenv("LIVEAGENT_GATEWAY_TOKEN", "dev-token")
 	resetFlagsForTest(t)
 	cfg := Load()
 	if cfg.ChatPrepareTimeout != 2*time.Second {
@@ -114,7 +98,6 @@ func TestLoadChatTimeouts(t *testing.T) {
 
 func TestLoadUsesRailwayPortForHTTPDefault(t *testing.T) {
 	t.Setenv("PORT", "8080")
-	t.Setenv("LIVEAGENT_GATEWAY_TOKEN", "dev-token")
 
 	resetFlagsForTest(t)
 	cfg := Load()

@@ -60,8 +60,10 @@ func TestV2ChatCommandAcceptedFlow(t *testing.T) {
 func TestV2TerminalBrowserGating(t *testing.T) {
 	t.Parallel()
 
-	sm := session.NewManager()
-	handler := pbws.NewServer(newV2TestConfig(), sm).TerminalHandler()
+	root := session.NewManager()
+	fixture := newV2AccountFixture(t, root)
+	sm := fixture.deviceManager
+	handler := pbws.NewServer(newV2TestConfig(), root, fixture.accounts).TerminalHandler()
 
 	dialTerminal := func() (*websocket.Conn, func()) {
 		conn, cleanup := dialV2(t, handler)
@@ -70,7 +72,10 @@ func TestV2TerminalBrowserGating(t *testing.T) {
 				Hello: &gatewayv2.ClientHello{
 					ProtocolVersion: pbws.ProtocolVersion,
 					Role:            gatewayv2.ClientRole_CLIENT_ROLE_BROWSER,
-					Token:           "ws-token",
+					Token:           fixture.accessToken,
+					SelectionLease:  fixture.selection.ID,
+					WorkspaceId:     fixture.selection.WorkspaceID,
+					RuntimeKind:     fixture.selection.RuntimeKind,
 				},
 			},
 		})
@@ -118,7 +123,7 @@ func TestV2AgentHelloRejectsBrowserRole(t *testing.T) {
 	t.Parallel()
 
 	sm := session.NewManager()
-	srv := pbws.NewServer(newV2TestConfig(), sm)
+	srv := pbws.NewServer(newV2TestConfig(), sm, nil)
 	mux := http.NewServeMux()
 	mux.Handle("/ws/v2/agent", srv.AgentHandler())
 
@@ -130,7 +135,6 @@ func TestV2AgentHelloRejectsBrowserRole(t *testing.T) {
 			Hello: &gatewayv2.ClientHello{
 				ProtocolVersion: pbws.ProtocolVersion,
 				Role:            gatewayv2.ClientRole_CLIENT_ROLE_BROWSER,
-				Token:           "ws-token",
 			},
 		},
 	})

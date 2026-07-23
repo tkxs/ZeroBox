@@ -44,7 +44,6 @@ export function useGatewayStatus(params: UseGatewayStatusParams) {
     remote.gatewayUrl,
     remote.grpcPort,
     remote.heartbeatInterval,
-    remote.token,
   ]);
 
   useEffect(() => {
@@ -80,7 +79,6 @@ export function useGatewayStatus(params: UseGatewayStatusParams) {
     remote.gatewayUrl,
     remote.grpcPort,
     remote.heartbeatInterval,
-    remote.token,
   ]);
 
   return { remoteRuntimeStatus, setRemoteRuntimeStatus };

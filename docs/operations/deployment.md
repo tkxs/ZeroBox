@@ -27,7 +27,6 @@
 | `USA_ZERO_ORIGIN` | 是 | USA-零账户与模型服务地址，默认 `https://usa0.top`。 |
 | `DATABASE_URL` | 是（生产） | PostgreSQL 连接地址，保存设备、工作区快照、对话路由与网页对话历史。 |
 | `REDIS_URL` | 是（生产） | Redis 连接地址，保存 Web 会话、step-up proof 消费状态与设备在线 TTL。 |
-| `LIVEAGENT_GATEWAY_OPERATOR_TOKEN` | 否 | 仅用于运维状态页和内部诊断；普通用户、浏览器和设备不使用此 token。未配置时关闭 operator 诊断认证。 |
 | `LIVEAGENT_GATEWAY_COOKIE_SECURE` | 否 | 账号会话 Cookie 的 `Secure` 标志；生产默认 `true`。仅本机 HTTP 开发时设为 `false`。 |
 | `PORT` | Railway 自动提供 | HTTP/WebUI/桌面端 WebSocket 监听端口，未提供时 Dockerfile 默认 `8080`。 |
 | `LIVEAGENT_GATEWAY_GRPC_ADDR` | 否 | **已弃用 no-op**：v1 gRPC 监听已移除，设置后启动时打印警告；保留仅为兼容旧启动脚本。 |
@@ -53,7 +52,7 @@ Railway 自部署路径：
 1. 在 Railway 新建项目，选择 GitHub Repository。
 2. 选择 `Stack-Cairn/LiveAgent` 或用户自己的 fork。
 3. 分支选择包含根目录 `Dockerfile` 和 `railway.json` 的分支。
-4. 在 service variables 中设置 `USA_ZERO_ORIGIN`、`DATABASE_URL` 和 `REDIS_URL`；需要运维诊断时另设 `LIVEAGENT_GATEWAY_OPERATOR_TOKEN=<long-random-token>`。
+4. 在 service variables 中设置 `USA_ZERO_ORIGIN`、`DATABASE_URL` 和 `REDIS_URL`。
 5. 部署成功后生成 Public Domain，并访问 `/healthz` 验证健康检查。
 
 推荐生产部署模型：
@@ -64,6 +63,8 @@ Railway 自部署路径：
 
 v2 起全部实时链路统一走同一 HTTPS 域名与端口，不再需要 TCP Proxy 或独立 gRPC 地址。
 
+Gateway 不再配置共享访问 token。用户通过 USA-零账户会话登录，控制端通过 step-up 后签发的 selection lease 选择设备；桌面 Agent 首次用账户 access token 注册，后续使用保存在系统凭据库中的 `device_id` 和 `device_credential` 建立 WebSocket。
+
 Gateway 运行时变量由用户在自己的平台配置：
 
 | 变量 | 说明 |
@@ -71,7 +72,6 @@ Gateway 运行时变量由用户在自己的平台配置：
 | `USA_ZERO_ORIGIN` | USA-零账户与模型服务地址。 |
 | `DATABASE_URL` | PostgreSQL 连接地址。 |
 | `REDIS_URL` | Redis 连接地址。 |
-| `LIVEAGENT_GATEWAY_OPERATOR_TOKEN` | 可选的运维诊断 token，不用于用户或设备认证。 |
 | `LIVEAGENT_GATEWAY_COOKIE_SECURE` | 生产保持 `true`；仅本机 HTTP 调试设为 `false`。 |
 | `LIVEAGENT_GATEWAY_CHAT_PREPARE_TIMEOUT` | 默认 `2s`；通常无需调大，超时应暴露半开连接并让客户端快速恢复。 |
 | `LIVEAGENT_GATEWAY_CHAT_DELIVERY_TIMEOUT` | 默认 `5s`；控制 accepted 后投递桌面 stream 的上限。 |

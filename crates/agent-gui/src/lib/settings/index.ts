@@ -296,7 +296,6 @@ export type RemoteSettings = {
   gatewayUrl: string;
   grpcPort: number;
   grpcEndpoint: string;
-  token: string;
   agentId: string;
   autoReconnect: boolean;
   heartbeatInterval: number;
@@ -976,7 +975,6 @@ export function normalizeRemoteSettings(input: unknown): RemoteSettings {
     gatewayUrl: normalizeBaseUrl(typeof obj.gatewayUrl === "string" ? obj.gatewayUrl : ""),
     grpcPort: normalizeIntegerInRange(obj.grpcPort, 1, 65_535, 443),
     grpcEndpoint: normalizeGrpcEndpoint(obj.grpcEndpoint),
-    token: normalizeApiKey(typeof obj.token === "string" ? obj.token : ""),
     agentId: normalizeOptionalText(obj.agentId),
     autoReconnect: obj.autoReconnect !== false,
     heartbeatInterval: normalizePositiveInteger(obj.heartbeatInterval, 30),
@@ -1978,7 +1976,6 @@ export function getDefaultSettings(): AppSettings {
       gatewayUrl: "",
       grpcPort: 443,
       grpcEndpoint: "",
-      token: "",
       agentId: "",
       autoReconnect: true,
       heartbeatInterval: 30,

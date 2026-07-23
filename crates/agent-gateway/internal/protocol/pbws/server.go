@@ -36,12 +36,8 @@ type Server struct {
 }
 
 // NewServer 构造 v2 协议服务端。
-func NewServer(cfg *config.Config, sm *session.Manager, accounts ...*account.Service) *Server {
-	server := &Server{cfg: cfg, sm: sm}
-	if len(accounts) > 0 {
-		server.accounts = accounts[0]
-	}
-	return server
+func NewServer(cfg *config.Config, sm *session.Manager, accounts *account.Service) *Server {
+	return &Server{cfg: cfg, sm: sm, accounts: accounts}
 }
 
 func (s *Server) upgrader() websocket.Upgrader {

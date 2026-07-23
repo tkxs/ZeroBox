@@ -13,7 +13,7 @@ export type GatewayRuntimeStatus = {
 };
 
 export function isRemoteSettingsConfigured(remote: AppSettings["remote"]) {
-  return remote.gatewayUrl.trim() !== "" && remote.token.trim() !== "";
+  return remote.gatewayUrl.trim() !== "";
 }
 
 export function buildFallbackGatewayStatus(remote: AppSettings["remote"]): GatewayRuntimeStatus {

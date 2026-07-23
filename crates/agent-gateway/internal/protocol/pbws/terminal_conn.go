@@ -12,7 +12,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/liveagent/agent-gateway/internal/account"
-	"github.com/liveagent/agent-gateway/internal/auth"
 	"github.com/liveagent/agent-gateway/internal/observability"
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
 	gatewayv2 "github.com/liveagent/agent-gateway/internal/proto/v2"
@@ -61,8 +60,7 @@ func (s *Server) serveTerminal(conn *websocket.Conn, controllerSessionID string)
 	targetManager := s.sm
 	var userID int64
 	deviceID, workspaceID, runtimeKind := "", "", ""
-	legacyAuthorized := verdict.ok && auth.ValidateToken(hello.GetToken(), s.cfg.Token)
-	if verdict.ok && !legacyAuthorized && s.accounts != nil {
+	if verdict.ok && s.accounts != nil {
 		if wantRole == gatewayv2.ClientRole_CLIENT_ROLE_AGENT {
 			device, authErr := s.accounts.AuthenticateDevice(context.Background(), hello.GetDeviceId(), hello.GetDeviceCredential())
 			if authErr != nil {
@@ -87,7 +85,7 @@ func (s *Server) serveTerminal(conn *websocket.Conn, controllerSessionID string)
 				targetManager = s.sm.DeviceManager(userID, deviceID)
 			}
 		}
-	} else if verdict.ok && !legacyAuthorized {
+	} else if verdict.ok {
 		verdict = helloVerdict{message: "unauthorized"}
 	}
 	if !verdict.ok {

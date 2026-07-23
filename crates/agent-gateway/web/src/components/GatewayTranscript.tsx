@@ -57,6 +57,7 @@ import type { RetryAttemptRecord, TranscriptRow } from "../lib/chat/transcript/t
 
 import type { GatewayTranscriptRound } from "../lib/chatUi";
 import type { SectionId } from "../pages/settings/types";
+import { CodeFlowBackground } from "./CodeFlowBackground";
 import { ChatEmptyState } from "./chat/ChatEmptyState";
 import { getUploadedFileTypeIcon } from "./chat/fileTypeIcons";
 import {
@@ -1776,6 +1777,7 @@ export function GatewayTranscript({
     const showNoModelsState = !hasModels;
     return (
       <div className="gateway-transcript-shell">
+        <CodeFlowBackground />
         <div className="gateway-chat-column gateway-empty-state">
           {/* Keyed per conversation so the hero entrance replays when
               switching between empty conversations, not just on mount. */}

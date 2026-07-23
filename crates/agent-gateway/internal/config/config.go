@@ -13,10 +13,6 @@ const DefaultGRPCMaxMessageBytes = 64 * 1024 * 1024
 const DefaultUSAZeroOrigin = "https://usa0.top"
 
 type Config struct {
-	// Token is the legacy field name for OperatorToken. It remains populated so
-	// older startup code and tests keep working during the migration.
-	Token                    string
-	OperatorToken            string
 	USAZeroOrigin            string
 	DatabaseURL              string
 	RedisURL                 string
@@ -53,7 +49,6 @@ type Config struct {
 func Load() *Config {
 	cfg := &Config{}
 
-	flag.StringVar(&cfg.OperatorToken, "token", getenv("LIVEAGENT_GATEWAY_OPERATOR_TOKEN", getenv("LIVEAGENT_GATEWAY_TOKEN", "")), "operator token for diagnostics and migration compatibility")
 	flag.StringVar(&cfg.USAZeroOrigin, "usa-zero-origin", getenv("USA_ZERO_ORIGIN", DefaultUSAZeroOrigin), "USA-Zero account service origin")
 	flag.StringVar(&cfg.DatabaseURL, "database-url", getenv("DATABASE_URL", ""), "PostgreSQL connection URL for account and device data")
 	flag.StringVar(&cfg.RedisURL, "redis-url", getenv("REDIS_URL", ""), "Redis URL for web sessions, presence and selection leases")
@@ -79,8 +74,6 @@ func Load() *Config {
 	flag.DurationVar(&cfg.CommandQueueTimeout, "command-queue-timeout", getenvDuration("LIVEAGENT_GATEWAY_COMMAND_QUEUE_TIMEOUT", 30*time.Second), "deprecated, no-op (kept for startup-script compatibility)")
 	flag.Parse()
 
-	cfg.OperatorToken = strings.TrimSpace(cfg.OperatorToken)
-	cfg.Token = cfg.OperatorToken
 	cfg.USAZeroOrigin = strings.TrimRight(strings.TrimSpace(cfg.USAZeroOrigin), "/")
 	cfg.DatabaseURL = strings.TrimSpace(cfg.DatabaseURL)
 	cfg.RedisURL = strings.TrimSpace(cfg.RedisURL)

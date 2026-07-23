@@ -11,16 +11,16 @@ import (
 	"github.com/liveagent/agent-gateway/internal/config"
 	"github.com/liveagent/agent-gateway/internal/server"
 	"github.com/liveagent/agent-gateway/internal/session"
+	"github.com/liveagent/agent-gateway/test/testutil"
 )
 
 func newHTTPTestHandler(sm *session.Manager) http.Handler {
 	return server.NewHTTPServer(&config.Config{
-		Token:          "dev-token",
 		RequestTimeout: 500 * time.Millisecond,
 	}, sm)
 }
 
-func TestAPIRoutesRequireBearerToken(t *testing.T) {
+func TestAPIRoutesRequireAccountSelection(t *testing.T) {
 	t.Parallel()
 
 	handler := newHTTPTestHandler(session.NewManager())
@@ -61,12 +61,15 @@ func TestStatusRouteReturnsAuthenticatedSession(t *testing.T) {
 	t.Parallel()
 
 	sm := session.NewManager()
-	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
-	sm.SetSession(session.NewAgentSession(sm.LatestAuthSnapshot()))
-	handler := newHTTPTestHandler(sm)
+	fixture := testutil.NewAccountFixture(t, sm)
+	fixture.DeviceManager.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
+	fixture.DeviceManager.SetSession(session.NewAgentSession(fixture.DeviceManager.LatestAuthSnapshot()))
+	handler := server.NewHTTPServerWithAccountService(&config.Config{
+		RequestTimeout: 500 * time.Millisecond,
+	}, sm, fixture.Service)
 
 	req := httptest.NewRequest(http.MethodGet, "http://gateway.test/api/status", nil)
-	req.Header.Set("Authorization", " bearer   dev-token ")
+	fixture.Authorize(req)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

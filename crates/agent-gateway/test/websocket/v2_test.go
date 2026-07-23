@@ -19,20 +19,20 @@ import (
 	"github.com/liveagent/agent-gateway/internal/session"
 )
 
-func TestV2HelloRejectsBadToken(t *testing.T) {
+func TestV2HelloRejectsLegacySharedToken(t *testing.T) {
 	t.Parallel()
 
 	sm := session.NewManager()
-	handler := pbws.NewServer(newV2TestConfig(), sm).BrowserHandler()
+	handler := pbws.NewServer(newV2TestConfig(), sm, nil).BrowserHandler()
 	conn, cleanup := dialV2(t, handler)
 	defer cleanup()
 
 	sendProtoFrame(t, conn, &gatewayv2.WebClientFrame{
-		RequestId: "hello-bad",
+		RequestId: "hello-legacy",
 		Payload: &gatewayv2.WebClientFrame_Hello{
 			Hello: &gatewayv2.ClientHello{
 				ProtocolVersion: pbws.ProtocolVersion,
-				Token:           "wrong-token",
+				Token:           "legacy-shared-token",
 			},
 		},
 	})
@@ -52,13 +52,13 @@ func TestV2HelloRejectsWrongVersion(t *testing.T) {
 	t.Parallel()
 
 	sm := session.NewManager()
-	handler := pbws.NewServer(newV2TestConfig(), sm).BrowserHandler()
+	handler := pbws.NewServer(newV2TestConfig(), sm, nil).BrowserHandler()
 	conn, cleanup := dialV2(t, handler)
 	defer cleanup()
 
 	sendProtoFrame(t, conn, &gatewayv2.WebClientFrame{
 		Payload: &gatewayv2.WebClientFrame_Hello{
-			Hello: &gatewayv2.ClientHello{ProtocolVersion: 99, Token: "ws-token"},
+			Hello: &gatewayv2.ClientHello{ProtocolVersion: 99},
 		},
 	})
 	frame := receiveWebFrameRaw(t, conn)
@@ -239,7 +239,8 @@ func TestV2EndToEndBinaryPath(t *testing.T) {
 	t.Parallel()
 
 	sm := session.NewManager()
-	srv := pbws.NewServer(newV2TestConfig(), sm)
+	fixture := newV2AccountFixture(t, sm)
+	srv := pbws.NewServer(newV2TestConfig(), sm, fixture.accounts)
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws/v2", srv.BrowserHandler())
@@ -251,11 +252,12 @@ func TestV2EndToEndBinaryPath(t *testing.T) {
 	sendProtoFrame(t, agentConn, &gatewayv2.AgentClientFrame{
 		Payload: &gatewayv2.AgentClientFrame_Hello{
 			Hello: &gatewayv2.ClientHello{
-				ProtocolVersion: pbws.ProtocolVersion,
-				Role:            gatewayv2.ClientRole_CLIENT_ROLE_AGENT,
-				Token:           "ws-token",
-				AgentId:         "desktop-agent",
-				AgentVersion:    "1.0.0",
+				ProtocolVersion:  pbws.ProtocolVersion,
+				Role:             gatewayv2.ClientRole_CLIENT_ROLE_AGENT,
+				AgentId:          "desktop-agent",
+				AgentVersion:     "1.0.0",
+				DeviceId:         fixture.device.ID,
+				DeviceCredential: fixture.credential,
 			},
 		},
 	})
@@ -267,7 +269,7 @@ func TestV2EndToEndBinaryPath(t *testing.T) {
 	// ---- 浏览器接入并发起直通请求 ----
 	browserConn, browserCleanup := dialV2Path(t, mux, "/ws/v2")
 	defer browserCleanup()
-	helloV2(t, browserConn, "ws-token")
+	helloV2(t, browserConn, fixture)
 
 	sendProtoFrame(t, browserConn, &gatewayv2.WebClientFrame{
 		RequestId: "e2e-1",

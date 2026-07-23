@@ -13,7 +13,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/liveagent/agent-gateway/internal/account"
-	"github.com/liveagent/agent-gateway/internal/auth"
 	"github.com/liveagent/agent-gateway/internal/config"
 	"github.com/liveagent/agent-gateway/internal/observability"
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
@@ -178,8 +177,7 @@ func (c *browserConn) handshake() bool {
 	}
 	hello := frame.GetHello()
 	verdict := c.srv.vetHelloBase(hello, gatewayv2.ClientRole_CLIENT_ROLE_BROWSER)
-	legacyAuthorized := verdict.ok && auth.ValidateToken(hello.GetToken(), c.srv.cfg.Token)
-	if verdict.ok && !legacyAuthorized {
+	if verdict.ok {
 		if c.srv.accounts == nil || hello.GetSelectionLease() == "" {
 			verdict = helloVerdict{message: "account login and selection lease required"}
 		} else {

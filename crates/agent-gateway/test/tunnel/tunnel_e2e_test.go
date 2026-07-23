@@ -144,7 +144,6 @@ func (a *fakeAgent) handleFrame(frame *gatewayv1.TunnelFrame) {
 func startTunnelTestServer(t *testing.T, sm *session.Manager) *httptest.Server {
 	t.Helper()
 	handler := server.NewHTTPServer(&config.Config{
-		Token:          "dev-token",
 		RequestTimeout: 2 * time.Second,
 	}, sm)
 	ts := httptest.NewServer(handler)

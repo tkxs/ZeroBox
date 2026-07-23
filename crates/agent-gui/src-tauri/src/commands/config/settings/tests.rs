@@ -112,7 +112,6 @@ mod tests {
             gateway_url: " https:/agent.cnweb.org/ ".to_string(),
             grpc_port: 443,
             grpc_endpoint: " tcp.proxy.rlwy.net:12345/ ".to_string(),
-            token: " agent-token-dev ".to_string(),
             agent_id: " mac-mini ".to_string(),
             auto_reconnect: true,
             heartbeat_interval: 30,
@@ -124,7 +123,6 @@ mod tests {
 
         assert_eq!(normalized.gateway_url, "https://agent.cnweb.org");
         assert_eq!(normalized.grpc_endpoint, "tcp.proxy.rlwy.net:12345");
-        assert_eq!(normalized.token, "agent-token-dev");
         assert_eq!(normalized.agent_id, "mac-mini");
     }
 

@@ -66,16 +66,7 @@ pub(crate) fn build_ws_url(
 }
 
 /// 构造 v2 hello 载荷：桌面端两条链路均以 CLIENT_ROLE_AGENT 建连，字段对应 v1 AuthRequest。
-pub(crate) fn build_client_hello(
-    token: &str,
-    agent_id: String,
-    agent_version: String,
-) -> v2::ClientHello {
-    build_device_client_hello(token, agent_id, agent_version, None)
-}
-
 pub(crate) fn build_device_client_hello(
-    token: &str,
     agent_id: String,
     agent_version: String,
     device: Option<&DeviceCredentialRecord>,
@@ -83,11 +74,7 @@ pub(crate) fn build_device_client_hello(
     v2::ClientHello {
         protocol_version: GATEWAY_WS_PROTOCOL_VERSION,
         role: v2::ClientRole::Agent as i32,
-        token: if device.is_some() {
-            String::new()
-        } else {
-            token.trim().to_string()
-        },
+        token: String::new(),
         agent_id: agent_id.clone(),
         agent_version: agent_version.clone(),
         client_name: "desktop".to_string(),
@@ -267,6 +254,14 @@ mod tests {
     };
     use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
+    fn test_device_hello(credential: &str) -> v2::ClientHello {
+        let device = DeviceCredentialRecord {
+            device_id: "device-1".to_string(),
+            credential: credential.to_string(),
+        };
+        build_device_client_hello("agent-1".to_string(), "0.0.0".to_string(), Some(&device))
+    }
+
     #[test]
     fn build_ws_url_maps_http_to_ws() {
         // 端口框（gateway_port）与界面预览一致：无条件覆盖基址端口。
@@ -413,7 +408,7 @@ mod tests {
                 .await
                 .expect("accept ws");
 
-            // 首帧必须是携带 AGENT 角色与令牌的 hello。
+            // 首帧必须是携带 AGENT 角色与设备凭证的 hello。
             let hello_frame: v2::AgentClientFrame =
                 decode_ws_frame(&read_binary(&mut ws).await).expect("decode hello frame");
             let Some(v2::agent_client_frame::Payload::Hello(hello)) = hello_frame.payload else {
@@ -421,7 +416,9 @@ mod tests {
             };
             assert_eq!(hello.protocol_version, GATEWAY_WS_PROTOCOL_VERSION);
             assert_eq!(hello.role, v2::ClientRole::Agent as i32);
-            assert_eq!(hello.token, "test-token");
+            assert!(hello.token.is_empty());
+            assert_eq!(hello.device_id, "device-1");
+            assert_eq!(hello.device_credential, "test-credential");
             assert_eq!(hello.client_name, "desktop");
 
             ws.send(encode_ws_frame(&v2::AgentServerFrame {
@@ -459,7 +456,7 @@ mod tests {
 
         let (mut ws, server_hello) = connect_agent_ws(
             &format!("ws://{addr}"),
-            build_client_hello("test-token", "agent-1".to_string(), "0.0.0".to_string()),
+            test_device_hello("test-credential"),
         )
         .await
         .expect("agent ws handshake");
@@ -525,11 +522,8 @@ mod tests {
             .expect("send rejection hello");
         });
 
-        let result = connect_agent_ws(
-            &format!("ws://{addr}"),
-            build_client_hello("bad-token", "agent-1".to_string(), "0.0.0".to_string()),
-        )
-        .await;
+        let result =
+            connect_agent_ws(&format!("ws://{addr}"), test_device_hello("bad-credential")).await;
         assert_eq!(result.err(), Some("unauthorized".to_string()));
 
         server.await.expect("server task");
@@ -552,7 +546,7 @@ mod tests {
 
         let result = connect_agent_ws(
             &format!("ws://{addr}"),
-            build_client_hello("test-token", "agent-1".to_string(), "0.0.0".to_string()),
+            test_device_hello("test-credential"),
         )
         .await;
         match result.err() {

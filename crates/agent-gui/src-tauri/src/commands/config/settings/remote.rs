@@ -19,7 +19,6 @@ impl Default for RemoteSettingsPayload {
             gateway_url: String::new(),
             grpc_port: default_remote_grpc_port(),
             grpc_endpoint: String::new(),
-            token: String::new(),
             agent_id: String::new(),
             auto_reconnect: default_remote_auto_reconnect(),
             heartbeat_interval: default_remote_heartbeat_interval(),
@@ -43,7 +42,6 @@ pub(crate) fn normalize_remote_settings_payload(
             payload.grpc_port
         },
         grpc_endpoint: normalize_grpc_endpoint_text(&payload.grpc_endpoint),
-        token: payload.token.trim().to_string(),
         agent_id: payload.agent_id.trim().to_string(),
         auto_reconnect: payload.auto_reconnect,
         heartbeat_interval: payload.heartbeat_interval.max(1),

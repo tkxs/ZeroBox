@@ -3,7 +3,6 @@ import test from "node:test";
 import { createWebModuleLoader } from "../helpers/load-web-module.mjs";
 
 const loader = createWebModuleLoader();
-const auth = loader.loadModule("src/lib/gatewayAuth.ts");
 const storage = loader.loadModule("src/lib/storage.ts");
 
 function installWindow(overrides = {}) {
@@ -26,71 +25,16 @@ function installWindow(overrides = {}) {
   return store;
 }
 
-test("normalizeGatewayAccessToken trims plain and Bearer-prefixed tokens", () => {
-  assert.equal(auth.normalizeGatewayAccessToken("  plain-token  "), "plain-token");
-  assert.equal(auth.normalizeGatewayAccessToken("Bearer secret-token"), "secret-token");
-  assert.equal(auth.normalizeGatewayAccessToken(" bearer   secret-token  "), "secret-token");
-  assert.equal(auth.normalizeGatewayAccessToken("   "), "");
-});
-
-test("verifyGatewayAccessToken sends normalized bearer header and maps unauthorized errors", async () => {
-  installWindow();
-  const requests = [];
-  globalThis.fetch = async (url, init) => {
-    requests.push({ url, init });
-    return {
-      ok: false,
-      async text() {
-        return JSON.stringify({ error: "unauthorized" });
-      },
-    };
-  };
-
-  await assert.rejects(
-    () => auth.verifyGatewayAccessToken("Bearer bad-token"),
-    /Access Token 错误，请检查后重试。/,
-  );
-
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].url, "https://gateway.example/api/status");
-  assert.equal(requests[0].init.method, "GET");
-  assert.equal(requests[0].init.headers.Authorization, "Bearer bad-token");
-});
-
-test("verifyGatewayAccessToken returns normalized token after successful status check", async () => {
-  installWindow();
-  globalThis.fetch = async () => ({
-    ok: true,
-    async text() {
-      return "";
-    },
-  });
-
-  const token = await auth.verifyGatewayAccessToken(" bearer   good-token ");
-  assert.equal(token, "good-token");
-});
-
-test("operator token storage persists and clears the diagnostics token key", () => {
-  installWindow();
-
-  assert.equal(storage.loadToken(), "");
-  storage.saveToken("abc123");
-  assert.equal(storage.loadToken(), "abc123");
-  storage.clearToken();
-  assert.equal(storage.loadToken(), "");
-});
-
-test("ephemeral execution credential overrides storage without being persisted", () => {
+test("execution credential remains ephemeral and clears the legacy token", () => {
   const store = installWindow();
-  storage.saveToken("operator-token");
+  store.set("liveagent.gateway.token", "legacy-token");
 
   storage.setEphemeralCredential("selection-credential");
   assert.equal(storage.loadToken(), "selection-credential");
-  assert.equal(store.get("liveagent.gateway.token"), "operator-token");
+  assert.equal(store.has("liveagent.gateway.token"), false);
 
   storage.setEphemeralCredential("");
   assert.equal(storage.loadToken(), "");
   storage.setEphemeralCredential(null);
-  assert.equal(storage.loadToken(), "operator-token");
-  storage.clearToken();
+  assert.equal(storage.loadToken(), "");
 });

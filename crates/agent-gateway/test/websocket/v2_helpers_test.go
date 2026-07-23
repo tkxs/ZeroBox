@@ -4,6 +4,8 @@ package websocket_test
 // 按 proto 帧收发。
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/liveagent/agent-gateway/internal/account"
 	"github.com/liveagent/agent-gateway/internal/config"
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
 	gatewayv2 "github.com/liveagent/agent-gateway/internal/proto/v2"
@@ -20,9 +23,76 @@ import (
 	"github.com/liveagent/agent-gateway/internal/session"
 )
 
+type v2AccountFixture struct {
+	accounts      *account.Service
+	accessToken   string
+	device        *account.Device
+	credential    string
+	selection     *account.SelectionLease
+	deviceManager *session.Manager
+}
+
+func newV2AccountFixture(t *testing.T, root *session.Manager) *v2AccountFixture {
+	t.Helper()
+	usa := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/auth/me":
+			_, _ = fmt.Fprint(w, `{"code":0,"message":"success","data":{"id":1,"email":"one@example.com"}}`)
+		case "/api/v1/user/step-up/consume":
+			_, _ = fmt.Fprint(w, `{"code":0,"message":"success","data":{"valid":true,"user_id":1}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(usa.Close)
+
+	store := account.NewMemoryStore()
+	accounts := account.NewService(
+		store,
+		account.NewUSAClientWithHTTPClient(usa.URL, usa.Client()),
+		time.Hour,
+		time.Hour,
+	)
+	const accessToken = "account-access-token"
+	desktop, err := accounts.DesktopSession(context.Background(), accessToken)
+	if err != nil {
+		t.Fatalf("create desktop session: %v", err)
+	}
+	device, credential, err := accounts.RegisterDevice(context.Background(), desktop.UserID, account.RegisterDeviceInput{
+		InstallationID: "installation-1",
+		Name:           "Desktop",
+		Platform:       "windows",
+		Version:        "1.0.0",
+		Workspaces: []account.Workspace{{
+			ID: "workspace-1", Name: "Project", Path: "/workspace/project",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+	if _, err := accounts.AuthenticateDevice(context.Background(), device.ID, credential); err != nil {
+		t.Fatalf("authenticate device: %v", err)
+	}
+	target := account.TargetFingerprint(account.RuntimeKindDeviceAgent, device.ID, "workspace-1")
+	selection, err := accounts.SelectTarget(context.Background(), desktop, account.SelectTargetInput{
+		Proof:       "proof-1",
+		RuntimeKind: account.RuntimeKindDeviceAgent,
+		DeviceID:    device.ID,
+		WorkspaceID: "workspace-1",
+		Target:      target,
+	})
+	if err != nil {
+		t.Fatalf("select device: %v", err)
+	}
+	return &v2AccountFixture{
+		accounts: accounts, accessToken: accessToken, device: device, credential: credential,
+		selection: selection, deviceManager: root.DeviceManager(desktop.UserID, device.ID),
+	}
+}
+
 func newV2TestConfig() *config.Config {
 	return &config.Config{
-		Token:          "ws-token",
 		RequestTimeout: time.Second,
 	}
 }
@@ -120,7 +190,7 @@ func receiveWebFrameWithID(t *testing.T, conn *websocket.Conn, id string) *gatew
 }
 
 // helloV2 完成浏览器链路握手并断言成功。
-func helloV2(t *testing.T, conn *websocket.Conn, token string) {
+func helloV2(t *testing.T, conn *websocket.Conn, fixture *v2AccountFixture) {
 	t.Helper()
 	sendProtoFrame(t, conn, &gatewayv2.WebClientFrame{
 		RequestId: "hello-1",
@@ -128,8 +198,11 @@ func helloV2(t *testing.T, conn *websocket.Conn, token string) {
 			Hello: &gatewayv2.ClientHello{
 				ProtocolVersion: pbws.ProtocolVersion,
 				Role:            gatewayv2.ClientRole_CLIENT_ROLE_BROWSER,
-				Token:           token,
+				Token:           fixture.accessToken,
 				ClientName:      "webui-test",
+				SelectionLease:  fixture.selection.ID,
+				WorkspaceId:     fixture.selection.WorkspaceID,
+				RuntimeKind:     fixture.selection.RuntimeKind,
 			},
 		},
 	})
@@ -144,14 +217,16 @@ func helloV2(t *testing.T, conn *websocket.Conn, token string) {
 func newV2BrowserTest(t *testing.T) (*session.Manager, *session.AgentSession, *websocket.Conn, func()) {
 	t.Helper()
 
-	sm := session.NewManager()
+	root := session.NewManager()
+	fixture := newV2AccountFixture(t, root)
+	sm := fixture.deviceManager
 	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
 	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
 	sm.SetSession(agentSession)
 
-	handler := pbws.NewServer(newV2TestConfig(), sm).BrowserHandler()
+	handler := pbws.NewServer(newV2TestConfig(), root, fixture.accounts).BrowserHandler()
 	conn, cleanup := dialV2(t, handler)
-	helloV2(t, conn, "ws-token")
+	helloV2(t, conn, fixture)
 	return sm, agentSession, conn, cleanup
 }
 

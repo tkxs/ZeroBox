@@ -16,7 +16,7 @@ import (
 )
 
 func TestNewHTTPServerServesRootWithoutRedirect(t *testing.T) {
-	handler := NewHTTPServer(&config.Config{Token: "dev-token"}, session.NewManager())
+	handler := NewHTTPServer(&config.Config{}, session.NewManager())
 
 	req := httptest.NewRequest(http.MethodGet, "http://gateway.test/", nil)
 	rec := httptest.NewRecorder()
@@ -37,7 +37,7 @@ func TestNewHTTPServerServesRootWithoutRedirect(t *testing.T) {
 }
 
 func TestNewHTTPServerServesSpaFallbackWithoutRedirect(t *testing.T) {
-	handler := NewHTTPServer(&config.Config{Token: "dev-token"}, session.NewManager())
+	handler := NewHTTPServer(&config.Config{}, session.NewManager())
 
 	req := httptest.NewRequest(http.MethodGet, "http://gateway.test/history/session-123", nil)
 	rec := httptest.NewRecorder()
@@ -55,7 +55,7 @@ func TestNewHTTPServerServesSpaFallbackWithoutRedirect(t *testing.T) {
 }
 
 func TestNewHTTPServerDoesNotFallbackMissingStaticAssetsToIndex(t *testing.T) {
-	handler := NewHTTPServer(&config.Config{Token: "dev-token"}, session.NewManager())
+	handler := NewHTTPServer(&config.Config{}, session.NewManager())
 
 	for _, target := range []string{
 		"http://gateway.test/assets/missing-module.js",
@@ -79,7 +79,7 @@ func TestNewHTTPServerDoesNotFallbackMissingStaticAssetsToIndex(t *testing.T) {
 }
 
 func TestWebSocketRejectsForeignOrigin(t *testing.T) {
-	ts := httptest.NewServer(NewHTTPServer(&config.Config{Token: "dev-token"}, session.NewManager()))
+	ts := httptest.NewServer(NewHTTPServer(&config.Config{}, session.NewManager()))
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/v2"
@@ -105,7 +105,6 @@ func TestPublicHistoryShareResolvesWithoutAuthorization(t *testing.T) {
 	sm.SetSession(agentSession)
 
 	handler := NewHTTPServer(&config.Config{
-		Token:          "dev-token",
 		RequestTimeout: time.Second,
 	}, sm)
 	req := httptest.NewRequest(http.MethodGet, "http://gateway.test/api/public/history-shares/share-token", nil)
@@ -202,7 +201,6 @@ func publicHistoryShareErrorStatusForTest(t *testing.T, code int, message string
 	sm.SetSession(agentSession)
 
 	handler := NewHTTPServer(&config.Config{
-		Token:          "dev-token",
 		RequestTimeout: time.Second,
 	}, sm)
 	req := httptest.NewRequest(http.MethodGet, "http://gateway.test/api/public/history-shares/disabled-token", nil)
@@ -243,7 +241,6 @@ func publicHistoryShareErrorStatusForTest(t *testing.T, code int, message string
 
 func TestPublicHistoryShareReturnsUnavailableWhenAgentOffline(t *testing.T) {
 	handler := NewHTTPServer(&config.Config{
-		Token:          "dev-token",
 		RequestTimeout: time.Second,
 	}, session.NewManager())
 

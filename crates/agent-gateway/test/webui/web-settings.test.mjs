@@ -97,7 +97,7 @@ function installWindow(origin = "https://gateway.example") {
   return store;
 }
 
-test("getWebDefaultSettings enables remote settings from the gateway token", () => {
+test("getWebDefaultSettings enables remote settings from the active selection credential", () => {
   installWindow("https://gateway.example");
 
   const settings = webSettings.getWebDefaultSettings(" token ");
@@ -105,7 +105,7 @@ test("getWebDefaultSettings enables remote settings from the gateway token", () 
   assert.equal(settings.system.workdir, "");
   assert.equal(settings.remote.enabled, true);
   assert.equal(settings.remote.gatewayUrl, "https://gateway.example");
-  assert.equal(settings.remote.token, "token");
+  assert.equal(Object.hasOwn(settings.remote, "token"), false);
 });
 
 test("web settings normalization canonicalizes project keyed maps with Windows path compatibility", () => {
@@ -455,7 +455,7 @@ test("Anthropic settings keep 1M context parity for adaptive and explicit relay 
   );
 });
 
-test("loadWebSettings forces current gateway URL/token over stale persisted remote settings", () => {
+test("loadWebSettings forces the current gateway URL and drops stale shared tokens", () => {
   const store = installWindow("https://new.example");
   const stale = webSettings.getWebDefaultSettings("old-token");
   stale.remote.gatewayUrl = "https://old.example";
@@ -485,7 +485,7 @@ test("loadWebSettings forces current gateway URL/token over stale persisted remo
   const loaded = webSettings.loadWebSettings(" new-token ");
   assert.equal(loaded.system.workdir, "/workspace");
   assert.equal(loaded.remote.gatewayUrl, "https://new.example");
-  assert.equal(loaded.remote.token, "new-token");
+  assert.equal(Object.hasOwn(loaded.remote, "token"), false);
   assert.equal(loaded.remote.enabled, true);
   assert.equal(loaded.customSettings.rightDock.width, 612);
   assert.deepEqual(Object.keys(loaded.customSettings.rightDock.projects), ["/stale/project"]);
@@ -525,7 +525,7 @@ test("gateway settings sync keeps remote connection local and syncs web terminal
   assert.equal(synced.chatRuntimeControls.reasoningByProvider.gemini, "xhigh");
   assert.equal(synced.selectedModel, undefined);
   assert.equal(synced.remote.gatewayUrl, "https://gateway.example");
-  assert.equal(synced.remote.token, "token");
+  assert.equal(Object.hasOwn(synced.remote, "token"), false);
 
   const payload = settingsSync.buildGatewaySettingsSyncPayload(synced);
   assert.deepEqual(payload.remote, {
@@ -1363,7 +1363,7 @@ test("web remote settings normalize single-slash http gateway URLs", () => {
 
   assert.equal(remote.gatewayUrl, "https://gateway.example");
   assert.equal(remote.grpcEndpoint, "https://grpc.example");
-  assert.equal(remote.token, "token");
+  assert.equal(Object.hasOwn(remote, "token"), false);
 
   const remoteWithOversizedPort = settings.normalizeRemoteSettings({
     grpcPort: "70000",

@@ -97,7 +97,6 @@ impl GatewayController {
         let device_credential = crate::services::device_credentials::load_device_credential()
             .map_err(|error| format!("load device credential failed: {error}"))?;
         let hello = build_device_client_hello(
-            &config.token,
             effective_agent_id(&config),
             crate::app_version().to_string(),
             device_credential.as_ref(),

@@ -6,12 +6,9 @@ import {
   Clock3,
   Cloud,
   Copy,
-  Eye,
-  EyeOff,
   GitBranch,
   Globe,
   type IconComponent,
-  Key,
   Link2,
   MonitorSmartphone,
   Radio,
@@ -55,40 +52,6 @@ function CopyButton({ value }: { value: string }) {
         <Copy className="h-3.5 w-3.5" />
       )}
     </button>
-  );
-}
-
-function PasswordInput({
-  value,
-  onChange,
-  placeholder,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-}) {
-  const [visible, setVisible] = useState(false);
-
-  return (
-    <div className="relative flex-1">
-      <Input
-        type={visible ? "text" : "password"}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="pr-16 font-mono text-[13px]"
-      />
-      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
-        <button
-          type="button"
-          onClick={() => setVisible((prev) => !prev)}
-          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-        >
-          {visible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-        </button>
-        {value ? <CopyButton value={value} /> : null}
-      </div>
-    </div>
   );
 }
 
@@ -282,7 +245,6 @@ export function RemoteSection(props: SettingsSectionProps) {
     settings.remote.gatewayUrl,
     settings.remote.grpcPort,
     settings.remote.heartbeatInterval,
-    settings.remote.token,
   ]);
 
   useEffect(() => {
@@ -409,25 +371,6 @@ export function RemoteSection(props: SettingsSectionProps) {
 
       <div className="space-y-4 rounded-xl border border-border/60 bg-card p-5">
         <SectionCardHeader icon={Shield} title={t("settings.remoteAuth")} />
-
-        <div className="space-y-1.5">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Key className="h-3 w-3" />
-            {t("settings.remoteToken")}
-          </label>
-          <PasswordInput
-            value={settings.remote.token}
-            onChange={(value) =>
-              updateRemoteSettings(setSettings, {
-                token: value,
-              })
-            }
-            placeholder={t("settings.remoteTokenPlaceholder")}
-          />
-          <p className="text-[11px] leading-relaxed text-muted-foreground/70">
-            {t("settings.remoteTokenHint")}
-          </p>
-        </div>
 
         <div className="space-y-1.5">
           <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">

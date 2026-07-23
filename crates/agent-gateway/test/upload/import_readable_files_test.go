@@ -14,20 +14,21 @@ import (
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
 	"github.com/liveagent/agent-gateway/internal/server"
 	"github.com/liveagent/agent-gateway/internal/session"
+	"github.com/liveagent/agent-gateway/test/testutil"
 )
 
 func TestImportReadableFilesForwardsMultipartToAgent(t *testing.T) {
 	t.Parallel()
 
 	sm := session.NewManager()
-	sm.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
-	agentSession := session.NewAgentSession(sm.LatestAuthSnapshot())
-	sm.SetSession(agentSession)
+	fixture := testutil.NewAccountFixture(t, sm)
+	fixture.DeviceManager.RecordAuthentication("desktop-agent", "0.9.0", "session-1")
+	agentSession := session.NewAgentSession(fixture.DeviceManager.LatestAuthSnapshot())
+	fixture.DeviceManager.SetSession(agentSession)
 
-	handler := server.NewHTTPServer(&config.Config{
-		Token:          "upload-token",
+	handler := server.NewHTTPServerWithAccountService(&config.Config{
 		RequestTimeout: time.Second,
-	}, sm)
+	}, sm, fixture.Service)
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -53,7 +54,7 @@ func TestImportReadableFilesForwardsMultipartToAgent(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "http://gateway.test/api/files/import", &body)
-	req.Header.Set("Authorization", "Bearer upload-token")
+	fixture.Authorize(req)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	rec := httptest.NewRecorder()
 
@@ -97,7 +98,7 @@ func TestImportReadableFilesForwardsMultipartToAgent(t *testing.T) {
 		t.Fatalf("second file content = %q", string(secondFile.GetContent()))
 	}
 
-	sm.DispatchFromAgent(&gatewayv1.AgentEnvelope{
+	fixture.DeviceManager.DispatchFromAgent(&gatewayv1.AgentEnvelope{
 		RequestId: outbound.GetRequestId(),
 		Timestamp: time.Now().Unix(),
 		Payload: &gatewayv1.AgentEnvelope_UploadReadableFilesResp{
@@ -159,13 +160,14 @@ func TestImportReadableFilesForwardsMultipartToAgent(t *testing.T) {
 func TestImportReadableFilesRejectsOfflineAgentBeforeParsing(t *testing.T) {
 	t.Parallel()
 
-	handler := server.NewHTTPServer(&config.Config{
-		Token:          "upload-token",
+	sm := session.NewManager()
+	fixture := testutil.NewAccountFixture(t, sm)
+	handler := server.NewHTTPServerWithAccountService(&config.Config{
 		RequestTimeout: time.Second,
-	}, session.NewManager())
+	}, sm, fixture.Service)
 
 	req := httptest.NewRequest(http.MethodPost, "http://gateway.test/api/files/import", nil)
-	req.Header.Set("Authorization", "Bearer upload-token")
+	fixture.Authorize(req)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

@@ -9,7 +9,6 @@ import (
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/liveagent/agent-gateway/internal/auth"
 	"github.com/liveagent/agent-gateway/internal/observability"
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
 	gatewayv2 "github.com/liveagent/agent-gateway/internal/proto/v2"
@@ -52,8 +51,8 @@ func (s *Server) serveAgent(conn *websocket.Conn) {
 			deviceID = device.ID
 			targetManager = s.sm.DeviceManager(userID, deviceID)
 		}
-	} else if verdict.ok && !auth.ValidateToken(hello.GetToken(), s.cfg.Token) {
-		verdict = helloVerdict{message: "unauthorized"}
+	} else if verdict.ok {
+		verdict = helloVerdict{message: "device credentials required"}
 	}
 	if !verdict.ok {
 		_ = writeDirectMessage(conn, s.writeTimeout(), &gatewayv2.AgentServerFrame{

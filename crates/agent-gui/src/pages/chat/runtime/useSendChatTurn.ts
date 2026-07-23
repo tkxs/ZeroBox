@@ -300,9 +300,7 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
     const effectiveIsAgentDevExecutionMode = isAgentDevMode(effectiveExecutionMode);
     const effectiveSkillsEnabled = settings.skills.enabled && effectiveIsAgentMode;
     const hasRemoteGatewayTarget =
-      settings.remote.enabled &&
-      settings.remote.gatewayUrl.trim() !== "" &&
-      settings.remote.token.trim() !== "";
+      settings.remote.enabled && settings.remote.gatewayUrl.trim() !== "";
     const mirrorsLocalRunToGateway = !gatewayBridgeRequest && hasRemoteGatewayTarget;
     const gatewayBridgeRequestId =
       gatewayBridgeRequest?.requestId ?? createLocalGatewayChatRunId(conversationId);

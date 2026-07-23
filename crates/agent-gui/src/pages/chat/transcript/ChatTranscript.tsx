@@ -10,6 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { CodeFlowBackground } from "../../../components/CodeFlowBackground";
 import { ChevronDown, Copy } from "../../../components/icons";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import { useLocale } from "../../../i18n";
@@ -218,10 +219,15 @@ export const ChatTranscript = memo(function ChatTranscript(props: ChatTranscript
   return (
     <div
       ref={transcriptRootRef}
-      className="relative min-h-0 flex-1"
+      className="relative isolate min-h-0 flex-1 overflow-hidden"
       onContextMenu={handleTranscriptContextMenu}
     >
-      <ScrollArea ref={setScrollAreaRoot} viewportRef={setScrollViewport} className="h-full">
+      {showNoModelsState || showStartChatState ? <CodeFlowBackground /> : null}
+      <ScrollArea
+        ref={setScrollAreaRoot}
+        viewportRef={setScrollViewport}
+        className="relative z-10 h-full"
+      >
         <div className="mx-auto w-full max-w-[768px] px-5 py-4">
           {showNoModelsState || showStartChatState ? (
             <div className="flex min-h-[calc(100vh-220px)] flex-col items-center justify-center">

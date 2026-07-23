@@ -1,21 +1,21 @@
-const TOKEN_KEY = "liveagent.gateway.token";
 let ephemeralCredential: string | null = null;
+let legacyTokenCleared = false;
+
+function clearLegacyPersistedToken(): void {
+  if (legacyTokenCleared) return;
+  legacyTokenCleared = true;
+  try {
+    window.localStorage.removeItem("liveagent.gateway.token");
+  } catch {
+    // Storage may be unavailable in hardened browser contexts.
+  }
+}
 
 export function loadToken(): string {
-  if (ephemeralCredential !== null) {
-    return ephemeralCredential;
-  }
-  return window.localStorage.getItem(TOKEN_KEY) ?? "";
+  clearLegacyPersistedToken();
+  return ephemeralCredential ?? "";
 }
 
 export function setEphemeralCredential(token: string | null): void {
   ephemeralCredential = token;
-}
-
-export function saveToken(token: string): void {
-  window.localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken(): void {
-  window.localStorage.removeItem(TOKEN_KEY);
 }

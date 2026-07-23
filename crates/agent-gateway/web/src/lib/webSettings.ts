@@ -22,7 +22,6 @@ export function getWebDefaultSettings(token: string): AppSettings {
       ...defaults.remote,
       enabled: token.trim() !== "",
       gatewayUrl: typeof window !== "undefined" ? window.location.origin : "",
-      token: token.trim(),
     },
   });
 }
@@ -43,7 +42,6 @@ export function loadWebSettings(token: string): AppSettings {
           ...fallback.remote,
           ...(parsed?.remote ?? {}),
           gatewayUrl: fallback.remote.gatewayUrl,
-          token: token.trim(),
           enabled: token.trim() !== "" || parsed?.remote?.enabled === true,
         },
       }),

@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 	gateway "github.com/liveagent/agent-gateway"
 	"github.com/liveagent/agent-gateway/internal/account"
-	"github.com/liveagent/agent-gateway/internal/auth"
 	"github.com/liveagent/agent-gateway/internal/config"
 	"github.com/liveagent/agent-gateway/internal/handler"
 	gatewayv1 "github.com/liveagent/agent-gateway/internal/proto/v1"
@@ -118,31 +117,29 @@ type selectionCredentialPayload struct {
 
 func protectedAPIHandler(cfg *config.Config, root *session.Manager, accounts *account.Service) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		target := root
+		var target *session.Manager
 		authorization := strings.TrimSpace(r.Header.Get("Authorization"))
-		if !auth.ValidateBearerHeader(authorization, cfg.Token) {
-			parts := strings.SplitN(authorization, " ", 2)
-			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
-				return
-			}
-			credential, ok := decodeSelectionCredential(parts[1])
-			if !ok || credential.RuntimeKind != account.RuntimeKindDeviceAgent {
-				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid selection credential"})
-				return
-			}
-			cookie, err := r.Cookie(account.SessionCookieName)
-			if err != nil {
-				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "account login required"})
-				return
-			}
-			accountSession, lease, err := accounts.ValidateSelection(r.Context(), cookie.Value, credential.Lease)
-			if err != nil || lease.DeviceID != credential.DeviceID || lease.WorkspaceID != credential.WorkspaceID {
-				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "selection lease is invalid or expired"})
-				return
-			}
-			target = root.DeviceManager(accountSession.UserID, lease.DeviceID)
+		parts := strings.SplitN(authorization, " ", 2)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
 		}
+		credential, ok := decodeSelectionCredential(parts[1])
+		if !ok || credential.RuntimeKind != account.RuntimeKindDeviceAgent {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid selection credential"})
+			return
+		}
+		cookie, err := r.Cookie(account.SessionCookieName)
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "account login required"})
+			return
+		}
+		accountSession, lease, err := accounts.ValidateSelection(r.Context(), cookie.Value, credential.Lease)
+		if err != nil || lease.DeviceID != credential.DeviceID || lease.WorkspaceID != credential.WorkspaceID {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "selection lease is invalid or expired"})
+			return
+		}
+		target = root.DeviceManager(accountSession.UserID, lease.DeviceID)
 		mux := http.NewServeMux()
 		mux.HandleFunc("GET /api/status", handler.Status(target))
 		mux.HandleFunc("POST /api/files/import", handler.ImportReadableFiles(target, cfg.RequestTimeout))
