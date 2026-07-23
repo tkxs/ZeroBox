@@ -935,7 +935,12 @@ impl GatewayController {
                 }
             }
             Some(proto::gateway_envelope::Payload::GitRequest(request)) => {
-                match gateway_bridge::handle_git_request(request).await {
+                match gateway_bridge::handle_git_request(
+                    request,
+                    Arc::clone(&self.git_clone_task_registry),
+                )
+                .await
+                {
                     Ok(response) => {
                         self.send_agent_envelope(proto::AgentEnvelope {
                             request_id,

@@ -9,6 +9,8 @@ import { useLocale } from "../../../i18n";
 import type { AppUpdateController } from "../../../lib/appUpdates";
 import { normalizeConversationTitle } from "../../../lib/chat/page/chatPageHelpers";
 import type { WorkspaceProject } from "../../../lib/settings";
+import type { SidebarBatchDeleteOptions } from "../../../lib/sidebar/batchDelete";
+import { deleteSidebarConversations } from "../../../lib/sidebar/batchDelete";
 import {
   selectConversations,
   selectListState,
@@ -40,6 +42,7 @@ type ChatSidebarContainerProps = {
   recentCollapsed: boolean;
   onProjectsCollapsedChange: (collapsed: boolean) => void;
   onRecentCollapsedChange: (collapsed: boolean) => void;
+  onCreateProject: () => void;
   onSelectProject: (project: WorkspaceProject) => void;
   onNewConversationForProject: (project: WorkspaceProject) => void;
   onBrowseProjectInFileTree: (project: WorkspaceProject) => void;
@@ -162,6 +165,24 @@ export function ChatSidebarContainer(props: ChatSidebarContainerProps) {
     [onConversationDeleted, store],
   );
 
+  const handleDeleteConversations = useCallback(
+    async (ids: readonly string[], options?: SidebarBatchDeleteOptions) => {
+      const result = await deleteSidebarConversations(
+        ids,
+        async (id) => {
+          store.clearMutationError(id);
+          return store.remove(id);
+        },
+        options,
+      );
+      for (const id of result.deletedIds) {
+        onConversationDeleted(id);
+      }
+      return result;
+    },
+    [onConversationDeleted, store],
+  );
+
   const handleLoadMore = useCallback(() => {
     void store.loadMore();
   }, [store]);
@@ -212,6 +233,7 @@ export function ChatSidebarContainer(props: ChatSidebarContainerProps) {
       recentCollapsed={props.recentCollapsed}
       onProjectsCollapsedChange={props.onProjectsCollapsedChange}
       onRecentCollapsedChange={props.onRecentCollapsedChange}
+      onCreateProject={props.onCreateProject}
       onSelectProject={props.onSelectProject}
       onNewConversationForProject={props.onNewConversationForProject}
       onBrowseProjectInFileTree={props.onBrowseProjectInFileTree}
@@ -237,6 +259,7 @@ export function ChatSidebarContainer(props: ChatSidebarContainerProps) {
       onShareConversation={props.onShareConversation}
       onOpenSharedConversations={props.onOpenSharedConversations}
       onDeleteConversation={handleDeleteConversation}
+      onDeleteConversations={handleDeleteConversations}
       onLoadMore={handleLoadMore}
       onCloseSidebar={props.onCloseSidebar}
       accountMenu={props.accountMenu}

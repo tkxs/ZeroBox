@@ -89,7 +89,10 @@ export function answerAskUserQuestion(
   }
   const answers = resolveAskUserQuestionAnswers(pending.questions, rawAnswers);
   if (!answers) {
-    return { ok: false, message: "Every question needs one of its listed options selected." };
+    return {
+      ok: false,
+      message: "Every question needs a listed option selected or a non-empty custom answer.",
+    };
   }
   pending.settle({ kind: "answered", answers });
   return { ok: true };
@@ -118,6 +121,7 @@ The questions render as an interactive card; execution pauses until the user ans
 Rules:
 - Ask 1-${ASK_USER_QUESTION_MAX_QUESTIONS} focused questions per call; each question needs ${ASK_USER_QUESTION_MIN_OPTIONS}-${ASK_USER_QUESTION_MAX_OPTIONS} options (3-4 is ideal), and every question in one call must have the SAME number of options.
 - Options must be short, concrete, and mutually exclusive. Set recommended=true on your suggested choice (at most one per question) — it is shown first and becomes the timeout fallback.
+- The UI automatically appends an "Other" free-text option to every question, so the user can always type their own answer. Do NOT add your own catch-all option (e.g. "Other", "Custom", "其他", "自定义"). When the user types an answer, the result marks it as user-typed and returns their exact words instead of a listed label — treat it as authoritative.
 - Give each question a short header (2-6 chars works best) — it becomes the tab label when several questions show at once.
 - Do not use this for questions answerable from the code or the conversation, and never ask for confirmation of work you can safely do.`;
 

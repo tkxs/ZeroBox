@@ -24,6 +24,7 @@ test("both composers restore the last editor selection before external mention i
 });
 
 function extractFunction(src, name) {
+  src = src.replace(/\r\n/g, "\n");
   const start = src.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, `missing function ${name}`);
   const end = src.indexOf("\n}\n", start);

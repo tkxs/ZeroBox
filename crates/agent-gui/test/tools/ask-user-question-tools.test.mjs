@@ -371,3 +371,73 @@ test("injected test timeout overrides a preset deadline", async () => {
   );
   assert.equal(result.details.timedOut, true);
 });
+
+test("custom answers bypass option membership and are marked in the result", async () => {
+  const { tools } = loadModules();
+  const bundle = tools.createAskUserQuestionTools({ conversationId: "conv-1" });
+  const resultPromise = bundle.executeToolCall(createToolCall(buildQuestionsArgs(), "call-ask-custom"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  // custom 空文本视为未作答，不落定。
+  const emptyCustom = tools.answerAskUserQuestion("call-ask-custom", [
+    { questionId: "storage", selectedLabel: "   ", custom: true },
+    { questionId: "q2", selectedLabel: "不迁移" },
+  ]);
+  assert.equal(emptyCustom.ok, false);
+  assert.equal(tools.hasPendingAskUserQuestion("call-ask-custom"), true);
+
+  // 非 custom 的越权 label 依旧拒绝（不因 custom 通道放宽）。
+  const wrongLabel = tools.answerAskUserQuestion("call-ask-custom", [
+    { questionId: "storage", selectedLabel: "自由发挥" },
+    { questionId: "q2", selectedLabel: "不迁移" },
+  ]);
+  assert.equal(wrongLabel.ok, false);
+
+  // 混合应答：一题选列表项、一题自由输入。
+  const accepted = tools.answerAskUserQuestion("call-ask-custom", [
+    { questionId: "storage", selectedLabel: "应用数据目录" },
+    { questionId: "q2", selectedLabel: "先迁移最近 30 天的数据试试", custom: true },
+  ]);
+  assert.equal(accepted.ok, true);
+
+  const result = await resultPromise;
+  assert.equal(result.isError, false);
+  assert.deepEqual(
+    result.details.answers.map((answer) => answer.custom === true),
+    [false, true],
+  );
+  assert.equal(result.details.answers[1].selectedLabel, "先迁移最近 30 天的数据试试");
+  // 列表项应答不写出 custom 键（序列化形状与旧版一致）。
+  assert.equal("custom" in result.details.answers[0], false);
+  assert.match(result.content[0].text, /先迁移最近 30 天的数据试试/);
+  assert.match(result.content[0].text, /user-typed answer via "Other"/);
+});
+
+test("resolveAskUserQuestionAnswers truncates over-length custom text", () => {
+  const { shared } = loadModules();
+  const questions = shared.parseAskUserQuestionItems(buildQuestionsArgs().questions);
+  const longText = "长".repeat(shared.ASK_USER_QUESTION_CUSTOM_MAX_LENGTH + 100);
+  const answers = shared.resolveAskUserQuestionAnswers(questions, [
+    { questionId: "storage", selectedLabel: longText, custom: true },
+    { questionId: "q2", selectedLabel: "不迁移" },
+  ]);
+  assert.ok(answers);
+  assert.equal(answers[0].selectedLabel.length, shared.ASK_USER_QUESTION_CUSTOM_MAX_LENGTH);
+  assert.equal(answers[0].custom, true);
+});
+
+test("custom flag round-trips through the transcript parser", () => {
+  const { shared } = loadModules();
+  const questions = shared.parseAskUserQuestionItems(buildQuestionsArgs().questions);
+  const parsed = shared.parseAskUserQuestionResultDetails({
+    kind: "ask_user_question",
+    questions,
+    answers: [
+      { questionId: "storage", prompt: "配置应当存放在哪里？", selectedLabel: "应用数据目录" },
+      { questionId: "q2", prompt: "是否需要迁移旧数据？", selectedLabel: "我自己写", custom: true },
+    ],
+  });
+  assert.ok(parsed);
+  assert.equal("custom" in parsed.answers[0], false);
+  assert.equal(parsed.answers[1].custom, true);
+});

@@ -29,6 +29,7 @@ import {
   mergeWorkspaceProjectsWithHistory,
 } from "../../../lib/workspaceProjects";
 import { asErrorMessage } from "../chatPageUtils";
+import { startWorkspaceCloneTask } from "./cloneTasks";
 import {
   createWorkspaceProjectFromPath,
   getDefaultWorkspaceProjectPath,
@@ -137,6 +138,7 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
   const historyScopeKey = sidebarScopeKey(sidebarScope);
   const [projectRenamingId, setProjectRenamingId] = useState<string | null>(null);
   const [projectRenameDraft, setProjectRenameDraft] = useState("");
+  const [workspaceCreateModalOpen, setWorkspaceCreateModalOpen] = useState(false);
 
   const setWorkspaceProjectDirectoryMissing = useCallback(
     (project: WorkspaceProject, missing: boolean) => {
@@ -372,6 +374,10 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
     [checkWorkspaceProjectDirectory, setErrorMessage, t],
   );
 
+  const handleOpenCreateWorkspaceProject = useCallback(() => {
+    setWorkspaceCreateModalOpen(true);
+  }, []);
+
   const pickWorkspaceProjectFolder = useCallback(async () => {
     try {
       const picked = await invoke<string | null>("system_pick_folder", {
@@ -385,6 +391,37 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
     }
   }, [activeWorkspaceProjectPath, setErrorMessage, workdir]);
 
+  const handleOpenWorkspaceFolder = useCallback(async () => {
+    const project = await pickWorkspaceProjectFolder();
+    if (project) {
+      activateWorkspaceProject(project);
+    }
+  }, [activateWorkspaceProject, pickWorkspaceProjectFolder]);
+
+  const handleCloneWorkspaceProject = useCallback(
+    async (remoteUrl: string, parent: string, name: string, branch: string) => {
+      await startWorkspaceCloneTask({
+        remoteUrl,
+        parent,
+        name,
+        branch,
+      });
+    },
+    [],
+  );
+
+  const handleOpenClonedWorkspace = useCallback(
+    (path: string) => activateWorkspaceProject(createWorkspaceProjectFromPath(path, "managed")),
+    [activateWorkspaceProject],
+  );
+
+  const handleLoadWorkspaceRemoteBranches = useCallback(
+    (remoteUrl: string) =>
+      invoke<{ defaultBranch: string; branches: string[] }>("git_list_remote_branches", {
+        remote_url: remoteUrl,
+      }),
+    [],
+  );
   const commitWorkspaceProjectRename = useCallback(
     (project: WorkspaceProject, nextNameInput: string) => {
       if (project.id === DEFAULT_WORKSPACE_PROJECT_ID) return;
@@ -547,6 +584,13 @@ export function useWorkspaceProjects(params: UseWorkspaceProjectsParams) {
     ensureSshTunnelToolTab,
     handleBrowseWorkspaceProjectInSystemFileManager,
     pickWorkspaceProjectFolder,
+    handleOpenCreateWorkspaceProject,
+    workspaceCreateModalOpen,
+    setWorkspaceCreateModalOpen,
+    handleOpenWorkspaceFolder,
+    handleCloneWorkspaceProject,
+    handleOpenClonedWorkspace,
+    handleLoadWorkspaceRemoteBranches,
     handleStartRenamingWorkspaceProject,
     handleCommitWorkspaceProjectRename,
     handleCancelWorkspaceProjectRename,

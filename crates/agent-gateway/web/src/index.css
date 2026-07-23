@@ -889,7 +889,7 @@
     /* Slide from the anchor side; flipped placements override per data-side. */
     --sidebar-menu-slide-x: -6px;
     --sidebar-menu-slide-y: 0px;
-    transform-origin: var(--radix-dropdown-menu-content-transform-origin);
+    transform-origin: var(--transform-origin);
   }
 
   .sidebar-context-menu[data-side="left"] {
@@ -1208,12 +1208,12 @@
   /* Branch selector dropdown shares the reasoning-select motion. */
   .composer-branch-dropdown[data-state="open"] {
     animation: composerReasoningDropdownIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
-    transform-origin: var(--radix-dropdown-menu-content-transform-origin, bottom left);
+    transform-origin: var(--transform-origin, bottom left);
   }
 
   .composer-branch-dropdown[data-state="closed"] {
     animation: composerReasoningDropdownOut 0.12s cubic-bezier(0.4, 0, 1, 1) forwards;
-    transform-origin: var(--radix-dropdown-menu-content-transform-origin, bottom left);
+    transform-origin: var(--transform-origin, bottom left);
   }
 
   /* Chat header model selector: grow out of the trigger with a soft slide.
@@ -1390,12 +1390,29 @@
     animation: askQuestionSlideBackward 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
+  /* “其他（自行输入）”展开输入框：轻微下滑+淡入，呼应磨砂玻璃质感。 */
+  @keyframes askCustomInputReveal {
+    from {
+      opacity: 0;
+      transform: translateY(-3px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .ask-custom-input-enter {
+    animation: askCustomInputReveal 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
   /* Respect reduced motion */
   @media (prefers-reduced-motion: reduce) {
     .tool-expand,
     .lazy-collapse-reveal,
     .ask-question-enter-forward,
-    .ask-question-enter-backward {
+    .ask-question-enter-backward,
+    .ask-custom-input-enter {
       animation: none !important;
     }
   }

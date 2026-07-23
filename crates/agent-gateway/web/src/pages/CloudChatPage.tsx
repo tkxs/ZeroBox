@@ -41,6 +41,10 @@ import {
   getNextTheme,
   type ReasoningLevel,
 } from "@/lib/settings";
+import {
+  type SidebarBatchDeleteOptions,
+  deleteSidebarConversations,
+} from "@/lib/sidebar/batchDelete";
 import type { SidebarConversation } from "@/lib/sidebar/types";
 import type { WebSettingsSaveState } from "@/lib/webSettings";
 import { ChatComposerBar } from "@/pages/chat/ChatComposerBar";
@@ -202,10 +206,7 @@ export function CloudChatPage({
   }, [refreshConversations]);
 
   const refreshRelayAccount = useCallback(async () => {
-    const [profile, stats] = await Promise.all([
-      getRelayProfile(),
-      getRelayDashboardStats(),
-    ]);
+    const [profile, stats] = await Promise.all([getRelayProfile(), getRelayDashboardStats()]);
     onUserChange(profile);
     setAccountStats(stats);
   }, [onUserChange]);
@@ -268,6 +269,18 @@ export function CloudChatPage({
       setConversationId("");
       setMessages([]);
     }
+  }
+
+  async function removeConversations(ids: readonly string[], options?: SidebarBatchDeleteOptions) {
+    return deleteSidebarConversations(
+      ids,
+      async (id) => {
+        if (streaming || id.startsWith(DEVICE_ROUTE_PREFIX)) return false;
+        await removeConversation(id);
+        return true;
+      },
+      options,
+    );
   }
 
   async function renameConversation() {
@@ -567,6 +580,7 @@ export function CloudChatPage({
             onShareConversation={() => undefined}
             onOpenSharedConversations={() => undefined}
             onDeleteConversation={(id) => void removeConversation(id)}
+            onDeleteConversations={removeConversations}
             onLoadMore={() => undefined}
             onCloseSidebar={() => setSidebarOpen(false)}
             accountMenu={

@@ -158,6 +158,11 @@ import { findWorkspaceProject, mergeWorkspaceProjectsWithHistory } from "@/lib/w
 import { AccountLoginPage } from "@/pages/AccountLoginPage";
 import { CloudChatPage } from "@/pages/CloudChatPage";
 import { FloorNavRail } from "@/pages/chat/transcript/FloorNavRail";
+import { WorkspaceCloneModal } from "@/pages/chat/WorkspaceCloneModal";
+import {
+  type WorkspaceCloneTask,
+  WorkspaceCloneTaskOverlay,
+} from "@/pages/chat/WorkspaceCloneTaskOverlay";
 import { SettingsSyncLoading } from "@/pages/SettingsSyncLoading";
 import { SharedHistoryPage } from "@/pages/SharedHistoryPage";
 import { WorkdirPickerModal } from "@/pages/settings/WorkdirPickerModal";
@@ -215,6 +220,9 @@ import type { ModelProviderSource, OverlayState, SendChatFn, SendChatOptions } f
 import { UserMenu } from "./UserMenu";
 import { WorkspaceOverlayHost } from "./WorkspaceOverlayHost";
 
+const STALE_HISTORY_RETRY_INITIAL_DELAY_MS = 1_000;
+const STALE_HISTORY_RETRY_MAX_DELAY_MS = 30_000;
+
 // Two-phase open: schedule the quiet full hydration at browser idle time,
 // with a hard timeout so it still runs on busy pages (mirrors the GUI helper
 // semantics).
@@ -257,6 +265,8 @@ export default function GatewayApp() {
     );
   }, [desktopEmbedded, environments, selection]);
   const { api, terminalClient, sftpClient, gitClient } = useGatewayClients(token);
+  const [workspaceCloneTasks, setWorkspaceCloneTasks] = useState<WorkspaceCloneTask[]>([]);
+  const dismissedWorkspaceCloneTaskIds = useRef(new Set<string>());
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   // True only after an authenticated gateway connection has been established
@@ -305,6 +315,7 @@ export default function GatewayApp() {
   const [pendingCommandRevision, setPendingCommandRevision] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
+  const [workspaceCreateModalOpen, setWorkspaceCreateModalOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SectionId>("system");
   const [overlay, setOverlay] = useState<OverlayState>("closed");
   const { settings, setSettings, settingsSyncReady, settingsSyncError, settingsSaveState } =
@@ -333,10 +344,7 @@ export default function GatewayApp() {
 
   const relayUserId = relayUser?.id;
   const refreshRelayAccount = useCallback(async () => {
-    const [profile, stats] = await Promise.all([
-      getRelayProfile(),
-      getRelayDashboardStats(),
-    ]);
+    const [profile, stats] = await Promise.all([getRelayProfile(), getRelayDashboardStats()]);
     setRelayUser(profile);
     setRelayStats(stats);
   }, []);
@@ -1267,8 +1275,111 @@ export default function GatewayApp() {
   );
 
   const handleOpenCreateWorkspaceProject = useCallback(() => {
+    setWorkspaceCreateModalOpen(true);
+  }, []);
+
+  const handleOpenWorkspaceFolder = useCallback(() => {
+    setWorkspaceCreateModalOpen(false);
     setProjectPickerOpen(true);
   }, []);
+
+  const handleCloneWorkspaceProject = useCallback(
+    async (remoteUrl: string, parent: string, name: string, branch: string) => {
+      if (!api) {
+        throw new Error("网关未连接。");
+      }
+      const task = await api.gitRequest<WorkspaceCloneTask>("clone_start", parent, {
+        name,
+        remoteUrl,
+        branch: branch || undefined,
+      });
+      dismissedWorkspaceCloneTaskIds.current.delete(task.id);
+      setWorkspaceCloneTasks((tasks) => [task, ...tasks.filter((item) => item.id !== task.id)]);
+    },
+    [api],
+  );
+
+  const refreshWorkspaceCloneTasks = useCallback(async () => {
+    if (!api) return;
+    const tasks = await api.gitRequest<WorkspaceCloneTask[]>("clone_tasks", "");
+    setWorkspaceCloneTasks(
+      tasks.filter((task) => !dismissedWorkspaceCloneTaskIds.current.has(task.id)),
+    );
+  }, [api]);
+
+  useEffect(() => {
+    void refreshWorkspaceCloneTasks().catch(() => {
+      // The next clone operation or connection change retries.
+    });
+  }, [refreshWorkspaceCloneTasks]);
+
+  const hasActiveWorkspaceCloneTask = workspaceCloneTasks.some(
+    (task) => task.status === "running" || task.status === "cancelling",
+  );
+
+  useEffect(() => {
+    if (!hasActiveWorkspaceCloneTask) return;
+    const timer = window.setInterval(() => {
+      void refreshWorkspaceCloneTasks().catch(() => {
+        // Keep the last task snapshot visible while transport reconnects.
+      });
+    }, 750);
+    return () => window.clearInterval(timer);
+  }, [hasActiveWorkspaceCloneTask, refreshWorkspaceCloneTasks]);
+
+  const handleCancelWorkspaceCloneTask = useCallback(
+    (taskId: string) => {
+      if (!api) return;
+      void api
+        .gitRequest<WorkspaceCloneTask>("clone_cancel", "", { taskId })
+        .then((task) =>
+          setWorkspaceCloneTasks((tasks) =>
+            tasks.map((item) => (item.id === task.id ? task : item)),
+          ),
+        )
+        .catch(() => {
+          // Keep the running task visible so the next poll can reconcile it.
+        });
+    },
+    [api],
+  );
+
+  const handleDismissWorkspaceCloneTask = useCallback(
+    (taskId: string) => {
+      dismissedWorkspaceCloneTaskIds.current.add(taskId);
+      setWorkspaceCloneTasks((tasks) => tasks.filter((task) => task.id !== taskId));
+      if (!api) return;
+      // 服务端同步移除终态任务，否则刷新页面后快照会让卡片重现。
+      void api
+        .gitRequest<WorkspaceCloneTask[]>("clone_dismiss", "", { taskId })
+        .then((tasks) => {
+          dismissedWorkspaceCloneTaskIds.current.delete(taskId);
+          setWorkspaceCloneTasks(
+            tasks.filter((task) => !dismissedWorkspaceCloneTaskIds.current.has(task.id)),
+          );
+        })
+        .catch(() => {
+          // 本地 dismissed 集合已隐藏该卡片；服务端移除失败留待下次快照。
+        });
+    },
+    [api],
+  );
+
+  const handleOpenClonedWorkspace = useCallback(
+    (path: string) => {
+      activateWorkspaceProject(createWorkspaceProjectFromPath(path, "managed"));
+      void sidebarStore.refreshWorkdirs("new-workdir");
+    },
+    [activateWorkspaceProject, sidebarStore],
+  );
+
+  const handleLoadWorkspaceRemoteBranches = useCallback(
+    (remoteUrl: string) =>
+      api?.gitRequest<{ defaultBranch: string; branches: string[] }>("list_remote_branches", "", {
+        remoteUrl,
+      }) ?? Promise.reject(new Error("网关未连接。")),
+    [api],
+  );
 
   const handleWorkdirPickerSelect = useCallback(
     (path: string) => {
@@ -1780,6 +1891,61 @@ export default function GatewayApp() {
     displayedConversationBusy,
     displayedConversationId,
     refreshDisplayedConversationHistorySnapshot,
+  ]);
+
+  // Inferred liveness failures can settle before the desktop's final history
+  // write. History upserts are intentionally lossy broadcasts under WebSocket
+  // backpressure, so a stale displayed turn cannot rely on that one signal:
+  // keep retrying the quiet enrich at a bounded cadence until history adopts
+  // the authoritative persisted reply or the conversation becomes busy again.
+  useEffect(() => {
+    const conversationIdValue = displayedConversationId.trim();
+    if (
+      !api ||
+      !conversationIdValue ||
+      displayedConversationBusy ||
+      !displayedTranscript.needsHistoryRefresh
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    let timerId: number | null = null;
+    let retryDelayMs = STALE_HISTORY_RETRY_INITIAL_DELAY_MS;
+    const retry = async () => {
+      await refreshDisplayedConversationHistorySnapshot(conversationIdValue, api);
+      if (cancelled) {
+        return;
+      }
+      const stillStale =
+        transcriptStoreRegistry.peek(conversationIdValue)?.getSnapshot().needsHistoryRefresh ===
+        true;
+      if (!stillStale || isConversationBusy(conversationIdValue)) {
+        return;
+      }
+      retryDelayMs = Math.min(retryDelayMs * 2, STALE_HISTORY_RETRY_MAX_DELAY_MS);
+      timerId = window.setTimeout(() => {
+        void retry();
+      }, retryDelayMs);
+    };
+
+    timerId = window.setTimeout(() => {
+      void retry();
+    }, retryDelayMs);
+    return () => {
+      cancelled = true;
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+    };
+  }, [
+    api,
+    displayedConversationBusy,
+    displayedConversationId,
+    displayedTranscript.needsHistoryRefresh,
+    isConversationBusy,
+    refreshDisplayedConversationHistorySnapshot,
+    transcriptStoreRegistry,
   ]);
 
   // The upsert-while-idle backstop: the desktop reports run completion before
@@ -4343,6 +4509,24 @@ export default function GatewayApp() {
                 onSelect={handleWorkdirPickerSelect}
               />
             ) : null}
+
+            {workspaceCreateModalOpen ? (
+              <WorkspaceCloneModal
+                initialParent={activeWorkspaceProjectPath || settings.system.workdir.trim()}
+                canClone={settings.remote.enableWebGit}
+                cloneDisabledMessage={translate("chat.workspaceCloneWebDisabled", settings.locale)}
+                onOpenFolder={handleOpenWorkspaceFolder}
+                onClone={handleCloneWorkspaceProject}
+                onLoadBranches={handleLoadWorkspaceRemoteBranches}
+                onClose={() => setWorkspaceCreateModalOpen(false)}
+              />
+            ) : null}
+            <WorkspaceCloneTaskOverlay
+              tasks={workspaceCloneTasks}
+              onCancel={handleCancelWorkspaceCloneTask}
+              onDismiss={handleDismissWorkspaceCloneTask}
+              onOpenWorkspace={handleOpenClonedWorkspace}
+            />
 
             {confirmDialog}
 

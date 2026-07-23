@@ -180,6 +180,27 @@ type chatRunRecord struct {
 	// the agent's ref-bearing user_message, so a reconnect replay of the same
 	// event cannot seed a second truncation.
 	rebaseSeeded bool
+	// lostInferred marks a run whose terminal was inferred from missing
+	// liveness reports (desktop_run_lost and friends) rather than delivered by
+	// the run itself. Such a terminal is falsifiable: fresh events for the run
+	// prove it wrong and resurrect the run instead of being dropped as
+	// stragglers.
+	lostInferred bool
+	// revived marks a run resurrected after a wrong inferred terminal; further
+	// inferred-loss signals for it are ignored (the desktop-side ledger may
+	// keep repeating the stale verdict) until a genuine terminal arrives.
+	revived bool
+}
+
+// isInferredRunLossCode reports whether an error code represents a liveness
+// inference (nobody vouched for the run) instead of an outcome the run itself
+// produced. Inferred terminals must stay reversible: the run may well be alive.
+func isInferredRunLossCode(errorCode string) bool {
+	switch errorCode {
+	case "desktop_run_lost", "stale_run", "agent_offline", "desktop_runtime_lease_expired":
+		return true
+	}
+	return false
 }
 
 // chatCommandDedupeRecord is the process-local idempotency key for WebUI chat
@@ -645,8 +666,16 @@ func (s *conversationStreamStore) runFinishedLocked(
 			payload[key] = value
 		}
 	}
-	if record := s.runs[runID]; record != nil && record.clientRequestID != "" {
+	record := s.runRecordLocked(runID, stream.conversationID)
+	if record.clientRequestID != "" {
 		payload["client_request_id"] = record.clientRequestID
+	}
+	// Inferred terminals (nobody vouched for the run) stay falsifiable: a
+	// later event for the run resurrects it instead of being dropped. Genuine
+	// terminals settle the run for good.
+	record.lostInferred = status == "failed" && isInferredRunLossCode(errorCode)
+	if !record.lostInferred {
+		record.revived = false
 	}
 	s.appendEventLocked(stream, runID, StreamEventRunFinished, payload, now)
 	stream.finishedRuns = append(stream.finishedRuns, runID)
@@ -664,6 +693,41 @@ func (s *conversationStreamStore) runFinishedLocked(
 		stream.snapshotDirty = false
 		s.publishActivityLocked(stream, now)
 	}
+}
+
+// resurrectRunLocked reopens a run that was force-finished by a liveness
+// inference: fresh agent traffic for the run proves the inference wrong. The
+// run leaves the finished set (so runStartedLocked re-registers it), is
+// flagged to ignore repeats of the stale verdict, and the stream is marked
+// snapshot-hungry so subscribers rebuild the tail that was dropped while the
+// run was considered dead. Refuses when another run owns the conversation —
+// then the late events really are stragglers.
+func (s *conversationStreamStore) resurrectRunLocked(
+	stream *conversationStream,
+	runID string,
+) bool {
+	record := s.runs[runID]
+	if record == nil || !record.lostInferred {
+		return false
+	}
+	if stream.activity != nil {
+		return false
+	}
+	kept := stream.finishedRuns[:0]
+	for _, finished := range stream.finishedRuns {
+		if finished != runID {
+			kept = append(kept, finished)
+		}
+	}
+	stream.finishedRuns = kept
+	record.lostInferred = false
+	record.revived = true
+	// The events dropped between the wrong terminal and this resurrection are
+	// unrecoverable from the log; late joiners and current subscribers rebuild
+	// from the next runtime snapshot.
+	stream.runNeedsSnapshot = true
+	stream.snapshotDirty = true
+	return true
 }
 
 // markRunQueuedLocked records that a run's command is pending in the gateway
@@ -1123,17 +1187,37 @@ func (s *conversationStreamStore) onRuntimeStatus(event *gatewayv1.RuntimeStatus
 			stream.activity.UpdatedAt = now
 			continue
 		}
+		record := s.runs[runID]
+		revived := record != nil && record.revived
+		eventsFresh := !stream.lastEventAt.IsZero() &&
+			now.Sub(stream.lastEventAt) < s.runReportLostTimeout
 		if report, ok := finished[runID]; ok {
 			state := report.GetState()
 			errorCode := report.GetErrorCode()
+			// Judged on the report's own fields: a ledger-swept loss is an
+			// inference, while an unknown state is still a desktop-asserted
+			// terminal (normalized below) and stays adopted verbatim.
+			inferred := state == "failed" && isInferredRunLossCode(errorCode)
 			switch state {
 			case "completed", "failed", "cancelled":
 			default:
 				state = "failed"
 				errorCode = "desktop_run_lost"
 			}
-			s.runFinishedLocked(stream, runID, state, errorCode, report.GetMessage(),
-				map[string]any{"reason": "desktop_reported"}, now)
+			// A loss the desktop merely inferred (its ledger starved while the
+			// run's events still flow through this relay, or the verdict was
+			// already falsified once) is not adopted — genuine terminals the
+			// run itself produced always are.
+			if !inferred || (!eventsFresh && !revived) {
+				s.runFinishedLocked(stream, runID, state, errorCode, report.GetMessage(),
+					map[string]any{"reason": "desktop_reported"}, now)
+				continue
+			}
+		}
+		if revived {
+			// Resurrected after a wrong loss verdict: liveness inferences no
+			// longer end this run; the reaper's stale-run timeout is the
+			// backstop for a genuinely dead one.
 			continue
 		}
 		// Stream events vouch too: never finalize a run whose events are still

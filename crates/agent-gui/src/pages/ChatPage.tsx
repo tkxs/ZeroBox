@@ -137,6 +137,8 @@ import { useProjectTerminals } from "./chat/workspace/useProjectTerminals";
 import { useWorkspaceOverlays } from "./chat/workspace/useWorkspaceOverlays";
 import { useWorkspaceProjectRemoval } from "./chat/workspace/useWorkspaceProjectRemoval";
 import { useWorkspaceProjects } from "./chat/workspace/useWorkspaceProjects";
+import { WorkspaceCloneModal } from "./chat/workspace/WorkspaceCloneModal";
+import { WorkspaceCloneTaskOverlay } from "./chat/workspace/WorkspaceCloneTaskOverlay";
 import { McpHubPage } from "./mcp-hub/McpHubPage";
 import type { SectionId } from "./settings/types";
 import { SkillsHubPage } from "./skills-hub/SkillsHubPage";
@@ -255,6 +257,7 @@ export function ChatPage(props: ChatPageProps) {
     missingWorkspaceProjectPathKeys,
     archivedWorkspaceProjectPathKeys,
     activeWorkspaceProject,
+    activeWorkspaceProjectPath,
     sidebarScope,
     historyScopeKey,
     projectRenamingId,
@@ -269,6 +272,13 @@ export function ChatPage(props: ChatPageProps) {
     ensureSshTunnelToolTab,
     handleBrowseWorkspaceProjectInSystemFileManager,
     pickWorkspaceProjectFolder,
+    handleOpenCreateWorkspaceProject,
+    workspaceCreateModalOpen,
+    setWorkspaceCreateModalOpen,
+    handleOpenWorkspaceFolder,
+    handleCloneWorkspaceProject,
+    handleOpenClonedWorkspace,
+    handleLoadWorkspaceRemoteBranches,
     handleStartRenamingWorkspaceProject,
     handleCommitWorkspaceProjectRename,
     handleCancelWorkspaceProjectRename,
@@ -447,7 +457,8 @@ export function ChatPage(props: ChatPageProps) {
   } = useLiveTranscriptController({
     currentConversationId,
   });
-  const { queueGatewayBridgeEventForRequest } = useGatewayBridgeBatcher();
+  const { queueGatewayBridgeEventForRequest, flushGatewayBridgeEventsForRequest } =
+    useGatewayBridgeBatcher();
   const {
     currentConversationIdRef,
     conversationRuntimeCacheRef,
@@ -1232,6 +1243,7 @@ export function ChatPage(props: ChatPageProps) {
     updateToolStatus,
     updateRetryAttempts,
     queueGatewayBridgeEventForRequest,
+    flushGatewayBridgeEventsForRequest,
     activeGatewayRuntimeRunsRef,
     queueGatewayRuntimeSnapshot,
     queueGatewayRuntimeSnapshotForRun,
@@ -1551,6 +1563,7 @@ export function ChatPage(props: ChatPageProps) {
           recentCollapsed={settings.customSettings.chatSidebar.recentCollapsed}
           onProjectsCollapsedChange={handleSidebarProjectsCollapsedChange}
           onRecentCollapsedChange={handleSidebarRecentCollapsedChange}
+          onCreateProject={handleOpenCreateWorkspaceProject}
           onSelectProject={handleSelectWorkspaceProject}
           onNewConversationForProject={handleNewConversationForProject}
           onBrowseProjectInFileTree={handleBrowseWorkspaceProjectInFileTree}
@@ -1602,6 +1615,17 @@ export function ChatPage(props: ChatPageProps) {
             setActiveView("mcp-hub");
           }}
         />
+
+        {workspaceCreateModalOpen ? (
+          <WorkspaceCloneModal
+            initialParent={activeWorkspaceProjectPath || workdir}
+            onOpenFolder={handleOpenWorkspaceFolder}
+            onClone={handleCloneWorkspaceProject}
+            onClose={() => setWorkspaceCreateModalOpen(false)}
+            onLoadBranches={handleLoadWorkspaceRemoteBranches}
+          />
+        ) : null}
+        <WorkspaceCloneTaskOverlay onOpenWorkspace={handleOpenClonedWorkspace} />
 
         {shareConversation ? (
           <HistoryShareModal

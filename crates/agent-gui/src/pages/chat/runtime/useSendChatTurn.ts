@@ -145,6 +145,7 @@ type UseSendChatTurnParams = {
   updateToolStatus: LiveTranscriptController["updateToolStatus"];
   updateRetryAttempts: LiveTranscriptController["updateRetryAttempts"];
   queueGatewayBridgeEventForRequest: GatewayBridgeBatcher["queueGatewayBridgeEventForRequest"];
+  flushGatewayBridgeEventsForRequest: GatewayBridgeBatcher["flushGatewayBridgeEventsForRequest"];
   activeGatewayRuntimeRunsRef: GatewayRuntimeSnapshots["activeGatewayRuntimeRunsRef"];
   queueGatewayRuntimeSnapshot: GatewayRuntimeSnapshots["queueGatewayRuntimeSnapshot"];
   queueGatewayRuntimeSnapshotForRun: GatewayRuntimeSnapshots["queueGatewayRuntimeSnapshotForRun"];
@@ -210,6 +211,7 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
     updateToolStatus,
     updateRetryAttempts,
     queueGatewayBridgeEventForRequest,
+    flushGatewayBridgeEventsForRequest,
     activeGatewayRuntimeRunsRef,
     queueGatewayRuntimeSnapshot,
     queueGatewayRuntimeSnapshotForRun,
@@ -235,6 +237,12 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
     params: Parameters<typeof persistConversation>[0],
   ) {
     return await persistConversation(params);
+  }
+
+  async function waitForTerminalHistoryPersist(persistPromise: Promise<boolean> | null) {
+    if (persistPromise) {
+      await persistPromise.catch(() => false);
+    }
   }
 
   const enableManagedSkills = useCallback(
@@ -316,6 +324,7 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
         void queueGatewayRuntimeSnapshot(conversationId);
         return result;
       },
+      flushEvents: flushGatewayBridgeEventsForRequest,
       resolveErrorConversationId: () =>
         gatewayBridgeRequest?.conversationId ?? currentConversationIdRef.current,
     });
@@ -349,7 +358,7 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
       if (gatewayBridgeRequest) {
         const message = "Conversation is already sending.";
         gatewayBridgeEvents.emitError(message, conversationId);
-        gatewayBridgeEvents.close();
+        await gatewayBridgeEvents.close();
       }
       return false;
     }
@@ -474,7 +483,7 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
         setConversationErrorState(message);
         setErrorMessage(message);
         gatewayBridgeEvents.emitError(message, conversationId);
-        gatewayBridgeEvents.close();
+        await gatewayBridgeEvents.close();
         return false;
       } finally {
         isImportingPastedTextRef.current = false;
@@ -487,7 +496,7 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
       if (gatewayBridgeRequest) {
         const message = "Message is required.";
         gatewayBridgeEvents.emitError(message, conversationId);
-        gatewayBridgeEvents.close();
+        await gatewayBridgeEvents.close();
       }
       return false;
     }
@@ -648,14 +657,15 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
         scrollFollowRef.current?.stickToBottom();
       }
     }
-    function markConversationRunStopped(state: GatewayRuntimeSnapshotState = "completed") {
+    async function markConversationRunStopped(state: GatewayRuntimeSnapshotState = "completed") {
       if (!conversationRunStarted) {
         return;
       }
       setConversationAbortController(conversationId, null);
       setConversationSendingState(conversationId, false);
+      await gatewayBridgeEvents.close();
       if (gatewayRunStarted) {
-        finishActiveGatewayRuntimeRun(conversationId, state);
+        await finishActiveGatewayRuntimeRun(conversationId, state);
       }
     }
     let localGatewayRunStarted = false;
@@ -729,8 +739,8 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
         const message = asErrorMessage(error, "启动远程对话运行失败");
         setConversationErrorState(message);
         gatewayBridgeEvents.emitError(message, conversationId);
-        gatewayBridgeEvents.close();
-        markConversationRunStopped("failed");
+        await gatewayBridgeEvents.close();
+        await markConversationRunStopped("failed");
         restoreComposerOnStartFailure();
         return false;
       }
@@ -758,8 +768,8 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
         const message = "历史记录保存失败，已取消回滚与重发。";
         setConversationErrorState(message);
         gatewayBridgeEvents.emitError(message, conversationId);
-        gatewayBridgeEvents.close();
-        markConversationRunStopped("failed");
+        await gatewayBridgeEvents.close();
+        await markConversationRunStopped("failed");
         restoreComposerOnStartFailure();
         return true;
       }
@@ -769,8 +779,8 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
         const message = asErrorMessage(error, "回滚历史失败");
         setConversationErrorState(message);
         gatewayBridgeEvents.emitError(message, conversationId);
-        gatewayBridgeEvents.close();
-        markConversationRunStopped("failed");
+        await gatewayBridgeEvents.close();
+        await markConversationRunStopped("failed");
         restoreComposerOnStartFailure();
         return true;
       }
@@ -948,8 +958,8 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
         const message = `找不到以下 Skills：${missing.join(", ")}（请先重新扫描固定 Skills 目录）`;
         setConversationErrorState(message);
         gatewayBridgeEvents.emitError(message, conversationId);
-        gatewayBridgeEvents.close();
-        markConversationRunStopped("failed");
+        await gatewayBridgeEvents.close();
+        await markConversationRunStopped("failed");
         restoreComposerOnStartFailure();
         return true;
       }
@@ -1011,6 +1021,7 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
     });
 
     let abortedConversationCommitted = false;
+    let terminalHistoryPersistPromise: Promise<boolean> | null = null;
     let persistableAgentProgress: {
       completedThroughRound: number;
       suppressedToolTrace: SuppressedToolTraceSnapshot[];
@@ -1040,7 +1051,7 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
         ...prev,
         state: finalState,
       }));
-      void persistConversationWithHistorySync({
+      terminalHistoryPersistPromise = persistConversationWithHistorySync({
         conversationId,
         sessionId,
         providerId,
@@ -1081,7 +1092,7 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
         state: finalState,
         errorMessage: null,
       }));
-      void persistConversationWithHistorySync({
+      terminalHistoryPersistPromise = persistConversationWithHistorySync({
         conversationId,
         sessionId,
         providerId,
@@ -1245,8 +1256,6 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
       const remoteErrorMessage = aborted
         ? "Cancelled"
         : (err instanceof Error ? err.message : String(err)) || "Request failed";
-      gatewayBridgeEvents.emitError(remoteErrorMessage, conversationId);
-      gatewayBridgeEvents.close();
       if (aborted) {
         hookScope.cancel();
         const rolledBack = await compaction.handleTurnAbort();
@@ -1257,6 +1266,9 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
         const msg = err instanceof Error ? err.message : String(err);
         commitErroredConversation(msg || "Request failed");
       }
+      await waitForTerminalHistoryPersist(terminalHistoryPersistPromise);
+      gatewayBridgeEvents.emitError(remoteErrorMessage, conversationId);
+      await gatewayBridgeEvents.close();
       if (shouldCreatePendingHistoryItem && !abortedConversationCommitted) {
         sidebarStore.removeLocal(conversationId);
       }
@@ -1268,7 +1280,8 @@ export function useSendChatTurn(params: UseSendChatTurnParams) {
       hookLifecycle.endAgent();
       hookScope.close();
       clearAbortSnapshot(transcriptStore);
-      markConversationRunStopped(gatewayRuntimeFinalState);
+      await waitForTerminalHistoryPersist(terminalHistoryPersistPromise);
+      await markConversationRunStopped(gatewayRuntimeFinalState);
       pruneIdleConversationCaches([conversationId]);
       requestQueuedChatTurnProcessing(conversationId);
     }
