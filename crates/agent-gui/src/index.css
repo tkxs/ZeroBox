@@ -1773,12 +1773,29 @@
     animation: askQuestionSlideBackward 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
+  /* “其他（自行输入）”展开输入框：轻微下滑+淡入，呼应磨砂玻璃质感。 */
+  @keyframes askCustomInputReveal {
+    from {
+      opacity: 0;
+      transform: translateY(-3px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .ask-custom-input-enter {
+    animation: askCustomInputReveal 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
   /* Respect reduced motion */
   @media (prefers-reduced-motion: reduce) {
     .tool-expand,
     .lazy-collapse-reveal,
     .ask-question-enter-forward,
-    .ask-question-enter-backward {
+    .ask-question-enter-backward,
+    .ask-custom-input-enter {
       animation: none !important;
     }
   }

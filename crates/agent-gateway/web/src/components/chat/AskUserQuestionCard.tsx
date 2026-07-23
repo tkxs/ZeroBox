@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useLocale } from "../../i18n";
 import {
+  ASK_USER_QUESTION_CUSTOM_MAX_LENGTH,
   ASK_USER_QUESTION_TIMEOUT_MS,
   type AskUserQuestionAnswer,
   type AskUserQuestionItem,
@@ -78,15 +79,21 @@ export function AskUserQuestionCard({
   // 切题方向（首次渲染为 null 不播动画）；keyed 内容区据此选滑入方向。
   const [switchDirection, setSwitchDirection] = useState<"forward" | "backward" | null>(null);
   const [draftSelections, setDraftSelections] = useState<Record<string, string>>({});
+  // “其他（自行输入）”合成项：选中态与输入文本按 questionId 各自持久，
+  // 与 draftSelections 并列（不用哨兵 label，避免与真实选项 label 撞车）。
+  const [customSelected, setCustomSelected] = useState<Record<string, boolean>>({});
+  const [customTexts, setCustomTexts] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [errorText, setErrorText] = useState("");
 
-  const settledSelections = useMemo(() => {
-    const map: Record<string, string> = {};
+  const { settledSelections, settledCustom } = useMemo(() => {
+    const selections: Record<string, string> = {};
+    const custom: Record<string, boolean> = {};
     for (const answer of answers ?? []) {
-      map[answer.questionId] = answer.selectedLabel;
+      selections[answer.questionId] = answer.selectedLabel;
+      if (answer.custom === true) custom[answer.questionId] = true;
     }
-    return map;
+    return { settledSelections: selections, settledCustom: custom };
   }, [answers]);
 
   const isSettled = (answers?.length ?? 0) > 0;
@@ -94,12 +101,26 @@ export function AskUserQuestionCard({
   const canInteract = interactive && !isSettled && !cancelled && !submitting;
   const remainingMs = useAnswerCountdown(interactive && !isSettled && !cancelled, deadlineAt);
 
+  // 该题是否已作答：普通选项已选，或“其他”选中且文本非空。
+  const isQuestionAnswered = (questionId: string) => {
+    if (isSettled) return Boolean(settledSelections[questionId]);
+    if (customSelected[questionId]) return Boolean(customTexts[questionId]?.trim());
+    return Boolean(draftSelections[questionId]);
+  };
+
   if (questions.length === 0) return null;
 
   const safeActiveIndex = Math.min(activeIndex, questions.length - 1);
   const activeQuestion = questions[safeActiveIndex];
-  const answeredCount = questions.filter((question) => selections[question.id]).length;
+  const answeredCount = questions.filter((question) => isQuestionAnswered(question.id)).length;
   const allAnswered = answeredCount === questions.length;
+  // 当前题“其他”行的选中态与文本：落定后以应答里的 custom 标记与原文为准。
+  const activeCustomSelected = isSettled
+    ? Boolean(settledCustom[activeQuestion.id])
+    : Boolean(customSelected[activeQuestion.id]);
+  const activeCustomText = isSettled
+    ? (settledSelections[activeQuestion.id] ?? "")
+    : (customTexts[activeQuestion.id] ?? "");
 
   // 带方向切题：内容区按 question.id 重挂载并向对应方向滑入。
   const goToQuestion = (index: number) => {
@@ -111,11 +132,20 @@ export function AskUserQuestionCard({
   const selectOption = (questionId: string, label: string) => {
     if (!canInteract) return;
     setErrorText("");
+    setCustomSelected((current) => {
+      if (!current[questionId]) return current;
+      const next = { ...current };
+      delete next[questionId];
+      return next;
+    });
     setDraftSelections((current) => {
       const next = { ...current, [questionId]: label };
       // 选完当前题自动跳到下一道未作答的题，减少手动切 tab。
       const nextUnanswered = questions.findIndex(
-        (question, index) => index !== safeActiveIndex && !next[question.id],
+        (question, index) =>
+          index !== safeActiveIndex &&
+          !next[question.id] &&
+          !(customSelected[question.id] && customTexts[question.id]?.trim()),
       );
       if (nextUnanswered >= 0 && next[questionId]) {
         goToQuestion(nextUnanswered);
@@ -124,13 +154,40 @@ export function AskUserQuestionCard({
     });
   };
 
+  // 选中“其他”行：清掉该题的普通选项，等待用户输入（不自动跳题）。
+  const selectCustom = (questionId: string) => {
+    if (!canInteract) return;
+    setErrorText("");
+    setDraftSelections((current) => {
+      if (!(questionId in current)) return current;
+      const next = { ...current };
+      delete next[questionId];
+      return next;
+    });
+    setCustomSelected((current) =>
+      current[questionId] ? current : { ...current, [questionId]: true },
+    );
+  };
+
   const submit = async () => {
     if (!onSubmit || !allAnswered || !canInteract) return;
-    const payload: AskUserQuestionAnswer[] = questions.map((question) => ({
-      questionId: question.id,
-      prompt: question.prompt,
-      selectedLabel: draftSelections[question.id] ?? "",
-    }));
+    const payload: AskUserQuestionAnswer[] = questions.map((question) => {
+      if (customSelected[question.id]) {
+        return {
+          questionId: question.id,
+          prompt: question.prompt,
+          selectedLabel: (customTexts[question.id] ?? "")
+            .trim()
+            .slice(0, ASK_USER_QUESTION_CUSTOM_MAX_LENGTH),
+          custom: true,
+        };
+      }
+      return {
+        questionId: question.id,
+        prompt: question.prompt,
+        selectedLabel: draftSelections[question.id] ?? "",
+      };
+    });
     setSubmitting(true);
     setErrorText("");
     try {
@@ -151,7 +208,7 @@ export function AskUserQuestionCard({
         <div className="flex items-center gap-1 overflow-x-auto border-b border-border/35 px-1.5 py-1.5 dark:border-white/[0.05]">
           {questions.map((question, index) => {
             const isActive = index === safeActiveIndex;
-            const isAnswered = Boolean(selections[question.id]);
+            const isAnswered = isQuestionAnswered(question.id);
             return (
               <button
                 key={question.id}
@@ -192,7 +249,8 @@ export function AskUserQuestionCard({
             aria-label={activeQuestion.prompt}
           >
             {activeQuestion.options.map((option) => {
-              const isSelected = selections[activeQuestion.id] === option.label;
+              const isSelected =
+                !activeCustomSelected && selections[activeQuestion.id] === option.label;
               return (
                 <button
                   key={option.label}
@@ -241,6 +299,82 @@ export function AskUserQuestionCard({
                 </button>
               );
             })}
+
+            {/* UI 合成的“其他（自行输入）”行：固定在选项最底部，不属于模型给出的
+                options；选中后展开单行输入框，键入文本即该题应答。选项行是
+                button 而 input 不能嵌套其中，故此行用 div role="radio"。 */}
+            <div
+              role="radio"
+              aria-checked={activeCustomSelected}
+              aria-disabled={!canInteract}
+              tabIndex={canInteract ? 0 : -1}
+              onClick={() => selectCustom(activeQuestion.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  selectCustom(activeQuestion.id);
+                }
+              }}
+              className={cn(
+                "group/option flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
+                activeCustomSelected
+                  ? "border-primary/45 bg-primary/[0.06] dark:border-primary/40 dark:bg-primary/[0.1]"
+                  : "border-border/40 dark:border-white/[0.07]",
+                canInteract && !activeCustomSelected
+                  ? "hover:border-border/70 hover:bg-foreground/[0.03] dark:hover:border-white/[0.14]"
+                  : "",
+                !canInteract && !activeCustomSelected && (isSettled || cancelled)
+                  ? "opacity-55"
+                  : "",
+                canInteract ? "cursor-pointer" : "cursor-default",
+              )}
+            >
+              <span
+                className={cn(
+                  "mt-[3px] flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border transition-colors",
+                  activeCustomSelected
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-muted-foreground/40 group-hover/option:border-muted-foreground/70",
+                )}
+              >
+                {activeCustomSelected ? <Check className="h-2.5 w-2.5" /> : null}
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col gap-1">
+                <span className="text-[calc(12px*var(--zone-font-scale,1))] font-medium leading-[1.5] text-foreground/85">
+                  {t("chat.askUser.customOption")}
+                </span>
+                {activeCustomSelected && !isSettled && !cancelled && interactive ? (
+                  <input
+                    autoFocus
+                    value={activeCustomText}
+                    disabled={!canInteract}
+                    maxLength={ASK_USER_QUESTION_CUSTOM_MAX_LENGTH}
+                    placeholder={t("chat.askUser.customPlaceholder")}
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                      if (event.key === "Enter" && allAnswered) {
+                        event.preventDefault();
+                        void submit();
+                      }
+                    }}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setErrorText("");
+                      setCustomTexts((current) => ({
+                        ...current,
+                        [activeQuestion.id]: value,
+                      }));
+                    }}
+                    className="ask-custom-input-enter mt-0.5 h-8 w-full rounded-lg border border-black/[0.08] bg-white/65 px-2.5 text-[calc(12px*var(--zone-font-scale,1))] text-foreground shadow-[inset_0_1px_2px_rgba(0,0,0,0.04),0_1px_0_rgba(255,255,255,0.55)] outline-none backdrop-blur-md backdrop-saturate-150 transition-[border-color,box-shadow,background-color] duration-200 placeholder:text-muted-foreground/45 focus:border-primary/45 focus:bg-white/80 focus:ring-[2.5px] focus:ring-primary/[0.13] dark:border-white/[0.1] dark:bg-white/[0.05] dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.25)] dark:focus:border-primary/40 dark:focus:bg-white/[0.08]"
+                  />
+                ) : activeCustomSelected && activeCustomText ? (
+                  <span className="break-words text-[calc(11px*var(--zone-font-scale,1))] leading-[1.55] text-muted-foreground/80">
+                    {activeCustomText}
+                  </span>
+                ) : null}
+              </span>
+            </div>
           </div>
         </div>
 

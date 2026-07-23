@@ -9,6 +9,8 @@ export const ASK_USER_QUESTION_MIN_OPTIONS = 2;
 export const ASK_USER_QUESTION_MAX_OPTIONS = 6;
 /** 每轮提问的应答窗口：超时后按推荐项（缺省第一项）自动落定继续执行。 */
 export const ASK_USER_QUESTION_TIMEOUT_MS = 3 * 60 * 1000;
+/** UI 合成"其他（自行输入）"应答的最大长度；超出部分截断。 */
+export const ASK_USER_QUESTION_CUSTOM_MAX_LENGTH = 2000;
 /**
  * 桌面端在网关上报的工具参数上附带的权威应答截止时间戳（毫秒）。
  * WebUI 卡片倒计时以它对齐桌面计时；模型参数里不存在该键（`__` 前缀防冲突）。
@@ -34,6 +36,8 @@ export type AskUserQuestionAnswer = {
   questionId: string;
   prompt: string;
   selectedLabel: string;
+  /** UI 合成"其他"项的自由输入应答：selectedLabel 即用户键入的原文。 */
+  custom?: boolean;
 };
 
 export type AskUserQuestionResultDetails = {
@@ -225,23 +229,39 @@ export function resolveAskUserQuestionAnswers(
   raw: unknown,
 ): AskUserQuestionAnswer[] | null {
   if (!Array.isArray(raw)) return null;
-  const selectedByQuestionId = new Map<string, string>();
+  const selectedByQuestionId = new Map<string, { selectedLabel: string; custom: boolean }>();
   for (const value of raw) {
     if (!value || typeof value !== "object") continue;
     const record = value as Record<string, unknown>;
     const questionId = normalizeText(record.questionId);
-    const selectedLabel = normalizeText(record.selectedLabel);
+    const custom = record.custom === true;
+    const selectedLabel = custom
+      ? normalizeText(record.selectedLabel).slice(0, ASK_USER_QUESTION_CUSTOM_MAX_LENGTH)
+      : normalizeText(record.selectedLabel);
     if (questionId && selectedLabel) {
-      selectedByQuestionId.set(questionId, selectedLabel);
+      selectedByQuestionId.set(questionId, { selectedLabel, custom });
     }
   }
 
   const answers: AskUserQuestionAnswer[] = [];
   for (const question of questions) {
-    const selectedLabel = selectedByQuestionId.get(question.id);
-    if (!selectedLabel) return null;
-    if (!question.options.some((option) => option.label === selectedLabel)) return null;
-    answers.push({ questionId: question.id, prompt: question.prompt, selectedLabel });
+    const selected = selectedByQuestionId.get(question.id);
+    if (!selected) return null;
+    if (selected.custom) {
+      answers.push({
+        questionId: question.id,
+        prompt: question.prompt,
+        selectedLabel: selected.selectedLabel,
+        custom: true,
+      });
+      continue;
+    }
+    if (!question.options.some((option) => option.label === selected.selectedLabel)) return null;
+    answers.push({
+      questionId: question.id,
+      prompt: question.prompt,
+      selectedLabel: selected.selectedLabel,
+    });
   }
   return answers;
 }
@@ -265,6 +285,7 @@ export function parseAskUserQuestionResultDetails(
         questionId,
         prompt: normalizeText(answerRecord.prompt),
         selectedLabel,
+        ...(answerRecord.custom === true ? { custom: true } : {}),
       });
     }
   }
@@ -287,7 +308,10 @@ export function buildAskUserQuestionResultText(
   return [
     heading,
     ...answers.map(
-      (answer, index) => `${index + 1}. ${answer.prompt}\n   → ${answer.selectedLabel}`,
+      (answer, index) =>
+        `${index + 1}. ${answer.prompt}\n   → ${answer.selectedLabel}${
+          answer.custom ? ' (user-typed answer via "Other", not a listed option)' : ""
+        }`,
     ),
   ].join("\n");
 }
