@@ -170,7 +170,7 @@ Choose by distribution from [Releases](https://github.com/tkxs/ZeroAgent/release
 
 Download `ZeroAgent-<version>-Android-arm64.apk` from [Releases](https://github.com/tkxs/ZeroAgent/releases/latest) and allow installation from your browser or file manager when Android prompts for permission.
 
-The Android app opens the hosted ZeroAgent account sign-in at `https://usa0.top/login`. Sign in with your account email and password; the app no longer asks for a Gateway address.
+The Android app opens the same ZeroAgent Gateway WebUI used in the browser, including its chat experience and account session. Set the repository variable `ZEROAGENT_ANDROID_WEB_URL` to the deployed Gateway HTTPS URL before producing a release. When that variable is not set, the app asks for the Gateway WebUI address on first launch, which also supports self-hosted and local deployments.
 
 ### Need Remote Access? Deploy the Gateway
 

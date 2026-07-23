@@ -144,6 +144,8 @@ jobs:
 
       - name: Build Android release APK
         working-directory: crates/agent-gui
+        env:
+          ZEROAGENT_ANDROID_WEB_URL: ${{ vars.ZEROAGENT_ANDROID_WEB_URL }}
         run: pnpm tauri android build --apk --target aarch64 --ci --config "$LIVEAGENT_TAURI_VERSION_CONFIG"
 
       - name: Sign and verify Android APK

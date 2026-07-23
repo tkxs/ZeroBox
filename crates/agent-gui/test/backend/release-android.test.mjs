@@ -14,6 +14,9 @@ function readRepoFile(relativePath) {
 test("Android workflow builds a signed arm64 APK and can publish it", () => {
   const workflow = readRepoFile(".github/workflows/android-release.yml");
   const cargoToml = readRepoFile("crates/agent-gui/src-tauri/Cargo.toml");
+  const launcherBackground = readRepoFile(
+    "crates/agent-gui/src-tauri/icons/android/values/ic_launcher_background.xml",
+  );
 
   assert.match(workflow, /java-version: "17"/);
   assert.match(workflow, /targets: aarch64-linux-android/);
@@ -27,6 +30,8 @@ test("Android workflow builds a signed arm64 APK and can publish it", () => {
   assert.match(workflow, /cp -R "\$source_dir"\/\. "\$target_dir"\//);
   assert.match(workflow, /cmp "\$source_dir\/mipmap-\$\{density\}\/\$\{icon\}\.png"/);
   assert.doesNotMatch(workflow, /usesCleartextTraffic/);
+  assert.match(workflow, /ZEROAGENT_ANDROID_WEB_URL: \$\{\{ vars\.ZEROAGENT_ANDROID_WEB_URL \}\}/);
+  assert.match(launcherBackground, /@android:color\/transparent/);
   assert.match(workflow, /networkTimeout=120000/);
   assert.match(workflow, /\.\/gradlew --version --no-daemon/);
   assert.match(workflow, /for attempt in 1 2 3/);
@@ -36,21 +41,28 @@ test("Android workflow builds a signed arm64 APK and can publish it", () => {
   );
 });
 
-test("Android opens the fixed USA-Zero account login", () => {
+test("Android loads the ZeroAgent WebUI instead of the USA-Zero account site", () => {
   const androidConfig = readRepoFile("crates/agent-gui/src-tauri/tauri.android.conf.json");
   const tauriLib = readRepoFile("crates/agent-gui/src-tauri/src/lib.rs");
+  const mobileHtml = readRepoFile("crates/agent-gui/mobile.html");
+  const mobileEntry = readRepoFile("crates/agent-gui/src/mobile.ts");
   const viteConfig = readRepoFile("crates/agent-gui/vite.config.ts");
 
-  assert.match(androidConfig, /"url": "https:\/\/usa0\.top\/login"/);
-  assert.doesNotMatch(androidConfig, /mobile\.html|Gateway/);
+  assert.match(androidConfig, /"url": "mobile\.html"/);
+  assert.doesNotMatch(androidConfig, /usa0\.top/);
   assert.match(tauriLib, /#\[cfg\(mobile\)\][\s\S]*ZeroAgent mobile WebView/);
   assert.match(tauriLib, /#\[cfg\(desktop\)\]\s*pub fn run\(\)/);
-  assert.doesNotMatch(viteConfig, /mobile\.html/);
+  assert.match(mobileHtml, /ZeroAgent WebUI URL/);
+  assert.match(mobileEntry, /__ZEROAGENT_ANDROID_WEB_URL__/);
+  assert.match(mobileEntry, /window\.location\.replace/);
+  assert.doesNotMatch(mobileEntry, /usa0\.top/);
+  assert.match(viteConfig, /ZEROAGENT_ANDROID_WEB_URL/);
+  assert.match(viteConfig, /mobile: fileURLToPath\(new URL\("\.\/mobile\.html"/);
   for (const filename of ["README.md", "README.zh-CN.md"]) {
     const readme = readRepoFile(filename);
     assert.match(readme, /Android-arm64\.apk/);
-    assert.match(readme, /https:\/\/usa0\.top\/login/);
-    assert.doesNotMatch(readme, /adb reverse tcp:3001 tcp:3001/);
+    assert.match(readme, /ZEROAGENT_ANDROID_WEB_URL/);
+    assert.doesNotMatch(readme, /https:\/\/usa0\.top\/login/);
   }
 });
 
