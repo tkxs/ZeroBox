@@ -67,7 +67,7 @@ mod platform {
         format!("Android Keystore operation failed: {error}")
     }
 
-    fn android_key(env: &mut JNIEnv) -> Result<JObject<'_>, String> {
+    fn android_key<'local>(env: &mut JNIEnv<'local>) -> Result<JObject<'local>, String> {
         let store_type = env.new_string("AndroidKeyStore").map_err(java_error)?;
         let store = env
             .call_static_method(
@@ -184,7 +184,7 @@ mod platform {
         Ok(key)
     }
 
-    fn cipher(env: &mut JNIEnv) -> Result<JObject<'_>, String> {
+    fn cipher<'local>(env: &mut JNIEnv<'local>) -> Result<JObject<'local>, String> {
         let transformation = env.new_string("AES/GCM/NoPadding").map_err(java_error)?;
         env.call_static_method(
             "javax/crypto/Cipher",
